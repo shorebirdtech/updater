@@ -27,5 +27,5 @@ jobs:
       - name: 📦 Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: patch
+          name: patch-${{ matrix.os }}-$GITHUB_SHA
           path: target/release/patch
