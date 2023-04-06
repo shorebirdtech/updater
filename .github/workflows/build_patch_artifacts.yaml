@@ -1,0 +1,27 @@
+name: build_patch_artifacts
+
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  upload-artifacts:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "macos-latest", "windows-latest"]
+
+    runs-on: ${{ matrix.os }}
+
+    name: 🦀 Upload Artifacts
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: "patch"
+          tar: none
+          zip: all
+          token: ${{ secrets.GITHUB_TOKEN }}
