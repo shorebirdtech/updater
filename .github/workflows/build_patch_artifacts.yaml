@@ -4,22 +4,10 @@ permissions:
   contents: write
 
 on:
-  push:
-    tags:
-      - patch-v[0-9]+.*
+  release:
+    types: [created]
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
-
-    name: 📦 Create Release
-
-    steps:
-      - uses: actions/checkout@v3
-      - uses: taiki-e/create-gh-release-action@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
   upload-artifacts:
     strategy:
       matrix:
