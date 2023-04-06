@@ -31,10 +31,10 @@ jobs:
         with:
           filters: |
             library:
-              - ./.github/actions/rust_crate
+              - ./.github/actions/rust_crate/action.yaml
               - library/**
             patch:
-              - ./.github/actions/rust_crate
+              - ./.github/actions/rust_crate/action.yaml
               - patch/**
 
   build_rust_crates:
