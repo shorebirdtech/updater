@@ -19,7 +19,6 @@ jobs:
       - uses: taiki-e/create-gh-release-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: refs/tags/test
 
   upload-artifacts:
     strategy:
