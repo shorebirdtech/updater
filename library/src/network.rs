@@ -23,7 +23,7 @@ pub struct Patch {
     /// Legacy: originally "#" before we implemented hash checks (remove).
     pub hash: String,
     /// The URL to download the patch file from.
-    pub download_url: String,    
+    pub download_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +80,7 @@ pub fn send_patch_check_request(
 }
 
 pub fn download_to_path(url: &str, path: &Path) -> anyhow::Result<()> {
+    info!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
     let client = reqwest::blocking::Client::new();
     let response = client.get(url).send()?;
@@ -87,9 +88,11 @@ pub fn download_to_path(url: &str, path: &Path) -> anyhow::Result<()> {
 
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
+        info!("Creating download directory: {:?}", parent);
         std::fs::create_dir_all(parent)?;
     }
 
+    info!("Writing download to: {:?}", path);
     let mut file = File::create(path)?;
     file.write_all(&mut bytes)?;
     Ok(())

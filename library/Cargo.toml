@@ -38,6 +38,9 @@ pipe = "0.4.0"
 sha2 = "0.10.6"
 # For decoding the hex-encoded hashes in Patch network responses.
 hex = "0.4.3"
+# For decompressing .apk files.
+zip = { version = "0.6.4", default-features = false, features = ["deflate"] }
+
 
 [target.'cfg(target_os = "android")'.dependencies]
 # For logging to Android logcat.

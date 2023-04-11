@@ -89,6 +89,7 @@ pub fn set_config(config: AppConfig, yaml: YamlConfig) {
     info!("Updater configured with: {:?}", lock);
 }
 
+// Arch/Platform names need to be kept in sync with the shorebird cli.
 pub fn current_arch() -> &'static str {
     #[cfg(target_arch = "x86")]
     static ARCH: &str = "x86";
