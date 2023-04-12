@@ -12,7 +12,6 @@ use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use zip::read::ZipFile;
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -166,12 +165,6 @@ fn get_relative_lib_path(lib_name: &str) -> PathBuf {
         .join(lib_name)
 }
 
-fn extract_zip_to(zip_file: &mut ZipFile, output_path: &Path) -> anyhow::Result<()> {
-    let mut out_file = File::create(output_path)?;
-    std::io::copy(zip_file, &mut out_file)?;
-    Ok(())
-}
-
 fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     // Load the state from disk.
     let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
@@ -187,36 +180,37 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     let download_path = download_dir.join(patch.number.to_string());
     // Consider supporting allowing the system to download for us (e.g. iOS).
     download_to_path(&patch.download_url, &download_path)?;
-    info!("Downloaded to: {:?}", download_path);
 
+    // FIXME: This makes the assumption that the last path provided is the full
+    // path to the libapp.so file.  This is true for the current engine, but
+    // may not be true in the future.  Better would be for the engine to
+    // pass us the path to the base.apk.
+    // https://github.com/shorebirdtech/shorebird/issues/283
     let full_libapp_path = config
         .original_libapp_paths
         .last()
         .context("No libapp paths")?;
 
-    // let base_r = get_cursor_to_zipped_lib(&full_libapp_path)?;
-
-    info!("Finding apk from: {:?}", full_libapp_path);
+    // Read the library out of the APK.  We only need to do this if it
+    // isn't already extracted on disk (which it sometimes seems to be) but
+    // for now we just always read from the APK.  We could also use the
+    // ApkAssetProvider in the Engine if we initialized later (currently
+    // shorebird_init runs before the java side is fully initialized).
+    debug!("Finding apk from: {:?}", full_libapp_path);
     let base_apk_path = get_base_apk_path(full_libapp_path)?;
-    info!("base_apk_path: {:?}", base_apk_path);
+    debug!("base_apk_path: {:?}", base_apk_path);
     let relative_lib_path = get_relative_lib_path("libapp.so");
-    info!("relative_lib_path: {:?}", relative_lib_path);
+    debug!("relative_lib_path: {:?}", relative_lib_path);
     let mut archive = zip::ZipArchive::new(File::open(base_apk_path)?)?;
     let mut zip_file = archive.by_name(relative_lib_path.to_str().unwrap())?;
 
     // Cursor (rather than ZipFile) is only necessary because bipatch expects
     // Seek + Read for the input file.  I don't think it actually needs to
     // seek backwards, so Read is probably sufficient.  If we made bipatch
-    // only depend on Read we could avoid reading library into memory.
-    // let mut buffer = Vec::new();
-    // zip_file.read_to_end(&mut buffer)?;
-    // let cursor = std::io::Cursor::new(buffer);
-
-    // This shouldn't be per-patch.
-    let extracted_base_path = download_dir.join(format!("{}.base", patch.number.to_string()));
-    extract_zip_to(&mut zip_file, &extracted_base_path)?;
-    info!("Extracted base to: {:?}", extracted_base_path);
-    let base_r = File::open(&extracted_base_path)?;
+    // only depend on Read we could avoid loading the library fully into memory.
+    let mut buffer = Vec::new();
+    zip_file.read_to_end(&mut buffer)?;
+    let base_r = std::io::Cursor::new(buffer);
 
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
     inflate(&download_path, base_r, &output_path)?;
@@ -224,7 +218,7 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     // Check the hash before moving into place.
     let hash_ok = check_hash(&output_path, &patch.hash)?;
     if !hash_ok {
-        return Err(UpdateError::InvalidState("Hash mismatch".to_string()).into());
+        return Err(UpdateError::InvalidState("Hash mismatch.  This is most often caused by using the same version number with a different app binary.".to_string()).into());
     }
 
     let patch_info = PatchInfo {
@@ -449,63 +443,4 @@ mod tests {
         let expected = "#";
         assert!(super::check_hash(&input_path, expected).unwrap());
     }
-
-    // #[test]
-    // fn inflate_missing_files() {
-    //     let tmp_dir = TempDir::new("example").unwrap();
-    //     let missing_file = tmp_dir.path().join("missing_file");
-    //     let existing_file = tmp_dir.path().join("existing_file");
-    //     std::fs::write(&existing_file, "hello world").unwrap();
-
-    //     let mut result = super::inflate(&missing_file, &missing_file, &missing_file);
-    //     let mut error = result.unwrap_err();
-    //     assert!(format!("{}", error).starts_with("Failed to open base file:"));
-
-    //     result = super::inflate(&missing_file, &existing_file, &missing_file);
-    //     error = result.unwrap_err();
-    //     assert!(format!("{}", error).starts_with("Failed to open patch file:"));
-    // }
-
-    // #[test]
-    // fn get_base_path_uses_correct_path() {
-    //     let tmp_dir = TempDir::new("example").unwrap();
-    //     let missing_file = tmp_dir.path().join("missing_file");
-    //     let existing_file = tmp_dir.path().join("existing_file");
-    //     std::fs::write(&existing_file, "hello world").unwrap();
-
-    //     // Should use first file since it exists.
-    //     let mut base_paths = vec![
-    //         existing_file.as_path().to_str().unwrap().to_string(),
-    //         missing_file.as_path().to_str().unwrap().to_string(),
-    //     ];
-
-    //     let mut result = super::get_base_path(&base_paths);
-
-    //     assert_eq!(result.unwrap(), existing_file.as_path());
-
-    //     // Should skip first file since it is missing.
-    //     base_paths = vec![
-    //         missing_file.as_path().to_str().unwrap().to_string(),
-    //         existing_file.as_path().to_str().unwrap().to_string(),
-    //     ];
-
-    //     result = super::get_base_path(&base_paths);
-
-    //     assert_eq!(result.unwrap(), existing_file.as_path());
-
-    //     // Should error since all files are missing.
-    //     base_paths = vec![
-    //         missing_file.as_path().to_str().unwrap().to_string(),
-    //         missing_file.as_path().to_str().unwrap().to_string(),
-    //     ];
-
-    //     result = super::get_base_path(&base_paths);
-
-    //     let error = result.unwrap_err();
-
-    //     assert_eq!(
-    //         format!("{}", error),
-    //         "Invalid State: No base file found".to_string()
-    //     );
-    // }
 }
