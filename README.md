@@ -80,4 +80,6 @@ Alternatives being considered include
 * Change shorebird_cli to point to the dev server: https://artifact-proxy-kmdbqkx7rq-uc.a.run.app/ 
 * `shorebird` commands should now work with your artifacts.
 
+Once you've created a single unique engine revision, you don't have to create new ones so long as you know how to clear the flutter cache and gradle cache to make them re-download.
+
 This is clearly not our final dev workflow. 🤣
