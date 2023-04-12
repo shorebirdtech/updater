@@ -57,3 +57,11 @@ flutter run --release  --local-engine-src-path ~/Documents/GitHub/engine/src --l
 ```
 
 You may also need to build `out/host_release` as `flutter` looks for some Dart .dill files there and if they're not there can fail to build.
+
+## Note:
+
+`--local-engine-src-path` doesn't work on ARM Macs at the moment due to: https://github.com/flutter/flutter/issues/124620
+
+Alternatives being considered include
+* pushing artifacts to a dev server: https://github.com/shorebirdtech/shorebird/pull/277
+* Or we could build a local artifact proxy mode for `shorebird`, but would require teaching `flutter` how to use an alternative artifacts directory (or just making a new checkout of flutter) and telling it how to override the version in engine.version.  This is needed to make sure that gradel requests artifacts of a different version than existing so as to avoid poluting the gradle cache.
