@@ -51,3 +51,7 @@ log-panics = { version = "2", features = ["with-backtrace"]}
 
 [dev-dependencies]
 tempdir = "0.3.7"
+
+# https://github.com/eqrion/cbindgen/blob/master/docs.md#buildrs
+[build-dependencies]
+cbindgen = "0.24.0"
