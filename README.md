@@ -65,3 +65,19 @@ You may also need to build `out/host_release` as `flutter` looks for some Dart .
 Alternatives being considered include
 * pushing artifacts to a dev server: https://github.com/shorebirdtech/shorebird/pull/277
 * Or we could build a local artifact proxy mode for `shorebird`, but would require teaching `flutter` how to use an alternative artifacts directory (or just making a new checkout of flutter) and telling it how to override the version in engine.version.  This is needed to make sure that gradel requests artifacts of a different version than existing so as to avoid poluting the gradle cache.
+
+## Steps to use artifact via dev server.
+
+* Make changes to updater
+* Commit changes, save git hash.
+* Update engine/DEPS with git hash to your updater changes.  Commit and save engine hash.
+* Build engine using build_engine/build.sh
+* Upload built artifacts to dev servers using build_engine/upload.sh (currently need to modify upload.sh)
+* Create a change to artifact_proxy to include your proxy mapping, similar to: https://github.com/shorebirdtech/shorebird/pull/277
+* Land the change to artifact_proxy and wait for the dev proxy to update.
+* Change your shorebird/bin/cache/flutter/bin/internal/engine.version to your engine version.  commit.
+* Run FLUTTER_STORAGE_BASE_URL=https://artifact-proxy-kmdbqkx7rq-uc.a.run.app/ shorebird/bin/cache/flutter/bin/flutter clean
+* Change shorebird_cli to point to the dev server: https://artifact-proxy-kmdbqkx7rq-uc.a.run.app/ 
+* `shorebird` commands should now work with your artifacts.
+
+This is clearly not our final dev workflow. 🤣
