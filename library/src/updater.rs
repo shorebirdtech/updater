@@ -7,7 +7,11 @@ use crate::config::{set_config, with_config, ResolvedConfig};
 use crate::logging::init_logging;
 use crate::network::{download_to_path, send_patch_check_request};
 use crate::yaml::YamlConfig;
+use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -130,6 +134,37 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
     return Ok(hash_matches);
 }
 
+fn app_data_dir_from_libapp_path(libapp_path: &str) -> anyhow::Result<PathBuf> {
+    // "/data/app/~~7LtReIkm5snW_oXeDoJ5TQ==/com.example.shorebird_test-rpkDZSLBRv2jWcc1gQpwdg==/lib/x86_64/libapp.so"
+    let path = PathBuf::from(libapp_path);
+    let root = path.ancestors().nth(3).context("Invalid libapp path")?;
+    Ok(PathBuf::from(root))
+}
+
+fn get_base_apk_path(lib_app_path: &str) -> anyhow::Result<PathBuf> {
+    let root = app_data_dir_from_libapp_path(lib_app_path)?;
+    Ok(root.join("base.apk"))
+}
+
+fn get_android_apk_lib_arch() -> &'static str {
+    // https://developer.android.com/ndk/guides/abis
+    #[cfg(target_arch = "x86")]
+    static ARCH: &str = "x86";
+    #[cfg(target_arch = "x86_64")]
+    static ARCH: &str = "x86_64";
+    #[cfg(target_arch = "aarch64")]
+    static ARCH: &str = "arm64-v8a";
+    #[cfg(target_arch = "arm")]
+    static ARCH: &str = "armeabi-v7a";
+    return ARCH;
+}
+
+fn get_relative_lib_path(lib_name: &str) -> PathBuf {
+    PathBuf::from("lib")
+        .join(get_android_apk_lib_arch())
+        .join(lib_name)
+}
+
 fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     // Load the state from disk.
     let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
@@ -141,26 +176,56 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
 
-    let download_dir = PathBuf::from(&config.cache_dir);
+    let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
+    // Consider supporting allowing the system to download for us (e.g. iOS).
     download_to_path(&patch.download_url, &download_path)?;
 
-    let base_path = get_base_path(&config.original_libapp_paths)?;
+    // FIXME: This makes the assumption that the last path provided is the full
+    // path to the libapp.so file.  This is true for the current engine, but
+    // may not be true in the future.  Better would be for the engine to
+    // pass us the path to the base.apk.
+    // https://github.com/shorebirdtech/shorebird/issues/283
+    let full_libapp_path = config
+        .original_libapp_paths
+        .last()
+        .context("No libapp paths")?;
+
+    // Read the library out of the APK.  We only need to do this if it
+    // isn't already extracted on disk (which it sometimes seems to be) but
+    // for now we just always read from the APK.  We could also use the
+    // ApkAssetProvider in the Engine if we initialized later (currently
+    // shorebird_init runs before the java side is fully initialized).
+    debug!("Finding apk from: {:?}", full_libapp_path);
+    let base_apk_path = get_base_apk_path(full_libapp_path)?;
+    debug!("base_apk_path: {:?}", base_apk_path);
+    let relative_lib_path = get_relative_lib_path("libapp.so");
+    debug!("relative_lib_path: {:?}", relative_lib_path);
+    let mut archive = zip::ZipArchive::new(File::open(base_apk_path)?)?;
+    let mut zip_file = archive.by_name(relative_lib_path.to_str().unwrap())?;
+
+    // Cursor (rather than ZipFile) is only necessary because bipatch expects
+    // Seek + Read for the input file.  I don't think it actually needs to
+    // seek backwards, so Read is probably sufficient.  If we made bipatch
+    // only depend on Read we could avoid loading the library fully into memory.
+    let mut buffer = Vec::new();
+    zip_file.read_to_end(&mut buffer)?;
+    let base_r = std::io::Cursor::new(buffer);
+
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
-    inflate(&download_path, &base_path, &output_path)?;
+    inflate(&download_path, base_r, &output_path)?;
 
     // Check the hash before moving into place.
     let hash_ok = check_hash(&output_path, &patch.hash)?;
     if !hash_ok {
-        return Err(UpdateError::InvalidState("Hash mismatch".to_string()).into());
+        return Err(UpdateError::InvalidState("Hash mismatch.  This is most often caused by using the same version number with a different app binary.".to_string()).into());
     }
-    // Move/state update should be "atomic".
-    // Consider supporting allowing the system to download for us (e.g. iOS).
 
     let patch_info = PatchInfo {
         path: output_path.to_str().unwrap().to_string(),
         number: patch.number,
     };
+    // Move/state update should be "atomic".
     state.install_patch(patch_info)?;
     info!("Patch {} successfully installed.", patch.number);
 
@@ -168,41 +233,17 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     return Ok(UpdateStatus::UpdateInstalled);
 }
 
-fn get_base_path(original_lib_app_paths: &Vec<String>) -> anyhow::Result<PathBuf> {
-    // Iterate through the paths and find the first one that exists.
-    for path in original_lib_app_paths {
-        let path = PathBuf::from(path);
-        match path.try_exists() {
-            Ok(true) => {
-                return Ok(path);
-            }
-            Ok(false) => {
-                info!("File does not exist: {:?}", path);
-                continue;
-            }
-            Err(err) => {
-                info!("Failed to check for file: {:?}, err: {err}", path);
-                continue;
-            }
-        }
-    }
-    return Err(UpdateError::InvalidState("No base file found".to_string()).into());
-}
-
-fn inflate(patch_path: &Path, base_path: &Path, output_path: &Path) -> anyhow::Result<()> {
-    info!("Patch is compressed, inflating...");
-    use anyhow::Context;
+fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
+where
+    RS: Read + Seek,
+{
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
-    use std::fs::File;
+    info!("Patch is compressed, inflating...");
     use std::io::{BufReader, BufWriter};
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
-    info!("Reading base file: {:?}", base_path);
-    let base_r =
-        File::open(base_path).context(format!("Failed to open base file: {:?}", base_path))?;
-
     info!("Reading patch file: {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         File::open(patch_path).context(format!("Failed to open patch file: {:?}", patch_path))?,
@@ -218,9 +259,9 @@ fn inflate(patch_path: &Path, base_path: &Path, output_path: &Path) -> anyhow::R
     // decompress.copy will block on the pipe being full (I think) and then
     // when it returns the thread will exit.
     std::thread::spawn(move || {
-        let result = decompress.copy(compressed_patch_r, patch_w);
         // If this thread fails, undoubtedly the main thread will fail too.
         // Most important is to not crash.
+        let result = decompress.copy(compressed_patch_r, patch_w);
         if let Err(err) = result {
             error!("Decompression thread failed: {err}");
         }
@@ -354,7 +395,7 @@ mod tests {
         with_config(|config| {
             let download_dir = std::path::PathBuf::from(&config.download_dir);
             let artifact_path = download_dir.join("1");
-            println!("artifact_path: {:?}", artifact_path);
+            info!("artifact_path: {:?}", artifact_path);
             std::fs::create_dir_all(&download_dir).unwrap();
             std::fs::write(&artifact_path, "hello").unwrap();
 
@@ -401,64 +442,5 @@ mod tests {
         // Remove this case when legacy clients are gone.
         let expected = "#";
         assert!(super::check_hash(&input_path, expected).unwrap());
-    }
-
-    #[test]
-    fn inflate_missing_files() {
-        let tmp_dir = TempDir::new("example").unwrap();
-        let missing_file = tmp_dir.path().join("missing_file");
-        let existing_file = tmp_dir.path().join("existing_file");
-        std::fs::write(&existing_file, "hello world").unwrap();
-
-        let mut result = super::inflate(&missing_file, &missing_file, &missing_file);
-        let mut error = result.unwrap_err();
-        assert!(format!("{}", error).starts_with("Failed to open base file:"));
-
-        result = super::inflate(&missing_file, &existing_file, &missing_file);
-        error = result.unwrap_err();
-        assert!(format!("{}", error).starts_with("Failed to open patch file:"));
-    }
-
-    #[test]
-    fn get_base_path_uses_correct_path() {
-        let tmp_dir = TempDir::new("example").unwrap();
-        let missing_file = tmp_dir.path().join("missing_file");
-        let existing_file = tmp_dir.path().join("existing_file");
-        std::fs::write(&existing_file, "hello world").unwrap();
-
-        // Should use first file since it exists.
-        let mut base_paths = vec![
-            existing_file.as_path().to_str().unwrap().to_string(),
-            missing_file.as_path().to_str().unwrap().to_string(),
-        ];
-
-        let mut result = super::get_base_path(&base_paths);
-
-        assert_eq!(result.unwrap(), existing_file.as_path());
-
-        // Should skip first file since it is missing.
-        base_paths = vec![
-            missing_file.as_path().to_str().unwrap().to_string(),
-            existing_file.as_path().to_str().unwrap().to_string(),
-        ];
-
-        result = super::get_base_path(&base_paths);
-
-        assert_eq!(result.unwrap(), existing_file.as_path());
-
-        // Should error since all files are missing.
-        base_paths = vec![
-            missing_file.as_path().to_str().unwrap().to_string(),
-            missing_file.as_path().to_str().unwrap().to_string(),
-        ];
-
-        result = super::get_base_path(&base_paths);
-
-        let error = result.unwrap_err();
-
-        assert_eq!(
-            format!("{}", error),
-            "Invalid State: No base file found".to_string()
-        );
     }
 }

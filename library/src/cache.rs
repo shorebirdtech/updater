@@ -117,11 +117,13 @@ impl UpdaterState {
 
     pub fn load_or_new_on_error(cache_dir: &str, release_version: &str) -> Self {
         let loaded = Self::load(cache_dir).unwrap_or_else(|e| {
-            warn!("Failed to load updater state: {}", e);
+            // FIXME: Should match on errorKind and display a warning if it's
+            // not a file not found error.
+            info!("No cached state, making empty: {}", e);
             Self::new(cache_dir.to_owned(), release_version.to_owned())
         });
         if loaded.release_version != release_version {
-            warn!("Release version changed, clearing updater state");
+            info!("Release version changed, clearing updater state");
             Self::new(cache_dir.to_owned(), release_version.to_owned())
         } else {
             loaded
