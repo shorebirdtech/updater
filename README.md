@@ -82,4 +82,7 @@ Alternatives being considered include
 
 Once you've created a single unique engine revision, you don't have to create new ones so long as you know how to clear the flutter cache and gradle cache to make them re-download.
 
+Why can't we use a local artifact_proxy?  Gradle will complain if you use a non-https source.  You can change that on a per-project basis however:
+https://docs.gradle.org/7.5/dsl/org.gradle.api.artifacts.repositories.UrlArtifactRepository.html#org.gradle.api.artifacts.repositories.UrlArtifactRepository:allowInsecureProtocol
+
 This is clearly not our final dev workflow. 🤣
