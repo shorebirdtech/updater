@@ -6,6 +6,7 @@
 pub mod c_api;
 
 // Declare other .rs file/module exists, but make them public.
+mod assets;
 mod cache;
 mod config;
 mod logging;

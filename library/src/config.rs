@@ -2,6 +2,7 @@
 
 use std::sync::Mutex;
 
+use crate::assets::AssetProvider;
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
 use once_cell::sync::OnceCell;
@@ -41,8 +42,8 @@ pub struct ResolvedConfig {
     pub app_id: String,
     pub release_version: String,
     pub original_libapp_paths: Vec<String>,
-    pub vm_path: String,
     pub base_url: String,
+    pub asset_provider: AssetProvider,
 }
 
 impl ResolvedConfig {
@@ -55,8 +56,8 @@ impl ResolvedConfig {
             app_id: String::new(),
             release_version: String::new(),
             original_libapp_paths: Vec::new(),
-            vm_path: String::new(),
             base_url: String::new(),
+            asset_provider: AssetProvider::empty(),
         }
     }
 }
@@ -84,7 +85,7 @@ pub fn set_config(config: AppConfig, yaml: YamlConfig) {
     lock.app_id = yaml.app_id.to_string();
     lock.release_version = config.release_version.to_string();
     lock.original_libapp_paths = config.original_libapp_paths;
-    lock.vm_path = config.vm_path.to_string();
+    lock.asset_provider = config.asset_provider;
     lock.is_initialized = true;
     info!("Updater configured with: {:?}", lock);
 }

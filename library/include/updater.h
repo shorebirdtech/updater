@@ -14,10 +14,35 @@
 #endif
 
 
+typedef void *(*OpenAssetFn)(const char *name);
+
+typedef int (*GetAssetLengthFn)(void *asset);
+
+typedef int (*ReadAssetFn)(void *asset, void *buffer, size_t size);
+
+typedef off_t (*SeekAssetFn)(void *asset, off_t offset, int whence);
+
+typedef void (*CloseAssetFn)(void *asset);
+
+/**
+ * Struct containing callbacks to open, read, and close assets.
+ * Passed as part of AppParameters to shorebird_init().  shorebird_init()
+ * will copy the contents of this struct, so it is safe to free the memory
+ * after calling shorebird_init().
+ */
+typedef struct AssetProvider {
+  OpenAssetFn open_asset;
+  GetAssetLengthFn get_asset_length;
+  ReadAssetFn read_asset;
+  SeekAssetFn seek_asset;
+  CloseAssetFn close_asset;
+} AssetProvider;
+
 /**
  * Struct containing configuration parameters for the updater.
- * Passed to all updater functions.
- * NOTE: If this struct is changed all language bindings must be updated.
+ * This struct is passed to shorebird_init().  shorebird_init() will
+ * copy the contents of this struct, so it is safe to free the memory
+ * after calling shorebird_init().
  */
 typedef struct AppParameters {
   /**
@@ -35,13 +60,9 @@ typedef struct AppParameters {
    */
   int original_libapp_paths_size;
   /**
-   * Path to the app's libflutter.so, required.  May be used for ensuring
-   * downloaded artifacts are compatible with the Flutter/Dart versions
-   * used by the app.  For Flutter apps this should be the path to the
-   * bundled libflutter.so.  For Dart apps this should be the path to the
-   * dart executable.
+   * A pointer to AAssetManager, required.  Used to resolve libapp.so.
    */
-  const char *vm_path;
+  const struct AssetProvider *asset_provider;
   /**
    * Path to cache_dir where the updater will store downloaded artifacts.
    */

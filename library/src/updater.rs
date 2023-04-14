@@ -2,9 +2,11 @@
 
 use std::fmt::{Display, Formatter};
 
+pub use crate::assets::AssetProvider;
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, ResolvedConfig};
-use crate::logging::init_logging;
+// Make init_logging public so that it can be called from the C API before init.
+pub use crate::logging::init_logging;
 use crate::network::{download_to_path, send_patch_check_request};
 use crate::yaml::YamlConfig;
 use std::fs::File;
@@ -63,7 +65,7 @@ pub struct AppConfig {
     pub cache_dir: String,
     pub release_version: String,
     pub original_libapp_paths: Vec<String>,
-    pub vm_path: String,
+    pub asset_provider: AssetProvider,
 }
 
 /// Initialize the updater library.
@@ -134,18 +136,6 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
     return Ok(hash_matches);
 }
 
-fn app_data_dir_from_libapp_path(libapp_path: &str) -> anyhow::Result<PathBuf> {
-    // "/data/app/~~7LtReIkm5snW_oXeDoJ5TQ==/com.example.shorebird_test-rpkDZSLBRv2jWcc1gQpwdg==/lib/x86_64/libapp.so"
-    let path = PathBuf::from(libapp_path);
-    let root = path.ancestors().nth(3).context("Invalid libapp path")?;
-    Ok(PathBuf::from(root))
-}
-
-fn get_base_apk_path(lib_app_path: &str) -> anyhow::Result<PathBuf> {
-    let root = app_data_dir_from_libapp_path(lib_app_path)?;
-    Ok(root.join("base.apk"))
-}
-
 fn get_android_apk_lib_arch() -> &'static str {
     // https://developer.android.com/ndk/guides/abis
     #[cfg(target_arch = "x86")]
@@ -181,37 +171,46 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     // Consider supporting allowing the system to download for us (e.g. iOS).
     download_to_path(&patch.download_url, &download_path)?;
 
-    // FIXME: This makes the assumption that the last path provided is the full
-    // path to the libapp.so file.  This is true for the current engine, but
-    // may not be true in the future.  Better would be for the engine to
-    // pass us the path to the base.apk.
-    // https://github.com/shorebirdtech/shorebird/issues/283
-    let full_libapp_path = config
-        .original_libapp_paths
-        .last()
-        .context("No libapp paths")?;
+    // // FIXME: This makes the assumption that the last path provided is the full
+    // // path to the libapp.so file.  This is true for the current engine, but
+    // // may not be true in the future.  Better would be for the engine to
+    // // pass us the path to the base.apk.
+    // // https://github.com/shorebirdtech/shorebird/issues/283
+    // let full_libapp_path = config
+    //     .original_libapp_paths
+    //     .last()
+    //     .context("No libapp paths")?;
 
-    // Read the library out of the APK.  We only need to do this if it
-    // isn't already extracted on disk (which it sometimes seems to be) but
-    // for now we just always read from the APK.  We could also use the
-    // ApkAssetProvider in the Engine if we initialized later (currently
-    // shorebird_init runs before the java side is fully initialized).
-    debug!("Finding apk from: {:?}", full_libapp_path);
-    let base_apk_path = get_base_apk_path(full_libapp_path)?;
-    debug!("base_apk_path: {:?}", base_apk_path);
-    let relative_lib_path = get_relative_lib_path("libapp.so");
-    debug!("relative_lib_path: {:?}", relative_lib_path);
-    let mut archive = zip::ZipArchive::new(File::open(base_apk_path)?)?;
-    let mut zip_file = archive.by_name(relative_lib_path.to_str().unwrap())?;
+    // // Read the library out of the APK.  We only need to do this if it
+    // // isn't already extracted on disk (which it sometimes seems to be) but
+    // // for now we just always read from the APK.  We could also use the
+    // // ApkAssetProvider in the Engine if we initialized later (currently
+    // // shorebird_init runs before the java side is fully initialized).
+    // debug!("Finding apk from: {:?}", full_libapp_path);
+    // let base_apk_path = get_base_apk_path(full_libapp_path)?;
+    // debug!("base_apk_path: {:?}", base_apk_path);
+    // let relative_lib_path = get_relative_lib_path("libapp.so");
+    // debug!("relative_lib_path: {:?}", relative_lib_path);
+    // let mut archive = zip::ZipArchive::new(File::open(base_apk_path)?)?;
+    // let mut zip_file = archive.by_name(relative_lib_path.to_str().unwrap())?;
 
-    // Cursor (rather than ZipFile) is only necessary because bipatch expects
-    // Seek + Read for the input file.  I don't think it actually needs to
-    // seek backwards, so Read is probably sufficient.  If we made bipatch
-    // only depend on Read we could avoid loading the library fully into memory.
-    let mut buffer = Vec::new();
-    zip_file.read_to_end(&mut buffer)?;
-    let base_r = std::io::Cursor::new(buffer);
+    // // Cursor (rather than ZipFile) is only necessary because bipatch expects
+    // // Seek + Read for the input file.  I don't think it actually needs to
+    // // seek backwards, so Read is probably sufficient.  If we made bipatch
+    // // only depend on Read we could avoid loading the library fully into memory.
+    // let mut buffer = Vec::new();
+    // zip_file.read_to_end(&mut buffer)?;
+    // let base_r = std::io::Cursor::new(buffer);
 
+    // Android AssetManager doesn't seem to search for files in the APK, it
+    // just loads paths.  Which means we have to know the architecture-specific
+    // path to the library.  This path calculation should be in C++ code, but
+    // it seemed easier to write in Rust for now.
+    let libapp_path = get_relative_lib_path("libapp.so");
+    let base_r = config
+        .asset_provider
+        .open(libapp_path.to_str().unwrap())
+        .context("unable to open libapp.so")?;
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
     inflate(&download_path, base_r, &output_path)?;
 
@@ -337,7 +336,7 @@ mod tests {
                 cache_dir: cache_dir.clone(),
                 release_version: "1.0.0".to_string(),
                 original_libapp_paths: vec!["original_libapp_path".to_string()],
-                vm_path: "vm_path".to_string(),
+                asset_provider: crate::AssetProvider::empty(),
             },
             "app_id: 1234",
         )
@@ -354,7 +353,7 @@ mod tests {
                     cache_dir: cache_dir.clone(),
                     release_version: "1.0.0".to_string(),
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
-                    vm_path: "vm_path".to_string(),
+                    asset_provider: crate::AssetProvider::empty(),
                 },
                 "",
             ),
