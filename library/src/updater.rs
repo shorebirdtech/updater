@@ -547,12 +547,21 @@ mod tests {
         assert_eq!(super::check_hash(&input_path, expected).unwrap(), false);
 
         // invalid hashes should not match either
-        // Except for now they do (legacy behavior).
         let expected = "foo";
-        assert_eq!(super::check_hash(&input_path, expected).unwrap(), true);
+        assert_eq!(
+            super::check_hash(&input_path, expected)
+                .unwrap_err()
+                .to_string(),
+            "Invalid hash string from server."
+        );
 
-        // Remove this case when legacy clients are gone.
+        // Server used to send "#" and we'd allow it, but now we don't.
         let expected = "#";
-        assert!(super::check_hash(&input_path, expected).unwrap());
+        assert_eq!(
+            super::check_hash(&input_path, expected)
+                .unwrap_err()
+                .to_string(),
+            "Invalid hash string from server."
+        );
     }
 }
