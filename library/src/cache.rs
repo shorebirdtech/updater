@@ -305,7 +305,7 @@ mod tests {
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
-        UpdaterState::new(cache_dir, "1.0.0".to_string())
+        UpdaterState::new(cache_dir, "1.0.0+1".to_string())
     }
 
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
@@ -339,21 +339,7 @@ mod tests {
         assert_eq!(loaded.latest_downloaded_patch, Some(1));
 
         let loaded_after_version_change =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.1");
-        assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
-    }
-
-    #[test]
-    fn version_code_changed() {
-        let tmp_dir = TempDir::new("example").unwrap();
-        let mut state = test_state(&tmp_dir);
-        state.latest_downloaded_patch = Some(1);
-        state.save().unwrap();
-        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
-        assert_eq!(loaded.latest_downloaded_patch, Some(1));
-
-        let loaded_after_version_change =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
+            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2");
         assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
     }
 
