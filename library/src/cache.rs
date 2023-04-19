@@ -128,10 +128,16 @@ impl UpdaterState {
             Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         });
         if loaded.version_name != version_name {
-            info!("version_name changed {} -> {}, clearing updater state", loaded.version_name, version_name);
+            info!(
+                "version_name changed {} -> {}, clearing updater state",
+                loaded.version_name, version_name
+            );
             Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         } else if loaded.version_code != version_code {
-            info!("version_code changed {} -> {}, clearing updater state", loaded.version_code, version_code);
+            info!(
+                "version_code changed {} -> {}, clearing updater state",
+                loaded.version_code, version_code
+            );
             Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         } else {
             loaded
@@ -340,11 +346,15 @@ mod tests {
         let mut state = test_state(&tmp_dir);
         state.latest_downloaded_patch = Some(1);
         state.save().unwrap();
-        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, state.version_code);
+        let loaded = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            &state.version_name,
+            state.version_code,
+        );
         assert_eq!(loaded.latest_downloaded_patch, Some(1));
 
         let loaded_after_version_change =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.1", state.version_code );
+            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.1", state.version_code);
         assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
     }
 
@@ -354,7 +364,11 @@ mod tests {
         let mut state = test_state(&tmp_dir);
         state.latest_downloaded_patch = Some(1);
         state.save().unwrap();
-        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, state.version_code);
+        let loaded = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            &state.version_name,
+            state.version_code,
+        );
         assert_eq!(loaded.latest_downloaded_patch, Some(1));
 
         let loaded_after_version_change =

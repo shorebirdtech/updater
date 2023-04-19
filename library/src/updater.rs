@@ -82,7 +82,11 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
 fn check_for_update_internal(config: &ResolvedConfig) -> bool {
     // Load UpdaterState from disk
     // If there is no state, make an empty state.
-    let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.version_name, config.version_code);
+    let state = UpdaterState::load_or_new_on_error(
+        &config.cache_dir,
+        &config.version_name,
+        config.version_code,
+    );
     // Send info from app + current slot to server.
     let response_result = send_patch_check_request(&config, &state);
     match response_result {
@@ -274,7 +278,11 @@ fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<Cursor<Vec<u
 // Run the update logic with the resolved config.
 fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     // Load the state from disk.
-    let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.version_name, config.version_code);
+    let mut state = UpdaterState::load_or_new_on_error(
+        &config.cache_dir,
+        &config.version_name,
+        config.version_code,
+    );
     // Check for update.
     let response = send_patch_check_request(&config, &state)?;
     if !response.patch_available {
@@ -385,7 +393,11 @@ where
 /// Reads the current patch from the cache and returns it.
 pub fn active_patch() -> Option<PatchInfo> {
     return with_config(|config| {
-        let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.version_name, config.version_code);
+        let state = UpdaterState::load_or_new_on_error(
+            &config.cache_dir,
+            &config.version_name,
+            config.version_code,
+        );
         return state.current_patch();
     });
 }
@@ -395,8 +407,11 @@ pub fn active_patch() -> Option<PatchInfo> {
 pub fn report_failed_launch() -> Result<(), UpdateError> {
     info!("Reporting failed launch.");
     with_config(|config| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.version_name, config.version_code);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.cache_dir,
+            &config.version_name,
+            config.version_code,
+        );
 
         // FIXME: We need to separate out the concept of "running patch" and
         // "next patch to activate".  Currently these are smooshed which will
@@ -411,8 +426,11 @@ pub fn report_failed_launch() -> Result<(), UpdateError> {
 
 pub fn report_successful_launch() -> Result<(), UpdateError> {
     with_config(|config| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.version_name, config.version_code);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.cache_dir,
+            &config.version_name,
+            config.version_code,
+        );
 
         let patch = state
             .current_patch()
@@ -511,8 +529,11 @@ mod tests {
             fs::create_dir_all(&download_dir).unwrap();
             fs::write(&artifact_path, "hello").unwrap();
 
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.version_name, config.version_code);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.cache_dir,
+                &config.version_name,
+                config.version_code,
+            );
             state
                 .install_patch(PatchInfo {
                     path: artifact_path.to_str().unwrap().to_string(),
