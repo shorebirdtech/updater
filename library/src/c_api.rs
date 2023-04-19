@@ -51,8 +51,11 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
 
     updater::AppConfig {
         cache_dir: to_rust(c_params_ref.cache_dir),
-        version_name: to_rust(c_params_ref.version_name),
-        version_code: c_params_ref.version_code,
+        release_version: format!(
+            "{}+{}",
+            to_rust(c_params_ref.version_name),
+            c_params_ref.version_code
+        ),
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,
