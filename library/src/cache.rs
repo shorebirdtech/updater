@@ -128,7 +128,10 @@ impl UpdaterState {
             Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         });
         if loaded.version_name != version_name {
-            info!("Release version changed, clearing updater state");
+            info!("version_name changed {} -> {}, clearing updater state", loaded.version_name, version_name);
+            Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
+        } else if loaded.version_code != version_code {
+            info!("version_code changed {} -> {}, clearing updater state", loaded.version_code, version_code);
             Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         } else {
             loaded
@@ -355,7 +358,7 @@ mod tests {
         assert_eq!(loaded.latest_downloaded_patch, Some(1));
 
         let loaded_after_version_change =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, 2 );
+            UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, 2);
         assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
     }
 
