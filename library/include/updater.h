@@ -21,10 +21,15 @@
  */
 typedef struct AppParameters {
   /**
-   * release_version, required.  Named version of the app, off of which updates
+   * version_name, required.  Named version of the app, off of which updates
    * are based.  Can be either a version number or a hash.
    */
-  const char *release_version;
+  const char *version_name;
+  /**
+   * version_code, required.  Integer version of the app, off of which
+   * updates are based.  Monotonically increasing on Android/Play Store.
+   */
+  long version_code;
   /**
    * Array of paths to the original aot library, required.  For Flutter apps
    * these are the paths to the bundled libapp.so.  May be used for compression downloaded artifacts.
@@ -34,14 +39,6 @@ typedef struct AppParameters {
    * Length of the original_libapp_paths array.
    */
   int original_libapp_paths_size;
-  /**
-   * Path to the app's libflutter.so, required.  May be used for ensuring
-   * downloaded artifacts are compatible with the Flutter/Dart versions
-   * used by the app.  For Flutter apps this should be the path to the
-   * bundled libflutter.so.  For Dart apps this should be the path to the
-   * dart executable.
-   */
-  const char *vm_path;
   /**
    * Path to cache_dir where the updater will store downloaded artifacts.
    */
