@@ -14,9 +14,13 @@ use crate::updater;
 /// NOTE: If this struct is changed all language bindings must be updated.
 #[repr(C)]
 pub struct AppParameters {
-    /// release_version, required.  Named version of the app, off of which updates
+    /// version_name, required.  Named version of the app, off of which updates
     /// are based.  Can be either a version number or a hash.
-    pub release_version: *const libc::c_char,
+    pub version_name: *const libc::c_char,
+
+    /// version_code, required.  Integer version of the app, off of which
+    /// updates are based.  Monotonically increasing on Android/Play Store.
+    pub version_code: libc::c_long,
 
     /// Array of paths to the original aot library, required.  For Flutter apps
     /// these are the paths to the bundled libapp.so.  May be used for compression downloaded artifacts.
@@ -24,13 +28,6 @@ pub struct AppParameters {
 
     /// Length of the original_libapp_paths array.
     pub original_libapp_paths_size: libc::c_int,
-
-    /// Path to the app's libflutter.so, required.  May be used for ensuring
-    /// downloaded artifacts are compatible with the Flutter/Dart versions
-    /// used by the app.  For Flutter apps this should be the path to the
-    /// bundled libflutter.so.  For Dart apps this should be the path to the
-    /// dart executable.
-    pub vm_path: *const libc::c_char,
 
     /// Path to cache_dir where the updater will store downloaded artifacts.
     pub cache_dir: *const libc::c_char,
@@ -54,12 +51,12 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
 
     updater::AppConfig {
         cache_dir: to_rust(c_params_ref.cache_dir),
-        release_version: to_rust(c_params_ref.release_version),
+        version_name: to_rust(c_params_ref.version_name),
+        version_code: c_params_ref.version_code,
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,
         ),
-        vm_path: to_rust(c_params_ref.vm_path),
     }
 }
 

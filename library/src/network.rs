@@ -37,6 +37,7 @@ pub struct PatchCheckRequest {
     /// The latest patch number that the client has downloaded.
     /// Not necessarily the one it's running (if some have been marked bad).
     /// We could rename this to be more clear.
+    pub version_code: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch_number: Option<usize>,
     /// Platform (e.g. "android", "ios", "windows", "macos", "linux").
@@ -63,7 +64,8 @@ pub fn send_patch_check_request(
     let req = PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
-        release_version: config.release_version.clone(),
+        release_version: config.version_name.clone(),
+        version_code: config.version_code,
         patch_number: latest_patch_number,
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),

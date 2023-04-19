@@ -39,7 +39,8 @@ pub struct ResolvedConfig {
     pub download_dir: String,
     pub channel: String,
     pub app_id: String,
-    pub release_version: String,
+    pub version_name: String,
+    pub version_code: i64,
     pub original_libapp_paths: Vec<String>,
     pub vm_path: String,
     pub base_url: String,
@@ -53,7 +54,8 @@ impl ResolvedConfig {
             download_dir: String::new(),
             channel: String::new(),
             app_id: String::new(),
-            release_version: String::new(),
+            version_name: String::new(),
+            version_code: 0,
             original_libapp_paths: Vec::new(),
             vm_path: String::new(),
             base_url: String::new(),
@@ -82,9 +84,9 @@ pub fn set_config(config: AppConfig, yaml: YamlConfig) {
     cache_path.push("downloads");
     lock.download_dir = cache_path.to_str().unwrap().to_string();
     lock.app_id = yaml.app_id.to_string();
-    lock.release_version = config.release_version.to_string();
+    lock.version_name = config.version_name.to_string();
+    lock.version_code = config.version_code;
     lock.original_libapp_paths = config.original_libapp_paths;
-    lock.vm_path = config.vm_path.to_string();
     lock.is_initialized = true;
     info!("Updater configured with: {:?}", lock);
 }

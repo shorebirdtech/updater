@@ -41,7 +41,11 @@ pub struct UpdaterState {
     /// The release version this cache corresponds to.
     /// If this does not match the release version we're booting from we will
     /// clear the cache.
-    release_version: String,
+    version_name: String,
+    /// The version code this cache corresponds to.
+    /// If this does not match the version code we're booting from we will
+    /// clear the cache.
+    version_code: i64,
     /// The patch number of the patch that was last downloaded.
     latest_downloaded_patch: Option<usize>,
     /// List of patches that failed to boot.  We will never attempt these again.
@@ -57,10 +61,11 @@ pub struct UpdaterState {
 }
 
 impl UpdaterState {
-    fn new(cache_dir: String, release_version: String) -> Self {
+    fn new(cache_dir: String, version_name: String, version_code: i64) -> Self {
         Self {
             cache_dir,
-            release_version,
+            version_name,
+            version_code,
             current_slot_index: None,
             latest_downloaded_patch: None,
             failed_patches: Vec::new(),
@@ -115,16 +120,16 @@ impl UpdaterState {
         Ok(state)
     }
 
-    pub fn load_or_new_on_error(cache_dir: &str, release_version: &str) -> Self {
+    pub fn load_or_new_on_error(cache_dir: &str, version_name: &str, version_code: i64) -> Self {
         let loaded = Self::load(cache_dir).unwrap_or_else(|e| {
             // FIXME: Should match on errorKind and display a warning if it's
             // not a file not found error.
             info!("No cached state, making empty: {}", e);
-            Self::new(cache_dir.to_owned(), release_version.to_owned())
+            Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         });
-        if loaded.release_version != release_version {
+        if loaded.version_name != version_name {
             info!("Release version changed, clearing updater state");
-            Self::new(cache_dir.to_owned(), release_version.to_owned())
+            Self::new(cache_dir.to_owned(), version_name.to_owned(), version_code)
         } else {
             loaded
         }
@@ -302,7 +307,7 @@ mod tests {
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
-        UpdaterState::new(cache_dir, "1.0.0".to_string())
+        UpdaterState::new(cache_dir, "1.0.0".to_string(), 1)
     }
 
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
@@ -332,11 +337,25 @@ mod tests {
         let mut state = test_state(&tmp_dir);
         state.latest_downloaded_patch = Some(1);
         state.save().unwrap();
-        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
+        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, state.version_code);
         assert_eq!(loaded.latest_downloaded_patch, Some(1));
 
         let loaded_after_version_change =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.1");
+            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.1", state.version_code );
+        assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
+    }
+
+    #[test]
+    fn version_code_changed() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut state = test_state(&tmp_dir);
+        state.latest_downloaded_patch = Some(1);
+        state.save().unwrap();
+        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, state.version_code);
+        assert_eq!(loaded.latest_downloaded_patch, Some(1));
+
+        let loaded_after_version_change =
+            UpdaterState::load_or_new_on_error(&state.cache_dir, &state.version_name, 2 );
         assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
     }
 
