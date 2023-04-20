@@ -37,10 +37,6 @@ fn string_to_rust_string(c_string: *const libc::c_char) -> String {
     unsafe { CStr::from_ptr(c_string).to_str().unwrap() }.to_string()
 }
 
-fn long_to_rust_string(c_long: libc::c_long) -> String {
-    c_long.to_string()
-}
-
 fn to_rust_vector(c_array: *const *const libc::c_char, size: libc::c_int) -> Vec<String> {
     let mut result = Vec::new();
     for i in 0..size {
@@ -55,11 +51,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
 
     updater::AppConfig {
         cache_dir: string_to_rust_string(c_params_ref.cache_dir),
-        release_version: format!(
-            "{}+{}",
-            string_to_rust_string(c_params_ref.version_name),
-            long_to_rust_string(c_params_ref.version_code),
-        ),
+        release_version: format!("{}+{}", string_to_rust_string(c_params_ref.version_name), 1,),
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,
