@@ -51,7 +51,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
 
     updater::AppConfig {
         cache_dir: string_to_rust_string(c_params_ref.cache_dir),
-        release_version: format!("{}+{}", string_to_rust_string(c_params_ref.version_name), 1,),
+        release_version: string_to_rust_string(c_params_ref.version_name),
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,
@@ -64,6 +64,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
 /// configuration compiled into the app.
 #[no_mangle]
 pub extern "C" fn shorebird_init(c_params: *const AppParameters, c_yaml: *const libc::c_char) {
+    print!("in shorebird_init");
     let config = app_config_from_c(c_params);
 
     let yaml_string = string_to_rust_string(c_yaml);
