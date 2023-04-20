@@ -33,15 +33,19 @@ pub struct AppParameters {
     pub cache_dir: *const libc::c_char,
 }
 
-fn to_rust(c_string: *const libc::c_char) -> String {
+fn string_to_rust_string(c_string: *const libc::c_char) -> String {
     unsafe { CStr::from_ptr(c_string).to_str().unwrap() }.to_string()
+}
+
+fn long_to_rust_string(c_long: libc::c_long) -> String {
+    c_long.to_string()
 }
 
 fn to_rust_vector(c_array: *const *const libc::c_char, size: libc::c_int) -> Vec<String> {
     let mut result = Vec::new();
     for i in 0..size {
         let c_string = unsafe { *c_array.offset(i as isize) };
-        result.push(to_rust(c_string));
+        result.push(string_to_rust_string(c_string));
     }
     result
 }
@@ -50,11 +54,11 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
     let c_params_ref = unsafe { &*c_params };
 
     updater::AppConfig {
-        cache_dir: to_rust(c_params_ref.cache_dir),
+        cache_dir: string_to_rust_string(c_params_ref.cache_dir),
         release_version: format!(
             "{}+{}",
-            to_rust(c_params_ref.version_name),
-            c_params_ref.version_code
+            string_to_rust_string(c_params_ref.version_name),
+            long_to_rust_string(c_params_ref.version_code),
         ),
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
@@ -70,7 +74,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> updater::AppConfig {
 pub extern "C" fn shorebird_init(c_params: *const AppParameters, c_yaml: *const libc::c_char) {
     let config = app_config_from_c(c_params);
 
-    let yaml_string = to_rust(c_yaml);
+    let yaml_string = string_to_rust_string(c_yaml);
     let result = updater::init(config, &yaml_string);
     match result {
         Ok(_) => {}
