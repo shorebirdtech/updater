@@ -4,7 +4,6 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
-use anyhow::Ok;
 use serde::{Deserialize, Serialize};
 
 use crate::updater::UpdateError;
@@ -49,8 +48,10 @@ pub struct UpdaterState {
     /// List of patches that successfully booted. We will never rollback past
     /// one of these for this device.
     successful_patches: Vec<usize>,
-    /// Currently selected slot.
-    current_slot_index: Option<usize>,
+    /// Slot that the app is currently booted from.
+    current_boot_slot_index: Option<usize>,
+    /// Slot that will be used for next boot.
+    next_boot_slot_index: Option<usize>,
     /// List of slots.
     slots: Vec<Slot>,
     // Add file path or FD so modifying functions can save it to disk?
@@ -61,7 +62,8 @@ impl UpdaterState {
         Self {
             cache_dir,
             release_version,
-            current_slot_index: None,
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
             latest_downloaded_patch: None,
             failed_patches: Vec::new(),
             successful_patches: Vec::new(),
@@ -143,20 +145,32 @@ impl UpdaterState {
         Ok(())
     }
 
-    /// This is NOT the current booted path (we don't keep that in memory yet).
-    /// This is the patch that is selected in the state.json, which may or may
-    /// not be the one that is booted, but will be the one used next boot.
-    pub fn current_patch(&self) -> Option<PatchInfo> {
-        if self.slots.is_empty() {
+    fn patch_info_at(&self, index: usize) -> Option<PatchInfo> {
+        if index >= self.slots.len() {
             return None;
         }
-        if let Some(slot_index) = self.current_slot_index {
-            if slot_index >= self.slots.len() {
-                return None;
-            }
-            let slot = &self.slots[slot_index];
-            // Otherwise return the version info from the current slot.
-            return Some(slot.to_patch_info());
+        let slot = &self.slots[index];
+        Some(slot.to_patch_info())
+    }
+
+    /// This is the current patch that is running.
+    /// Will be None if:
+    /// - There was no good patch at time of boot.
+    /// - The updater has been initialized but no boot recorded yet.
+    pub fn current_boot_patch(&self) -> Option<PatchInfo> {
+        if let Some(slot_index) = self.current_boot_slot_index {
+            return self.patch_info_at(slot_index)
+        }
+        None
+    }
+
+    /// This is the patch that will be used for the next boot.
+    /// Will be None if:
+    /// - There has never been a patch selected.
+    /// - There was a patch selected but it was later marked as bad.
+    pub fn next_boot_patch(&self) -> Option<PatchInfo> {
+        if let Some(slot_index) = self.next_boot_slot_index {
+            return self.patch_info_at(slot_index)
         }
         None
     }
@@ -196,7 +210,7 @@ impl UpdaterState {
     }
 
     pub fn activate_latest_bootable_patch(&mut self) -> Result<(), UpdateError> {
-        self.set_current_slot(self.latest_bootable_slot());
+        self.set_next_boot_patch_slot(self.latest_bootable_slot());
         self.save().map_err(|_| UpdateError::FailedToSaveState)
     }
 
@@ -205,7 +219,10 @@ impl UpdaterState {
         if self.slots.is_empty() {
             return 0;
         }
-        if let Some(slot_index) = self.current_slot_index {
+        if let Some(slot_index) = self.current_boot_slot_index {
+            // This does not check next_boot_slot_index, we're assuming that
+            // whoever is calling this is OK with replacing the next boot
+            // patch.
             if slot_index == 0 {
                 return 1;
             }
@@ -272,7 +289,7 @@ impl UpdaterState {
                 patch_number: patch.number,
             },
         );
-        self.set_current_slot(Some(slot_index));
+        self.set_next_boot_patch_slot(Some(slot_index));
 
         if (self.latest_downloaded_patch.is_none())
             || (self.latest_downloaded_patch.unwrap() < patch.number)
@@ -287,10 +304,23 @@ impl UpdaterState {
         self.save()?;
         Ok(())
     }
-
-    pub fn set_current_slot(&mut self, maybe_index: Option<usize>) {
-        self.current_slot_index = maybe_index;
+    
+    /// Sets the current_boot slot to the next_boot slot.
+    pub fn activate_current_patch(&mut self) -> Result<(), UpdateError> {
+        if  self.next_boot_slot_index.is_none() {
+            return Err(UpdateError::InvalidState("No patch to activate.".to_owned()));
+        }
+        self.current_boot_slot_index = self.next_boot_slot_index.clone();
+        assert!(self.current_boot_slot_index.is_some());
+        Ok(())
     }
+
+    /// Switches the next boot slot to the given slot or clears it if None.
+    pub fn set_next_boot_patch_slot(&mut self, maybe_index: Option<usize>) {
+        self.next_boot_slot_index = maybe_index;
+    }
+
+    /// Returns highest patch number that has been downloaded for this release.
     pub fn latest_patch_number(&self) -> Option<usize> {
         self.latest_downloaded_patch
     }
@@ -318,15 +348,15 @@ mod tests {
     }
 
     #[test]
-    fn current_patch_does_not_crash() {
+    fn next_boot_patch_does_not_crash() {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut state = test_state(&tmp_dir);
-        assert_eq!(state.current_patch(), None);
-        state.current_slot_index = Some(3);
-        assert_eq!(state.current_patch(), None);
+        assert_eq!(state.next_boot_patch(), None);
+        state.next_boot_slot_index = Some(3);
+        assert_eq!(state.next_boot_patch(), None);
         state.slots.push(super::Slot::default());
         // This used to crash, where index was bad, but slots were not empty.
-        assert_eq!(state.current_patch(), None);
+        assert_eq!(state.next_boot_patch(), None);
     }
 
     #[test]

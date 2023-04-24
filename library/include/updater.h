@@ -21,18 +21,14 @@
  */
 typedef struct AppParameters {
   /**
-   * version_name, required.  Named version of the app, off of which updates
-   * are based.  Can be either a version number or a hash.
+   * release_version, required.  Named version of the app, off of which
+   * updates are based.  Can be either a version number or a hash.
    */
-  const char *version_name;
-  /**
-   * version_code, required.  Integer version of the app, off of which
-   * updates are based.  Monotonically increasing on Android/Play Store.
-   */
-  long version_code;
+  const char *release_version;
   /**
    * Array of paths to the original aot library, required.  For Flutter apps
-   * these are the paths to the bundled libapp.so.  May be used for compression downloaded artifacts.
+   * these are the paths to the bundled libapp.so.  May be used for
+   * compression downloaded artifacts.
    */
   const char *const *original_libapp_paths;
   /**
@@ -61,13 +57,13 @@ void shorebird_init(const struct AppParameters *c_params,
 /**
  * Return the active patch number, or NULL if there is no active patch.
  */
-SHOREBIRD_EXPORT char *shorebird_active_patch_number(void);
+SHOREBIRD_EXPORT char *shorebird_next_boot_patch_number(void);
 
 /**
  * Return the path to the active patch for the app, or NULL if there is no
  * active patch.
  */
-SHOREBIRD_EXPORT char *shorebird_active_path(void);
+SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
 
 /**
  * Free a string returned by the updater library.
@@ -85,11 +81,36 @@ SHOREBIRD_EXPORT bool shorebird_check_for_update(void);
 SHOREBIRD_EXPORT void shorebird_update(void);
 
 /**
+ * Start a thread to download an update if one is available.
+ */
+SHOREBIRD_EXPORT void shorebird_start_update_thread(void);
+
+/**
+ * Tell the updater that we're launching from what it told us was the
+ * next patch to boot from.  This will copy the next_boot patch to be
+ * the current_boot patch.
+ * It is required to call this function before calling
+ * shorebird_report_launch_success or shorebird_report_launch_failure.
+ */
+SHOREBIRD_EXPORT void shorebird_report_launch_start(void);
+
+/**
  * Report that the app failed to launch.  This will cause the updater to
  * attempt to roll back to the previous version if this version has not
  * been launched successfully before.
  */
-SHOREBIRD_EXPORT void shorebird_report_failed_launch(void);
+SHOREBIRD_EXPORT void shorebird_report_launch_failure(void);
+
+/**
+ * Report that the app launched successfully.  This will mark the current
+ * as having been launched successfully.  We don't currently do anything
+ * with this information, but it could be used to record a point at which
+ * we will not roll back from.
+ * This is not currently wired up to be called from the Engine.  It's unclear
+ * where best to connect it.  Expo waits 5 seconds after the app launches
+ * and then marks the launch as successful.  We could do something similar.
+ */
+SHOREBIRD_EXPORT void shorebird_report_launch_success(void);
 
 #ifdef __cplusplus
 } // extern "C"
