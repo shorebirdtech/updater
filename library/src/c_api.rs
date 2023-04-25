@@ -75,7 +75,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> anyhow::Result<updater::
 }
 
 /// Helper function to log errors instead of panicking or returning a result.
-fn log_on_error<F, R>(f: F, context: &str, default: R) -> R
+fn log_on_error<F, R>(f: F, context: &str, error_result: R) -> R
 where
     F: FnOnce() -> Result<R, anyhow::Error>,
 {
@@ -84,25 +84,29 @@ where
         Ok(r) => r,
         Err(e) => {
             error!("Error {}: {:?}", context, e);
-            default
+            error_result
         }
     }
 }
 
 /// Configures updater.  First parameter is a struct containing configuration
 /// from the running app.  Second parameter is a YAML string containing
-/// configuration compiled into the app.
+/// configuration compiled into the app.  Returns true on success and false on
+/// failure. If false is returned, the updater library will not be usable.
 #[no_mangle]
-pub extern "C" fn shorebird_init(c_params: *const AppParameters, c_yaml: *const libc::c_char) {
+pub extern "C" fn shorebird_init(
+    c_params: *const AppParameters,
+    c_yaml: *const libc::c_char,
+) -> bool {
     log_on_error(
         || {
             let config = app_config_from_c(c_params)?;
             let yaml_string = to_rust(c_yaml)?;
-            let result = updater::init(config, &yaml_string)?;
-            Ok(result)
+            updater::init(config, &yaml_string)?;
+            Ok(true)
         },
         "initializing updater",
-        (),
+        false,
     )
 }
 
@@ -208,4 +212,156 @@ pub extern "C" fn shorebird_report_launch_success() {
         "reporting launch success",
         (),
     );
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{
+        network::PatchCheckResponse, testing_set_network_hooks, updater::testing_reset_config,
+    };
+    use tempdir::TempDir;
+
+    use std::{ffi::CString, ptr::null_mut};
+
+    pub fn c_string(string: &str) -> *mut libc::c_char {
+        let c_string = CString::new(string).unwrap().into_raw();
+        c_string
+    }
+
+    pub fn free_c_string(string: *mut libc::c_char) {
+        unsafe {
+            drop(CString::from_raw(string));
+        }
+    }
+
+    pub fn c_array(strings: Vec<String>) -> *mut *mut libc::c_char {
+        let mut c_strings = Vec::new();
+        for string in strings {
+            c_strings.push(c_string(&string));
+        }
+        // Make sure we're not wasting space.
+        c_strings.shrink_to_fit();
+        assert!(c_strings.len() == c_strings.capacity());
+
+        let ptr = c_strings.as_mut_ptr();
+        std::mem::forget(c_strings);
+        ptr
+    }
+
+    pub fn free_c_array(strings: *mut *mut libc::c_char, size: usize) {
+        let v = unsafe { Vec::from_raw_parts(strings, size, size) };
+
+        // Now drop one string at a time.
+        for string in v {
+            free_c_string(string);
+        }
+    }
+
+    pub fn parameters(tmp_dir: &TempDir) -> super::AppParameters {
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        let app_paths_vec = vec!["libapp.so".to_owned()];
+        let app_paths_size = app_paths_vec.len() as i32;
+        let app_paths = c_array(app_paths_vec);
+
+        super::AppParameters {
+            cache_dir: c_string(&cache_dir),
+            release_version: c_string("1.0.0"),
+            original_libapp_paths: app_paths as *const *const libc::c_char,
+            original_libapp_paths_size: app_paths_size,
+        }
+    }
+
+    pub fn free_parameters(params: super::AppParameters) {
+        free_c_string(params.cache_dir as *mut libc::c_char);
+        free_c_string(params.release_version as *mut libc::c_char);
+        free_c_array(
+            params.original_libapp_paths as *mut *mut libc::c_char,
+            params.original_libapp_paths_size as usize,
+        )
+    }
+
+    #[test]
+    fn init_with_nulls() {
+        testing_reset_config();
+        // Should log but not crash.
+        assert_eq!(shorebird_init(std::ptr::null(), std::ptr::null()), false);
+    }
+
+    #[test]
+    fn init_with_null_app_parameters() {
+        testing_reset_config();
+        // Should log but not crash.
+        let c_params = AppParameters {
+            cache_dir: std::ptr::null(),
+            release_version: std::ptr::null(),
+            original_libapp_paths: std::ptr::null(),
+            original_libapp_paths_size: 0,
+        };
+        assert_eq!(shorebird_init(&c_params, std::ptr::null()), false);
+    }
+
+    #[test]
+    fn init_with_bad_yaml() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+        let c_params = parameters(&tmp_dir);
+        let c_yaml = c_string("bad yaml");
+        assert_eq!(shorebird_init(&c_params, c_yaml), false);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+    }
+
+    #[test]
+    fn empty_state_no_update() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+        let c_params = parameters(&tmp_dir);
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: foo");
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        // Number and path are empty (but do not crash) when we have an
+        // empty cache and update has not been called.
+        assert_eq!(shorebird_next_boot_patch_number(), null_mut());
+        assert_eq!(shorebird_next_boot_patch_path(), null_mut());
+
+        // Similarly we can report launches with no patch without crashing.
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+        shorebird_report_launch_failure();
+    }
+
+    #[test]
+    fn patch_success() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+        let c_params = parameters(&tmp_dir);
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: foo");
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        // set up the network hooks to return a patch.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: "#".to_owned(),
+                        download_url: "shorebird.dev".to_owned(),
+                    }),
+                })
+            },
+            |_url| Ok("hello world".to_owned().into_bytes()),
+        );
+        shorebird_update();
+
+        assert!(!shorebird_next_boot_patch_number().is_null());
+        assert!(!shorebird_next_boot_patch_path().is_null());
+    }
 }

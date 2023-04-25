@@ -1,10 +1,17 @@
 // This file handles the global config for the updater library.
 
-use std::sync::Mutex;
+#[cfg(test)]
+use crate::network::{DownloadFileFn, PatchCheckRequestFn};
+#[cfg(test)]
+use std::cell::RefCell;
 
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
+
+#[cfg(not(test))]
 use once_cell::sync::OnceCell;
+#[cfg(not(test))]
+use std::sync::Mutex;
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -13,27 +20,127 @@ const DEFAULT_BASE_URL: &'static str = "https://api.shorebird.dev";
 /// cbindgen:ignore
 const DEFAULT_CHANNEL: &'static str = "stable";
 
+#[cfg(not(test))]
 fn global_config() -> &'static Mutex<ResolvedConfig> {
     static INSTANCE: OnceCell<Mutex<ResolvedConfig>> = OnceCell::new();
     INSTANCE.get_or_init(|| Mutex::new(ResolvedConfig::empty()))
 }
 
+#[cfg(test)]
+pub struct ThreadConfig {
+    resolved_config: ResolvedConfig,
+    pub patch_check_request_fn: Option<PatchCheckRequestFn>,
+    pub download_file_fn: Option<DownloadFileFn>,
+}
+
+#[cfg(test)]
+impl ThreadConfig {
+    fn empty() -> Self {
+        Self {
+            resolved_config: ResolvedConfig::empty(),
+            patch_check_request_fn: None,
+            download_file_fn: None,
+        }
+    }
+}
+
+#[cfg(test)]
+// Used only for testing.  Could be guarded by the test feature flag?
+thread_local!(static THREAD_CONFIG: RefCell<ThreadConfig> = RefCell::new(ThreadConfig::empty()));
+
+#[cfg(test)]
+/// This is used by tests to change how we store config to be per-thread.
+pub fn testing_reset_config() {
+    THREAD_CONFIG.with(|thread_config| {
+        let mut thread_config = thread_config.borrow_mut();
+        *thread_config = ThreadConfig::empty();
+    });
+}
+
+pub fn check_initialized_and_call<F, R>(f: F, config: &ResolvedConfig) -> R
+where
+    F: FnOnce(&ResolvedConfig) -> R,
+{
+    if !config.is_initialized {
+        panic!("Must call shorebird_init() before using the updater.");
+    }
+    return f(&config);
+}
+
+#[cfg(test)]
+pub fn with_thread_config<F, R>(f: F) -> R
+where
+    F: FnOnce(&ThreadConfig) -> R,
+{
+    THREAD_CONFIG.with(|thread_config| {
+        let thread_config = thread_config.borrow();
+        f(&thread_config)
+    })
+}
+
+#[cfg(test)]
+pub fn with_thread_config_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ThreadConfig) -> R,
+{
+    THREAD_CONFIG.with(|thread_config| {
+        let mut thread_config = thread_config.borrow_mut();
+        f(&mut thread_config)
+    })
+}
+
+#[cfg(not(test))]
 pub fn with_config<F, R>(f: F) -> R
 where
     F: FnOnce(&ResolvedConfig) -> R,
 {
+    // expect() here should be OK, it's job is to propagate a panic across
+    // threads if the lock is poisoned.
     let lock = global_config()
         .lock()
         .expect("Failed to acquire updater lock.");
+    check_initialized_and_call(f, &lock)
+}
 
-    if !lock.is_initialized {
-        panic!("Must call shorebird_init() before using the updater.");
-    }
-    return f(&lock);
+#[cfg(test)]
+pub fn with_config<F, R>(f: F) -> R
+where
+    F: FnOnce(&ResolvedConfig) -> R,
+{
+    // Rust unit tests run on multiple threads in parallel, so we use
+    // a per-thread config when unit testing instead of a global config.
+    // The global config code paths are covered by the integration tests.
+    THREAD_CONFIG.with(|thread_config| {
+        let thread_config = thread_config.borrow();
+        check_initialized_and_call(f, &thread_config.resolved_config)
+    })
+}
+
+#[cfg(not(test))]
+pub fn with_config_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ResolvedConfig) -> R,
+{
+    let mut lock = global_config()
+        .lock()
+        .expect("Failed to acquire updater lock.");
+    f(&mut lock)
+}
+
+#[cfg(test)]
+pub fn with_config_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ResolvedConfig) -> R,
+{
+    THREAD_CONFIG.with(|thread_config| {
+        let mut thread_config = thread_config.borrow_mut();
+        f(&mut thread_config.resolved_config)
+    })
 }
 
 #[derive(Debug)]
 pub struct ResolvedConfig {
+    // is_initialized could be Option<ResolvedConfig> with some refactoring.
     is_initialized: bool,
     pub cache_dir: String,
     pub download_dir: String,
@@ -59,37 +166,33 @@ impl ResolvedConfig {
     }
 }
 
-pub fn set_config(config: AppConfig, yaml: YamlConfig) -> anyhow::Result<()> {
-    // expect() here should be OK, it's job is to propagate a panic across
-    // threads if the lock is poisoned.
-    let mut lock = global_config()
-        .lock()
-        .expect("Failed to acquire updater lock.");
+pub fn set_config(app_config: AppConfig, yaml: YamlConfig) -> anyhow::Result<()> {
+    with_config_mut(|config| {
+        // Tests currently call set_config() multiple times, so we can't check
+        // this yet.
+        // anyhow::ensure!(!lock.is_initialized, "Updater config can only be set once.");
 
-    // Tests currently call set_config() multiple times, so we can't check
-    // this yet.
-    // anyhow::ensure!(!lock.is_initialized, "Updater config can only be set once.");
-
-    lock.base_url = yaml
-        .base_url
-        .as_deref()
-        .unwrap_or(DEFAULT_BASE_URL)
-        .to_owned();
-    lock.channel = yaml
-        .channel
-        .as_deref()
-        .unwrap_or(DEFAULT_CHANNEL)
-        .to_owned();
-    lock.cache_dir = config.cache_dir.to_string();
-    let mut cache_path = std::path::PathBuf::from(config.cache_dir);
-    cache_path.push("downloads");
-    lock.download_dir = cache_path.to_str().unwrap().to_string();
-    lock.app_id = yaml.app_id.to_string();
-    lock.release_version = config.release_version.to_string();
-    lock.original_libapp_paths = config.original_libapp_paths;
-    lock.is_initialized = true;
-    info!("Updater configured with: {:?}", lock);
-    Ok(())
+        config.base_url = yaml
+            .base_url
+            .as_deref()
+            .unwrap_or(DEFAULT_BASE_URL)
+            .to_owned();
+        config.channel = yaml
+            .channel
+            .as_deref()
+            .unwrap_or(DEFAULT_CHANNEL)
+            .to_owned();
+        config.cache_dir = app_config.cache_dir.to_string();
+        let mut cache_path = std::path::PathBuf::from(app_config.cache_dir);
+        cache_path.push("downloads");
+        config.download_dir = cache_path.to_str().unwrap().to_string();
+        config.app_id = yaml.app_id.to_string();
+        config.release_version = app_config.release_version.to_string();
+        config.original_libapp_paths = app_config.original_libapp_paths;
+        config.is_initialized = true;
+        info!("Updater configured with: {:?}", config);
+        Ok(())
+    })
 }
 
 // Arch/Platform names need to be kept in sync with the shorebird cli.

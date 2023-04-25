@@ -48,10 +48,11 @@ extern "C" {
 /**
  * Configures updater.  First parameter is a struct containing configuration
  * from the running app.  Second parameter is a YAML string containing
- * configuration compiled into the app.
+ * configuration compiled into the app.  Returns true on success and false on
+ * failure. If false is returned, the updater library will not be usable.
  */
 SHOREBIRD_EXPORT
-void shorebird_init(const struct AppParameters *c_params,
+bool shorebird_init(const struct AppParameters *c_params,
                     const char *c_yaml);
 
 /**

@@ -10,8 +10,68 @@ use std::string::ToString;
 use crate::cache::UpdaterState;
 use crate::config::{current_arch, current_platform, ResolvedConfig};
 
+#[cfg(test)]
+use crate::config::{with_thread_config, with_thread_config_mut};
+
 fn patches_check_url(base_url: &str) -> String {
     return format!("{}/api/v1/patches/check", base_url);
+}
+
+#[cfg(test)]
+pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
+
+#[cfg(not(test))]
+fn patch_check_request_hook(
+    url: &str,
+    request: PatchCheckRequest,
+) -> anyhow::Result<PatchCheckResponse> {
+    let client = reqwest::blocking::Client::new();
+    let response = client.post(url).json(&request).send()?.json()?;
+    Ok(response)
+}
+
+#[cfg(test)]
+fn patch_check_request_hook(
+    url: &str,
+    request: PatchCheckRequest,
+) -> anyhow::Result<PatchCheckResponse> {
+    with_thread_config(|config| {
+        let patch_check_request_fn = config
+            .patch_check_request_fn
+            .unwrap_or(patch_check_request_hook);
+        patch_check_request_fn(url, request)
+    })
+}
+
+#[cfg(test)]
+pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
+
+#[cfg(not(test))]
+// Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
+fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
+    let client = reqwest::blocking::Client::new();
+    let response = client.get(url).send()?;
+    let bytes = response.bytes()?;
+    Ok(bytes.to_vec())
+}
+
+#[cfg(test)]
+fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
+    with_thread_config(|config| {
+        let download_file_fn = config.download_file_fn.unwrap_or(download_file_hook);
+        download_file_fn(url)
+    })
+}
+
+#[cfg(test)]
+pub fn testing_set_network_hooks(
+    patch_check_request_fn: PatchCheckRequestFn,
+    download_file_fn: DownloadFileFn,
+) {
+    with_thread_config_mut(|thread_config| {
+        thread_config.patch_check_request_fn = Some(patch_check_request_fn);
+        thread_config.download_file_fn = Some(download_file_fn);
+    });
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,8 +119,7 @@ pub fn send_patch_check_request(
     let latest_patch_number = state.latest_patch_number();
 
     // Send the request to the server.
-    let client = reqwest::blocking::Client::new();
-    let req = PatchCheckRequest {
+    let request = PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
         release_version: config.release_version.clone(),
@@ -68,12 +127,9 @@ pub fn send_patch_check_request(
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     };
-    info!("Sending patch check request: {:?}", req);
-    let response = client
-        .post(&patches_check_url(&config.base_url))
-        .json(&req)
-        .send()?
-        .json()?;
+    info!("Sending patch check request: {:?}", request);
+    let url = &patches_check_url(&config.base_url);
+    let response = patch_check_request_hook(url, request)?;
 
     info!("Patch check response: {:?}", response);
     return Ok(response);
@@ -82,10 +138,7 @@ pub fn send_patch_check_request(
 pub fn download_to_path(url: &str, path: &Path) -> anyhow::Result<()> {
     info!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
-    let client = reqwest::blocking::Client::new();
-    let response = client.get(url).send()?;
-    let mut bytes = response.bytes()?;
-
+    let mut bytes = download_file_hook(url)?;
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
         info!("Creating download directory: {:?}", parent);

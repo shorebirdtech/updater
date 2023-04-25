@@ -11,6 +11,14 @@ use std::fs;
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+// Expose testing_reset_config for integration tests.
+pub use crate::config::testing_reset_config;
+#[cfg(test)]
+pub use crate::network::{
+    testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
+};
+
 use anyhow::Context;
 
 pub enum UpdateStatus {
@@ -473,7 +481,10 @@ mod tests {
     use std::fs;
     use tempdir::TempDir;
 
+    use crate::config::testing_reset_config;
+
     fn init_for_testing(tmp_dir: &TempDir) {
+        testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         crate::init(
             crate::AppConfig {
@@ -554,6 +565,44 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "Invalid hash string from server."
+        );
+    }
+
+    #[test]
+    fn init_missing_yaml() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        assert_eq!(
+            crate::init(
+                crate::AppConfig {
+                    cache_dir: cache_dir.clone(),
+                    release_version: "1.0.0+1".to_string(),
+                    original_libapp_paths: vec!["original_libapp_path".to_string()],
+                },
+                "",
+            ),
+            Err(crate::UpdateError::InvalidArgument(
+                "yaml".to_string(),
+                "missing field `app_id`".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn report_launch_result_with_no_current_patch() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+        assert_eq!(
+            crate::report_launch_failure(),
+            Err(crate::UpdateError::InvalidState(
+                "No current patch".to_string()
+            ))
+        );
+        assert_eq!(
+            crate::report_launch_success(),
+            Err(crate::UpdateError::InvalidState(
+                "No current patch".to_string()
+            ))
         );
     }
 }
