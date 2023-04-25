@@ -457,7 +457,7 @@ pub fn update() -> UpdateStatus {
 }
 
 /// This does not return status.  The only output is the change to the saved
-/// cache.  The Engine calls this during boot and it will check for an update
+/// cache. The Engine calls this during boot and it will check for an update
 /// and install it if available.
 pub fn start_update_thread() {
     // This holds the lock on the config for the entire duration of the update
