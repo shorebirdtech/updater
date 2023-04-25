@@ -30,8 +30,14 @@ pub struct AppParameters {
     pub cache_dir: *const libc::c_char,
 }
 
+/// Converts a C string to a Rust string, does not free the C string.
 fn to_rust(c_string: *const libc::c_char) -> String {
     unsafe { CStr::from_ptr(c_string).to_str().unwrap() }.to_string()
+}
+
+/// Converts a Rust string to a C string, caller must free the C string.
+fn allocate_c_string(rust_string: &str) -> *mut c_char {
+    CString::new(rust_string).unwrap().into_raw()
 }
 
 fn to_rust_vector(c_array: *const *const libc::c_char, size: libc::c_int) -> Vec<String> {
@@ -78,9 +84,8 @@ pub extern "C" fn shorebird_init(c_params: *const AppParameters, c_yaml: *const 
 pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
     let patch = updater::next_boot_patch();
     match patch {
-        Some(v) => {
-            let c_patch = CString::new(v.number.to_string()).unwrap();
-            c_patch.into_raw()
+        Some(p) => {
+            allocate_c_string(&p.number.to_string())
         }
         None => std::ptr::null_mut(),
     }
@@ -90,11 +95,10 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
 /// active patch.
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
-    let version = updater::next_boot_patch();
-    match version {
-        Some(v) => {
-            let c_version = CString::new(v.path).unwrap();
-            c_version.into_raw()
+    let patch = updater::next_boot_patch();
+    match patch {
+        Some(p) => {
+            allocate_c_string(&p.path)
         }
         None => std::ptr::null_mut(),
     }
