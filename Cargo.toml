@@ -1,2 +1,2 @@
 [workspace]
-members = ["cli", "library", "patch"]
+members = ["library", "patch"]

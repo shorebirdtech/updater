@@ -21,8 +21,6 @@ class AppParameters extends ffi.Struct {
   // ignore: non_constant_identifier_names
   external int original_libapp_paths_size;
   // ignore: non_constant_identifier_names
-  external ffi.Pointer<Utf8> vm_path;
-  // ignore: non_constant_identifier_names
   external ffi.Pointer<Utf8> cache_dir;
 
   static ffi.Pointer<AppParameters> allocate({
@@ -48,7 +46,6 @@ class AppParameters extends ffi.Struct {
     for (var i = 0; i < libappPaths.length; i++) {
       config.ref.original_libapp_paths[i] = libappPaths[i].toNativeUtf8();
     }
-    config.ref.vm_path = libflutterPath.toNativeUtf8();
     config.ref.cache_dir = cacheDir.toNativeUtf8();
     return config;
   }
@@ -63,7 +60,6 @@ class AppParameters extends ffi.Struct {
       calloc.free(config.ref.original_libapp_paths[i]);
     }
     calloc.free(config.ref.original_libapp_paths);
-    calloc.free(config.ref.vm_path);
     calloc.free(config.ref.cache_dir);
     calloc.free(config);
   }

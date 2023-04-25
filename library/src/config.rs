@@ -41,7 +41,6 @@ pub struct ResolvedConfig {
     pub app_id: String,
     pub release_version: String,
     pub original_libapp_paths: Vec<String>,
-    pub vm_path: String,
     pub base_url: String,
 }
 
@@ -55,7 +54,6 @@ impl ResolvedConfig {
             app_id: String::new(),
             release_version: String::new(),
             original_libapp_paths: Vec::new(),
-            vm_path: String::new(),
             base_url: String::new(),
         }
     }

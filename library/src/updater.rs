@@ -11,7 +11,7 @@ use std::fs;
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -381,40 +381,60 @@ where
     Ok(())
 }
 
-/// Reads the current patch from the cache and returns it.
-pub fn active_patch() -> Option<PatchInfo> {
+/// The patch which will be run on next boot (which may still be the same
+/// as the current boot).
+/// This may be changed any time update() or start_update_thread() are called.
+pub fn next_boot_patch() -> Option<PatchInfo> {
     return with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return state.current_patch();
+        return state.next_boot_patch();
     });
+}
+
+/// The patch which is currently booted.  This is None until
+/// report_launch_start() is called at which point it is copied from
+/// next_boot_patch.
+pub fn current_boot_patch() -> Option<PatchInfo> {
+    return with_config(|config| {
+        let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+        return state.current_boot_patch();
+    });
+}
+
+pub fn report_launch_start() -> anyhow::Result<()> {
+    with_config(|config| {
+        let mut state =
+            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+        // Validate that we have an installed patch.
+        // Make that patch the "booted" patch.
+        state.activate_current_patch()?;
+        state.save()
+    })
 }
 
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
-pub fn report_failed_launch() -> Result<(), UpdateError> {
+pub fn report_launch_failure() -> Result<(), UpdateError> {
     info!("Reporting failed launch.");
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-        // FIXME: We need to separate out the concept of "running patch" and
-        // "next patch to activate".  Currently these are smooshed which will
-        // make async updates impossible to implement.
         let patch = state
-            .current_patch()
+            .current_boot_patch()
             .ok_or(UpdateError::InvalidState("No current patch".to_string()))?;
         state.mark_patch_as_bad(&patch);
         state.activate_latest_bootable_patch()
     })
 }
 
-pub fn report_successful_launch() -> Result<(), UpdateError> {
+pub fn report_launch_success() -> Result<(), UpdateError> {
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
         let patch = state
-            .current_patch()
+            .current_boot_patch()
             .ok_or(UpdateError::InvalidState("No current patch".to_string()))?;
         state.mark_patch_as_good(&patch);
         state.save().map_err(|_| UpdateError::FailedToSaveState)
@@ -433,6 +453,19 @@ pub fn update() -> UpdateStatus {
             }
             Ok(status) => status,
         }
+    });
+}
+
+/// This does not return status.  The only output is the change to the saved
+/// cache. The Engine calls this during boot and it will check for an update
+/// and install it if available.
+pub fn start_update_thread() {
+    // This holds the lock on the config for the entire duration of the update
+    // call which is wrong. We should be able to release the lock during the
+    // network requests.
+    std::thread::spawn(move || {
+        let status = update();
+        info!("Update thread finished with status: {}", status);
     });
 }
 
@@ -479,13 +512,13 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir);
         assert_eq!(
-            crate::report_failed_launch(),
+            crate::report_launch_failure(),
             Err(crate::UpdateError::InvalidState(
                 "No current patch".to_string()
             ))
         );
         assert_eq!(
-            crate::report_successful_launch(),
+            crate::report_launch_success(),
             Err(crate::UpdateError::InvalidState(
                 "No current patch".to_string()
             ))
@@ -518,15 +551,16 @@ mod tests {
                 .expect("move failed");
             state.save().expect("save failed");
         });
-        assert!(crate::active_patch().is_some());
+        assert!(crate::next_boot_patch().is_some());
         // pretend we booted from it
-        crate::report_successful_launch().unwrap();
-        assert!(crate::active_patch().is_some());
+        crate::report_launch_start().unwrap();
+        crate::report_launch_success().unwrap();
+        assert!(crate::next_boot_patch().is_some());
         // mark it bad.
-        crate::report_failed_launch().unwrap();
+        crate::report_launch_failure().unwrap();
         // Technically might need to "reload"
         // ask for current patch (should get none).
-        assert!(crate::active_patch().is_none());
+        assert!(crate::next_boot_patch().is_none());
     }
 
     #[test]
