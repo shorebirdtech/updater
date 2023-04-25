@@ -1,0 +1,19 @@
+{
+    "cSpell.words": [
+        "aarch",
+        "armeabi",
+        "bipatch",
+        "bootable",
+        "canonicalize",
+        "cbindgen",
+        "comde",
+        "Decompressor",
+        "hasher",
+        "libapp",
+        "libc",
+        "repr",
+        "reqwest",
+        "tempdir",
+        "vmcode"
+    ]
+}
