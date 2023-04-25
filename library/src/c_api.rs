@@ -169,7 +169,6 @@ pub extern "C" fn shorebird_start_update_thread() {
 /// shorebird_report_launch_success or shorebird_report_launch_failure.
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_start() {
-    // Use log_on_error
     log_on_error(
         || updater::report_launch_start(),
         "reporting launch start",
