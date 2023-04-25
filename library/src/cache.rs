@@ -159,7 +159,7 @@ impl UpdaterState {
     /// - The updater has been initialized but no boot recorded yet.
     pub fn current_boot_patch(&self) -> Option<PatchInfo> {
         if let Some(slot_index) = self.current_boot_slot_index {
-            return self.patch_info_at(slot_index)
+            return self.patch_info_at(slot_index);
         }
         None
     }
@@ -170,7 +170,7 @@ impl UpdaterState {
     /// - There was a patch selected but it was later marked as bad.
     pub fn next_boot_patch(&self) -> Option<PatchInfo> {
         if let Some(slot_index) = self.next_boot_slot_index {
-            return self.patch_info_at(slot_index)
+            return self.patch_info_at(slot_index);
         }
         None
     }
@@ -304,11 +304,13 @@ impl UpdaterState {
         self.save()?;
         Ok(())
     }
-    
+
     /// Sets the current_boot slot to the next_boot slot.
     pub fn activate_current_patch(&mut self) -> Result<(), UpdateError> {
-        if  self.next_boot_slot_index.is_none() {
-            return Err(UpdateError::InvalidState("No patch to activate.".to_owned()));
+        if self.next_boot_slot_index.is_none() {
+            return Err(UpdateError::InvalidState(
+                "No patch to activate.".to_owned(),
+            ));
         }
         self.current_boot_slot_index = self.next_boot_slot_index.clone();
         assert!(self.current_boot_slot_index.is_some());

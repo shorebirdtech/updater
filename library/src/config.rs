@@ -59,12 +59,17 @@ impl ResolvedConfig {
     }
 }
 
-pub fn set_config(config: AppConfig, yaml: YamlConfig) {
-    // If there is no base_url, use the default.
-    // If there is no channel, use the default.
+pub fn set_config(config: AppConfig, yaml: YamlConfig) -> anyhow::Result<()> {
+    // expect() here should be OK, it's job is to propagate a panic across
+    // threads if the lock is poisoned.
     let mut lock = global_config()
         .lock()
         .expect("Failed to acquire updater lock.");
+
+    // Tests currently call set_config() multiple times, so we can't check
+    // this yet.
+    // anyhow::ensure!(!lock.is_initialized, "Updater config can only be set once.");
+
     lock.base_url = yaml
         .base_url
         .as_deref()
@@ -84,6 +89,7 @@ pub fn set_config(config: AppConfig, yaml: YamlConfig) {
     lock.original_libapp_paths = config.original_libapp_paths;
     lock.is_initialized = true;
     info!("Updater configured with: {:?}", lock);
+    Ok(())
 }
 
 // Arch/Platform names need to be kept in sync with the shorebird cli.
