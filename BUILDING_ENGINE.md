@@ -20,29 +20,25 @@ rustup.  See https://rustup.rs/ for details.
 
 ## Building for Android
 
-Rust Android tooling *mostly* works out of the box, but needs a bunch
+Rust Android tooling *mostly* works out of the box, but needs a little
 of configuration to get it to work.
 
 The best way I found was to install:
 https://github.com/bbqsrc/cargo-ndk
 
 ```
-rustup install beta
-cargo +beta install cargo-ndk
-rustup +beta target add \
+cargo install cargo-ndk
+rustup target add \
     aarch64-linux-android \
     armv7-linux-androideabi \
     x86_64-linux-android \
     i686-linux-android
 ```
 
-If others know of better instructions, please send us a PR!
-
-Once you have cargo-ndk installed, you can build the updater library with the
-beta toolchain you installed and the ndk command:
+Once you have cargo-ndk installed, you can build the updater library:
 
 ```
-cargo +beta ndk --target aarch64-linux-android build --release
+cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi build --release
 ```
 
 ### Setting up to build the Flutter Engine:
@@ -75,21 +71,14 @@ git checkout codepush
 
 And then `gclient sync` again.
 
-### Symlink in the Rust binaries
-
-Currently you need to symlink in the results of the rust build into the engine/src directory:
-
-```
-cd flutter
-mkdir updater
-cd updater
-ln -s $SRC/shorebird/updater/library/include/updater.h
-mkdir android_aarch64
-cd android_aarch64
-ln -s $SRC/shorebird/updater/target/aarch64-linux-android/release/libupdater.a
-```
+The `updater` source should now be in `src/third_party/updater`.
 
 ## Building Flutter Engine
+
+We have scripts to perform the builds for all Android targets in:
+https://github.com/shorebirdtech/build_engine/blob/main/build_engine/build.sh
+
+But you can also do so manually.  Here is building for Android arm64:
 
 ```
 ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release
@@ -100,23 +89,17 @@ The linking step for android_release_arm64 is _much_ longer than other platforms
 we may need to use unopt or debug builds for faster iteration.
 
 I also add `&& say "done"` to the end of the ninja command so I know when it's
-done (because it takes minutes).
+done (because it takes minutes).  Often I'm editing/buiding from within the updater
+directory so my command is:
 
+```
+cargo ndk --target aarch64-linux-android build --release && ninja -C ../../out/android_release_arm64 && say "done"
+```
 
 ## Running with your local engine
 
-The `shorebird` tools don't yet support local engines, so you need to use
-`flutter run` directly.
-https://github.com/shorebirdtech/shorebird/issues/42
+`shorebird` commands support `--local-engine-src-path` and `--local-engine` just like `flutter` commands do.
 
-Here is a script:
-```
-#! /bin/sh -x
+When testing on my machine I use something like:
 
-LOCAL_ENGINE_SRC_PATH=/path/to/local/flutter/engine
-LOCAL_ENGINE=android_release_arm64
-flutter build apk --release --no-tree-shake-icons --local-engine-src-path $LOCAL_ENGINE_SRC_PATH --local-engine=$LOCAL_ENGINE
- ```
-
-Only need to build with your custom engine once.  Once the app is installed on
-the phone then you can `shorebird publish` to it as normal.
+```shorebird --local-engine-src-path=$HOME/Documents/GitHub/engine --local-engine=android_release_arm64 run```
