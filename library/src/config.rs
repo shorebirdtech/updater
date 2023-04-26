@@ -49,7 +49,6 @@ impl ThreadConfig {
 }
 
 #[cfg(test)]
-// Used only for testing.  Could be guarded by the test feature flag?
 thread_local!(static THREAD_CONFIG: RefCell<ThreadConfig> = RefCell::new(ThreadConfig::empty()));
 
 #[cfg(test)]
