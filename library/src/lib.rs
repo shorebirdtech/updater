@@ -16,6 +16,7 @@ mod yaml;
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;
 
+#[cfg(not(test))]
 // Exposes error!(), info!(), etc macros.
 #[macro_use]
 extern crate log;

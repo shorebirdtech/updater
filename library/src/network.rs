@@ -10,6 +10,10 @@ use std::string::ToString;
 use crate::cache::UpdaterState;
 use crate::config::{current_arch, current_platform, ResolvedConfig};
 
+// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+#[cfg(test)]
+use std::println as info; // Workaround to use println! for logs.
+
 #[cfg(test)]
 use crate::config::{with_thread_config, with_thread_config_mut};
 
@@ -64,6 +68,7 @@ fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 #[cfg(test)]
+/// Unit tests can call this to mock out the network calls.
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_file_fn: DownloadFileFn,

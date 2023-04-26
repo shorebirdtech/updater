@@ -11,6 +11,10 @@ use std::fs;
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
+// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+#[cfg(test)]
+use std::{println as info, println as warn, println as error, println as debug}; // Workaround to use println! for logs.
+
 #[cfg(test)]
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
@@ -176,7 +180,8 @@ fn android_arch_names() -> &'static ArchNames {
     return &ARCH;
 }
 
-fn get_relative_lib_path(lib_name: &str) -> PathBuf {
+/// This is public only for testing.
+pub(crate) fn get_relative_lib_path(lib_name: &str) -> PathBuf {
     PathBuf::from("lib")
         .join(android_arch_names().lib_dir)
         .join(lib_name)
@@ -509,7 +514,6 @@ mod tests {
         with_config(|config| {
             let download_dir = std::path::PathBuf::from(&config.download_dir);
             let artifact_path = download_dir.join("1");
-            info!("artifact_path: {:?}", artifact_path);
             fs::create_dir_all(&download_dir).unwrap();
             fs::write(&artifact_path, "hello").unwrap();
 

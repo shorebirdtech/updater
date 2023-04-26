@@ -13,6 +13,10 @@ use once_cell::sync::OnceCell;
 #[cfg(not(test))]
 use std::sync::Mutex;
 
+// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+#[cfg(test)]
+use std::println as info; // Workaround to use println! for logs.
+
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
 /// cbindgen:ignore
@@ -49,7 +53,7 @@ impl ThreadConfig {
 thread_local!(static THREAD_CONFIG: RefCell<ThreadConfig> = RefCell::new(ThreadConfig::empty()));
 
 #[cfg(test)]
-/// This is used by tests to change how we store config to be per-thread.
+/// Unit tests should call this to reset the config between tests.
 pub fn testing_reset_config() {
     THREAD_CONFIG.with(|thread_config| {
         let mut thread_config = thread_config.borrow_mut();

@@ -13,3 +13,12 @@ pipe = "0.4.0"
 # comde is a wrapper around several compression libraries.
 # We only use zstd and could depend on it directly instead.
 comde = {version = "0.2.3", default-features = false, features = ["zstandard"]}
+
+# Only used by string_patch tool:
+# I don't know how to make them per-target dependencies.
+
+# For computing hashes of patch files for validation.
+# Only used by the string_patch tool for now.
+sha2 = "0.10.6"
+# For encoding hashes for Patch network responses.
+hex = "0.4.3"
