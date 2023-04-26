@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::updater::UpdateError;
 
+// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+#[cfg(test)]
+use std::{println as info, println as warn}; // Workaround to use println! for logs.
+
 #[derive(PartialEq, Debug)]
 pub struct PatchInfo {
     pub path: String,

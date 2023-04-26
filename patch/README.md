@@ -11,3 +11,26 @@ underlying compression without affecting the `shorebird` command line callers.
 ## Usage
 
     patch <old> <new> <patch>
+
+
+## Generating test expectations
+
+The string_patch target can be used to generate test expectations for testing
+the updater.  It takes two strings as arguments and prints the necessary
+variables you will need in your test to stdout.
+
+```
+% cargo run --bin=string_patch "foo" "bar"
+Base: foo
+New: bar
+Patch: [40, 181, 47, 253, 0, 128, 113, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 0, 3, 98, 97, 114, 0]
+Hash (new): fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9
+```
+
+Which will translate into:
+```rust
+let base = "foo";
+let new = "bar";
+let patch: Vec<u8> = vec![40, 181, 47, 253, 0, 128, 113, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 0, 3, 98, 97, 114, 0];
+let hash = "fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9";
+```

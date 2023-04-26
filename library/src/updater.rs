@@ -11,6 +11,18 @@ use std::fs;
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
+// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+#[cfg(test)]
+use std::{println as info, println as warn, println as error, println as debug}; // Workaround to use println! for logs.
+
+#[cfg(test)]
+// Expose testing_reset_config for integration tests.
+pub use crate::config::testing_reset_config;
+#[cfg(test)]
+pub use crate::network::{
+    testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
+};
+
 use anyhow::Context;
 
 pub enum UpdateStatus {
@@ -168,7 +180,8 @@ fn android_arch_names() -> &'static ArchNames {
     return &ARCH;
 }
 
-fn get_relative_lib_path(lib_name: &str) -> PathBuf {
+/// This is public only for testing.
+pub(crate) fn get_relative_lib_path(lib_name: &str) -> PathBuf {
     PathBuf::from("lib")
         .join(android_arch_names().lib_dir)
         .join(lib_name)
@@ -473,7 +486,10 @@ mod tests {
     use std::fs;
     use tempdir::TempDir;
 
+    use crate::config::testing_reset_config;
+
     fn init_for_testing(tmp_dir: &TempDir) {
+        testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         crate::init(
             crate::AppConfig {
@@ -498,7 +514,6 @@ mod tests {
         with_config(|config| {
             let download_dir = std::path::PathBuf::from(&config.download_dir);
             let artifact_path = download_dir.join("1");
-            info!("artifact_path: {:?}", artifact_path);
             fs::create_dir_all(&download_dir).unwrap();
             fs::write(&artifact_path, "hello").unwrap();
 
@@ -554,6 +569,44 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "Invalid hash string from server."
+        );
+    }
+
+    #[test]
+    fn init_missing_yaml() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        assert_eq!(
+            crate::init(
+                crate::AppConfig {
+                    cache_dir: cache_dir.clone(),
+                    release_version: "1.0.0+1".to_string(),
+                    original_libapp_paths: vec!["original_libapp_path".to_string()],
+                },
+                "",
+            ),
+            Err(crate::UpdateError::InvalidArgument(
+                "yaml".to_string(),
+                "missing field `app_id`".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn report_launch_result_with_no_current_patch() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+        assert_eq!(
+            crate::report_launch_failure(),
+            Err(crate::UpdateError::InvalidState(
+                "No current patch".to_string()
+            ))
+        );
+        assert_eq!(
+            crate::report_launch_success(),
+            Err(crate::UpdateError::InvalidState(
+                "No current patch".to_string()
+            ))
         );
     }
 }
