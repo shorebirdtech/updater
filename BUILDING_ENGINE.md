@@ -97,9 +97,7 @@ cd src && \
   say "done"
 ```
 
-{% note %}
-
-> TODO:
+> **TODO**
 > 
 > The "Build the engine for Android arm64" step will eventually be condensed to:
 > ```bash
@@ -109,16 +107,11 @@ cd src && \
 > ```
 > See https://github.com/shorebirdtech/shorebird/issues/463.
 
-{% endnote %}
-
-{% note %}
-
-In both of the examples above, `&& say "done"` is appended to the end of the
-long-running ninja command to alert me when it has finished. The `say` command
-is only available on macOS.
-
-{% endnote %}
-
+> **📝 NOTE**
+> 
+> In both of the examples above, `&& say "done"` is appended to the end of the
+> long-running ninja command to alert me when it has finished. The `say` command
+> is only available on macOS.
 
 ## Running with your local engine
 
