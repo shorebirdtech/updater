@@ -101,8 +101,7 @@ cd src && \
 
 > TODO:
 > 
-> The "Build the engine for Android arm64" step should/will eventually be
-> condensed to:
+> The "Build the engine for Android arm64" step will eventually be condensed to:
 > ```bash
 > cd src && \
 >   ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
