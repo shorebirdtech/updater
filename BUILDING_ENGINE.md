@@ -46,33 +46,15 @@ cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi build 
 These steps assume that you have [installed the dependencies for building the Flutter engine](https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment#getting-dependencies).
 
 - Outside of any existing git repository, create an empty directory named `engine`.
-- Paste the following text into a file named `.gclient`:
-    ```python
-    solutions = [
-      {
-        "managed": False,
-        "name": "src/flutter",
-        "url": "git@github.com:shorebirdtech/engine.git",
-        "custom_deps": {},
-        "deps_file": "DEPS",
-        "safesync_url": "",
-      },
-    ]
-    ```
+- Paste the context of https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient into a file named `.gclient`.
 - Run `gclient sync` to download the Flutter engine source code (this will take a while).
-- Run `cd src/flutter` to change into the Flutter engine source directory.
-- Run `git checkout codepush` to switch to the `codepush` branch.
-- Run `gclient sync` again.
 
-The above, as one set of commands:
+Or, as one set of commands:
 
 ```bash
 mkdir engine && \
   cd engine && \
   curl https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient > .gclient && \
-  gclient sync && \
-  cd src/flutter && \
-  git checkout codepush && \
   gclient sync
 ```
 
@@ -93,32 +75,60 @@ The script to build all Android targets is at
 https://github.com/shorebirdtech/build_engine/blob/main/build_engine/build.sh
 
 ### Build individual Android targets
-You can also build Android targets manually. E.g., this builds Android arm64:
+You can also build Android targets manually.
+
+Build `host_release`:
 
 ```bash
-./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release
-ninja -C out/android_release_arm64
+cd src && \
+  ./flutter/tools/gn --runtime-mode=release && \
+  ninja -C out/host_release && \
+  say "done"
 ```
 
-The linking step for android_release_arm64 is _much_ longer than other
-platforms - we may need to use unopt or debug builds for faster iteration.
-
-I also add `&& say "done"` to the end of the ninja command so I know when it's
-done (because it takes minutes). Often I'm editing/building from within the
-updater directory so my command is:
+Build the engine for Android arm64:
 
 ```bash
-cargo ndk --target aarch64-linux-android build --release && \
+cd src && \
+  ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
+  cd third_party/updater && \
+  cargo ndk --target aarch64-linux-android build --release && \
   ninja -C ../../out/android_release_arm64 && \
   say "done"
 ```
 
+{% note %}
+
+> TODO:
+> 
+> The "Build the engine for Android arm64" step should/will eventually be
+> condensed to:
+> ```bash
+> cd src && \
+>   ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
+>   ninja -C out/android_release_arm64
+> ```
+> See https://github.com/shorebirdtech/shorebird/issues/463.
+
+{% endnote %}
+
+{% note %}
+
+In both of the examples above, `&& say "done"` is appended to the end of the
+long-running ninja command to alert me when it has finished. The `say` command
+is only available on macOS.
+
+{% endnote %}
+
+
 ## Running with your local engine
 
-`shorebird` commands support `--local-engine-src-path` and `--local-engine` just like `flutter` commands do.
+`shorebird` commands support `--local-engine-src-path` and `--local-engine`,
+just like `flutter` commands do.
 
-When testing on my machine I use something like:
+When testing on my machine, I use something like:
 
 ```bash
-shorebird --local-engine-src-path=$HOME/Documents/GitHub/engine --local-engine=android_release_arm64 run
+$PATH_TO_ENGINE_SRC="$HOME/Documents/GitHub/engine/src"
+shorebird --local-engine-src-path=$PATH_TO_ENGINE_SRC --local-engine=android_release_arm64 run
 ```
