@@ -43,7 +43,8 @@ cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi build 
 
 ### Setting up to build the Flutter Engine:
 
-- [Install the dependencies for building the Flutter engine](https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment#getting-dependencies)
+These steps assume that you have [installed the dependencies for building the Flutter engine](https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment#getting-dependencies).
+
 - Outside of any existing git repository, create an empty directory named `engine`.
 - Paste the following text into a file named `.gclient`:
     ```python
@@ -77,11 +78,7 @@ mkdir engine && \
 
 The `updater` source should now be in `src/third_party/updater`.
 
-TEST .gclient embed:
-
-https://github.com/shorebirdtech/build_engine/blob/main/build_engine/dot_gclient
-
-TODO: do we need to link to these?
+References:
 - https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment
 - https://github.com/flutter/flutter/wiki/Compiling-the-engine
 
