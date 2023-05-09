@@ -26,7 +26,7 @@ of configuration to get it to work.
 The best way I found was to install:
 https://github.com/bbqsrc/cargo-ndk
 
-```
+```bash
 cargo install cargo-ndk
 rustup target add \
     aarch64-linux-android \
@@ -37,69 +37,90 @@ rustup target add \
 
 Once you have cargo-ndk installed, you can build the updater library:
 
-```
+```bash
 cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi build --release
 ```
 
 ### Setting up to build the Flutter Engine:
 
-https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment
-https://github.com/flutter/flutter/wiki/Compiling-the-engine
+These steps assume that you have [installed the dependencies for building the Flutter engine](https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment#getting-dependencies).
 
-The .gclient file I recommend is:
-```
-solutions = [
-  {
-    "managed": False,
-    "name": "src/flutter",
-    "url": "git@github.com:shorebirdtech/engine.git",
-    "custom_deps": {},
-    "deps_file": "DEPS",
-    "safesync_url": "",
-  },
-]
-```
-(We should probably just check that in somewhere.)
+- Outside of any existing git repository, create an empty directory named `engine`.
+- Paste the context of https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient into a file named `.gclient`.
+- Run `gclient sync` to download the Flutter engine source code (this will take a while).
 
-Once you have that set up and `gclient sync` has run, you will need
-to switch your flutter checkout to the `codepush` branch:
+Or, as one set of commands:
 
+```bash
+mkdir engine && \
+  cd engine && \
+  curl https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient > .gclient && \
+  gclient sync
 ```
-cd src/flutter
-git checkout codepush
-```
-
-And then `gclient sync` again.
 
 The `updater` source should now be in `src/third_party/updater`.
 
+References:
+- https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment
+- https://github.com/flutter/flutter/wiki/Compiling-the-engine
+
 ## Building Flutter Engine
 
-We have scripts to perform the builds for all Android targets in:
+You can either build the full set of Android targets using a script (that
+should/will eventually be a Docker container) or you can build targets
+individually.
+
+### Build all Android targets for release
+The script to build all Android targets is at
 https://github.com/shorebirdtech/build_engine/blob/main/build_engine/build.sh
 
-But you can also do so manually.  Here is building for Android arm64:
+### Build individual Android targets
+You can also build Android targets manually.
 
-```
-./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release
-ninja -C out/android_release_arm64
+Build `host_release`:
+
+```bash
+cd src && \
+  ./flutter/tools/gn --runtime-mode=release && \
+  ninja -C out/host_release && \
+  say "done"
 ```
 
-The linking step for android_release_arm64 is _much_ longer than other platforms
-we may need to use unopt or debug builds for faster iteration.
+Build the engine for Android arm64:
 
-I also add `&& say "done"` to the end of the ninja command so I know when it's
-done (because it takes minutes).  Often I'm editing/buiding from within the updater
-directory so my command is:
+```bash
+cd src && \
+  ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
+  cd third_party/updater && \
+  cargo ndk --target aarch64-linux-android build --release && \
+  ninja -C ../../out/android_release_arm64 && \
+  say "done"
+```
 
-```
-cargo ndk --target aarch64-linux-android build --release && ninja -C ../../out/android_release_arm64 && say "done"
-```
+> **TODO**
+> 
+> The "Build the engine for Android arm64" step will eventually be condensed to:
+> ```bash
+> cd src && \
+>   ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
+>   ninja -C out/android_release_arm64
+> ```
+> See https://github.com/shorebirdtech/shorebird/issues/463.
+
+> **📝 NOTE**
+> 
+> In both of the examples above, `&& say "done"` is appended to the end of the
+> long-running ninja command to alert me when it has finished. The `say` command
+> is only available on macOS.
 
 ## Running with your local engine
 
-`shorebird` commands support `--local-engine-src-path` and `--local-engine` just like `flutter` commands do.
+`shorebird` commands support `--local-engine-src-path` and `--local-engine`,
+just like `flutter` commands do.
 
-When testing on my machine I use something like:
+When testing on my machine, I use something like:
 
-```shorebird --local-engine-src-path=$HOME/Documents/GitHub/engine --local-engine=android_release_arm64 run```
+```bash
+$PATH_TO_ENGINE_SRC="$HOME/Documents/GitHub/engine/src"
+shorebird --local-engine-src-path=$PATH_TO_ENGINE_SRC --local-engine=android_release_arm64 run
+```
