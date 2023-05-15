@@ -49,6 +49,11 @@ These steps assume that you have [installed the dependencies for building the Fl
 - Move to the `engine` directory.
 - Paste the context of https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient into a file named `.gclient`.
 - Run `gclient sync` to download the Flutter engine source code (this will take a while).
+- Move to the `src/flutter` directory.
+- Run `git checkout flutter-release/X.Y.Z` to checkout the version of the Flutter engine that Shorebird uses.
+  - X.Y.Z is currently 3.10.0.
+- Move back to the `src` directory.
+- Run `gclient sync` again.
 
 Or, as one set of commands:
 
@@ -56,6 +61,10 @@ Or, as one set of commands:
 mkdir engine && \
   cd engine && \
   curl https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient > .gclient && \
+  gclient sync &&
+  cd src/flutter &&
+  git checkout flutter-release/3.10.0 &&
+  cd .. &&
   gclient sync
 ```
 
@@ -82,7 +91,7 @@ Build `host_release`:
 
 ```bash
 cd src && \
-  ./flutter/tools/gn --runtime-mode=release && \
+  ./flutter/tools/gn --runtime-mode=release --no-goma && \
   ninja -C out/host_release && \
   say "done"
 ```
@@ -91,7 +100,7 @@ Build the engine for Android arm64:
 
 ```bash
 cd src && \
-  ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
+  ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release --no-goma && \
   cd third_party/updater && \
   cargo ndk --target aarch64-linux-android build --release && \
   ninja -C ../../out/android_release_arm64 && \
@@ -103,7 +112,7 @@ cd src && \
 > The "Build the engine for Android arm64" step will eventually be condensed to:
 > ```bash
 > cd src && \
->   ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release && \
+>   ./flutter/tools/gn --android --android-cpu arm64 --runtime-mode=release --no-goma && \
 >   ninja -C out/android_release_arm64
 > ```
 > See https://github.com/shorebirdtech/shorebird/issues/463.
