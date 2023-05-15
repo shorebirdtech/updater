@@ -46,6 +46,7 @@ cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi build 
 These steps assume that you have [installed the dependencies for building the Flutter engine](https://github.com/flutter/flutter/wiki/Setting-up-the-Engine-development-environment#getting-dependencies).
 
 - Outside of any existing git repository, create an empty directory named `engine`.
+- Move to the `engine` directory.
 - Paste the context of https://raw.githubusercontent.com/shorebirdtech/build_engine/main/build_engine/dot_gclient into a file named `.gclient`.
 - Run `gclient sync` to download the Flutter engine source code (this will take a while).
 
