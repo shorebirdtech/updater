@@ -104,19 +104,6 @@ your NDK_HOME, you can also set the environment variable for just the one call:
 NDK_HOME=$HOME/Documents/GitHub/engine/src/third_party/android_tools/ndk cargo ndk -t armeabi-v7a -t arm64-v8a build --release
 ```
 
-## Development
-
-Uses cbindgen to generate the header file.
-
-It isn't currently wired into the build process, so you'll need to run it
-manually if you change the API.
-https://github.com/shorebirdtech/shorebird/issues/121
-
-```
-cargo install cbindgen
-cbindgen --config cbindgen.toml --crate updater --output library/include/updater.h
-```
-
 ## Imagined Architecture (not all implemented)
 
 ### Assumptions (not all enforced yet)
