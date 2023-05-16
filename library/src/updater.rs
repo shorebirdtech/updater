@@ -97,18 +97,8 @@ pub fn check_for_update() -> anyhow::Result<bool> {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        // Send info from app + current slot to server.
-        let response_result = send_patch_check_request(&config, &state);
-        match response_result {
-            Err(err) => {
-                error!("Failed update check: {err}");
-                return false;
-            }
-            Ok(response) => {
-                return response.patch_available;
-            }
-        }
-    })
+        send_patch_check_request(&config, &state).map(|res| res.patch_available)
+    })?
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
