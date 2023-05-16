@@ -7,8 +7,6 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-use anyhow::Context;
-
 use crate::updater;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
@@ -47,6 +45,14 @@ fn to_rust(c_string: *const libc::c_char) -> anyhow::Result<String> {
 fn allocate_c_string(rust_string: &str) -> anyhow::Result<*mut c_char> {
     let c_str = CString::new(rust_string)?;
     Ok(c_str.into_raw())
+}
+
+/// Converts a Rust string to a C string, caller must free the C string.
+fn to_c_string(maybe_string: Option<String>) -> anyhow::Result<*mut c_char> {
+    Ok(match maybe_string {
+        Some(v) => allocate_c_string(&v)?,
+        None => std::ptr::null_mut(),
+    })
 }
 
 fn to_rust_vector(
@@ -115,8 +121,8 @@ pub extern "C" fn shorebird_init(
 pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
     log_on_error(
         || {
-            let patch = updater::next_boot_patch()?.context("failed to fetch patch info")?;
-            allocate_c_string(&patch.number.to_string())
+            let maybe_patch_number = updater::next_boot_patch()?.map(|p| p.number.to_string());
+            to_c_string(maybe_patch_number)
         },
         "fetching next_boot_patch_number",
         std::ptr::null_mut(),
@@ -129,8 +135,8 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
         || {
-            let patch = updater::next_boot_patch()?.context("failed to fetch patch info")?;
-            allocate_c_string(&patch.path)
+            let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
+            to_c_string(maybe_path)
         },
         "fetching next_boot_patch_path",
         std::ptr::null_mut(),
