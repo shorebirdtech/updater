@@ -1,4 +1,5 @@
 // This file handles the global config for the updater library.
+use anyhow::bail;
 
 #[cfg(test)]
 use crate::network::{DownloadFileFn, PatchCheckRequestFn};
@@ -7,6 +8,7 @@ use std::cell::RefCell;
 
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
+use crate::UpdateError;
 
 #[cfg(not(test))]
 use once_cell::sync::OnceCell;
@@ -60,14 +62,14 @@ pub fn testing_reset_config() {
     });
 }
 
-pub fn check_initialized_and_call<F, R>(f: F, config: &ResolvedConfig) -> R
+pub fn check_initialized_and_call<F, R>(f: F, config: &ResolvedConfig) -> anyhow::Result<R>
 where
     F: FnOnce(&ResolvedConfig) -> R,
 {
     if !config.is_initialized {
-        panic!("Must call shorebird_init() before using the updater.");
+        bail!(UpdateError::ConfigNotInitialized);
     }
-    return f(&config);
+    return Ok(f(&config));
 }
 
 #[cfg(test)]
@@ -93,7 +95,7 @@ where
 }
 
 #[cfg(not(test))]
-pub fn with_config<F, R>(f: F) -> R
+pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&ResolvedConfig) -> R,
 {
@@ -106,7 +108,7 @@ where
 }
 
 #[cfg(test)]
-pub fn with_config<F, R>(f: F) -> R
+pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&ResolvedConfig) -> R,
 {
