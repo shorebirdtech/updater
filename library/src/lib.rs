@@ -5,7 +5,7 @@
 // C doesn't care about the namespaces, but Rust does.
 pub mod c_api;
 
-// Declare other .rs file/module exists, but make them public.
+// Declare other .rs file/module exists, but make them private.
 mod cache;
 mod config;
 mod logging;

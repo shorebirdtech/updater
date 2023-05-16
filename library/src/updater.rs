@@ -1,15 +1,17 @@
 // This file's job is to be the Rust API for the updater.
 
 use std::fmt::{Display, Formatter};
+use std::fs;
+use std::io::{Cursor, Read, Seek};
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
 
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, ResolvedConfig};
 use crate::logging::init_logging;
 use crate::network::{download_to_path, send_patch_check_request};
 use crate::yaml::YamlConfig;
-use std::fs;
-use std::io::{Cursor, Read, Seek};
-use std::path::{Path, PathBuf};
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
@@ -22,8 +24,6 @@ pub use crate::config::testing_reset_config;
 pub use crate::network::{
     testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
 };
-
-use anyhow::Context;
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -51,6 +51,7 @@ pub enum UpdateError {
     InvalidState(String),
     BadServerResponse,
     FailedToSaveState,
+    ConfigNotInitialized,
 }
 
 impl std::error::Error for UpdateError {}
@@ -64,6 +65,7 @@ impl Display for UpdateError {
             UpdateError::InvalidState(msg) => write!(f, "Invalid State: {}", msg),
             UpdateError::FailedToSaveState => write!(f, "Failed to save state"),
             UpdateError::BadServerResponse => write!(f, "Bad server response"),
+            UpdateError::ConfigNotInitialized => write!(f, "Config not initialized"),
         }
     }
 }
@@ -89,26 +91,14 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
     set_config(app_config, config).map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
-fn check_for_update_internal(config: &ResolvedConfig) -> bool {
-    // Load UpdaterState from disk
-    // If there is no state, make an empty state.
-    let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-    // Send info from app + current slot to server.
-    let response_result = send_patch_check_request(&config, &state);
-    match response_result {
-        Err(err) => {
-            error!("Failed update check: {err}");
-            return false;
-        }
-        Ok(response) => {
-            return response.patch_available;
-        }
-    }
-}
-
 /// Synchronously checks for an update and returns true if an update is available.
-pub fn check_for_update() -> bool {
-    return with_config(check_for_update_internal);
+pub fn check_for_update() -> anyhow::Result<bool> {
+    with_config(|config| {
+        // Load UpdaterState from disk
+        // If there is no state, make an empty state.
+        let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+        send_patch_check_request(&config, &state).map(|res| res.patch_available)
+    })
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
@@ -396,21 +386,21 @@ where
 /// The patch which will be run on next boot (which may still be the same
 /// as the current boot).
 /// This may be changed any time update() or start_update_thread() are called.
-pub fn next_boot_patch() -> Option<PatchInfo> {
-    return with_config(|config| {
+pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
+    with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return state.next_boot_patch();
-    });
+        return Ok(state.next_boot_patch());
+    })
 }
 
 /// The patch which is currently booted.  This is None until
 /// report_launch_start() is called at which point it is copied from
 /// next_boot_patch.
-pub fn current_boot_patch() -> Option<PatchInfo> {
-    return with_config(|config| {
+pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
+    with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return state.current_boot_patch();
-    });
+        return Ok(state.current_boot_patch());
+    })
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
@@ -426,46 +416,46 @@ pub fn report_launch_start() -> anyhow::Result<()> {
 
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
-pub fn report_launch_failure() -> Result<(), UpdateError> {
+pub fn report_launch_failure() -> anyhow::Result<()> {
     info!("Reporting failed launch.");
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-        let patch = state
-            .current_boot_patch()
-            .ok_or(UpdateError::InvalidState("No current patch".to_string()))?;
+        let patch =
+            state
+                .current_boot_patch()
+                .ok_or(anyhow::Error::from(UpdateError::InvalidState(
+                    "No current patch".to_string(),
+                )))?;
         state.mark_patch_as_bad(&patch);
-        state.activate_latest_bootable_patch()
+        state
+            .activate_latest_bootable_patch()
+            .map_err(|err| anyhow::Error::from(err))
     })
 }
 
-pub fn report_launch_success() -> Result<(), UpdateError> {
+pub fn report_launch_success() -> anyhow::Result<()> {
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-        let patch = state
-            .current_boot_patch()
-            .ok_or(UpdateError::InvalidState("No current patch".to_string()))?;
+        let patch =
+            state
+                .current_boot_patch()
+                .ok_or(anyhow::Error::from(UpdateError::InvalidState(
+                    "No current patch".to_string(),
+                )))?;
         state.mark_patch_as_good(&patch);
-        state.save().map_err(|_| UpdateError::FailedToSaveState)
+        state
+            .save()
+            .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
     })
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
-pub fn update() -> UpdateStatus {
-    return with_config(|config| {
-        let result = update_internal(&config);
-        match result {
-            Err(err) => {
-                error!("Problem updating: {err}");
-                error!("{}", err.backtrace());
-                return UpdateStatus::UpdateHadError;
-            }
-            Ok(status) => status,
-        }
-    });
+pub fn update() -> anyhow::Result<UpdateStatus> {
+    with_config(|config| update_internal(&config))
 }
 
 /// This does not return status.  The only output is the change to the saved
@@ -476,7 +466,7 @@ pub fn start_update_thread() {
     // call which is wrong. We should be able to release the lock during the
     // network requests.
     std::thread::spawn(move || {
-        let status = update();
+        let status = update().unwrap_or(UpdateStatus::UpdateHadError);
         info!("Update thread finished with status: {}", status);
     });
 }
@@ -526,17 +516,19 @@ mod tests {
                 })
                 .expect("move failed");
             state.save().expect("save failed");
-        });
-        assert!(crate::next_boot_patch().is_some());
+            Ok(())
+        })
+        .unwrap();
+        assert!(crate::next_boot_patch().unwrap().is_some());
         // pretend we booted from it
         crate::report_launch_start().unwrap();
         crate::report_launch_success().unwrap();
-        assert!(crate::next_boot_patch().is_some());
+        assert!(crate::next_boot_patch().unwrap().is_some());
         // mark it bad.
         crate::report_launch_failure().unwrap();
         // Technically might need to "reload"
         // ask for current patch (should get none).
-        assert!(crate::next_boot_patch().is_none());
+        assert!(crate::next_boot_patch().unwrap().is_none());
     }
 
     #[test]
@@ -597,16 +589,18 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir);
         assert_eq!(
-            crate::report_launch_failure(),
-            Err(crate::UpdateError::InvalidState(
-                "No current patch".to_string()
-            ))
+            crate::report_launch_failure()
+                .unwrap_err()
+                .downcast::<crate::UpdateError>()
+                .unwrap(),
+            crate::UpdateError::InvalidState("No current patch".to_string())
         );
         assert_eq!(
-            crate::report_launch_success(),
-            Err(crate::UpdateError::InvalidState(
-                "No current patch".to_string()
-            ))
+            crate::report_launch_success()
+                .unwrap_err()
+                .downcast::<crate::UpdateError>()
+                .unwrap(),
+            crate::UpdateError::InvalidState("No current patch".to_string())
         );
     }
 }

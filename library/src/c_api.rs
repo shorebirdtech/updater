@@ -7,13 +7,11 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-use anyhow::Context;
-
 use crate::updater;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as error; // Workaround to use println! for logs.
+use std::{println as info, println as error}; // Workaround to use println! for logs.
 
 /// Struct containing configuration parameters for the updater.
 /// Passed to all updater functions.
@@ -47,6 +45,14 @@ fn to_rust(c_string: *const libc::c_char) -> anyhow::Result<String> {
 fn allocate_c_string(rust_string: &str) -> anyhow::Result<*mut c_char> {
     let c_str = CString::new(rust_string)?;
     Ok(c_str.into_raw())
+}
+
+/// Converts a Rust string to a C string, caller must free the C string.
+fn to_c_string(maybe_string: Option<String>) -> anyhow::Result<*mut c_char> {
+    Ok(match maybe_string {
+        Some(v) => allocate_c_string(&v)?,
+        None => std::ptr::null_mut(),
+    })
 }
 
 fn to_rust_vector(
@@ -83,14 +89,10 @@ fn log_on_error<F, R>(f: F, context: &str, error_result: R) -> R
 where
     F: FnOnce() -> Result<R, anyhow::Error>,
 {
-    let result = f();
-    match result {
-        Ok(r) => r,
-        Err(e) => {
-            error!("Error {}: {:?}", context, e);
-            error_result
-        }
-    }
+    f().unwrap_or_else(|e| {
+        error!("Error {}: {:?}", context, e);
+        error_result
+    })
 }
 
 /// Configures updater.  First parameter is a struct containing configuration
@@ -119,8 +121,8 @@ pub extern "C" fn shorebird_init(
 pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
     log_on_error(
         || {
-            let patch = updater::next_boot_patch().context("failed to fetch patch info")?;
-            allocate_c_string(&patch.number.to_string())
+            let maybe_patch_number = updater::next_boot_patch()?.map(|p| p.number.to_string());
+            to_c_string(maybe_patch_number)
         },
         "fetching next_boot_patch_number",
         std::ptr::null_mut(),
@@ -133,8 +135,8 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
         || {
-            let patch = updater::next_boot_patch().context("failed to fetch patch info")?;
-            allocate_c_string(&patch.path)
+            let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
+            to_c_string(maybe_path)
         },
         "fetching next_boot_patch_path",
         std::ptr::null_mut(),
@@ -155,13 +157,17 @@ pub extern "C" fn shorebird_free_string(c_string: *mut c_char) {
 /// Check for an update.  Returns true if an update is available.
 #[no_mangle]
 pub extern "C" fn shorebird_check_for_update() -> bool {
-    return updater::check_for_update();
+    log_on_error(updater::check_for_update, "checking for update", false)
 }
 
 /// Synchronously download an update if one is available.
 #[no_mangle]
 pub extern "C" fn shorebird_update() {
-    updater::update();
+    log_on_error(
+        || updater::update().and_then(|result| Ok(info!("Update result: {}", result))),
+        "downloading update",
+        (),
+    );
 }
 
 /// Start a thread to download an update if one is available.
@@ -177,11 +183,7 @@ pub extern "C" fn shorebird_start_update_thread() {
 /// shorebird_report_launch_success or shorebird_report_launch_failure.
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_start() {
-    log_on_error(
-        || updater::report_launch_start(),
-        "reporting launch start",
-        (),
-    );
+    log_on_error(updater::report_launch_start, "reporting launch start", ());
 }
 
 /// Report that the app failed to launch.  This will cause the updater to
@@ -190,10 +192,7 @@ pub extern "C" fn shorebird_report_launch_start() {
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_failure() {
     log_on_error(
-        || {
-            updater::report_launch_failure()?;
-            Ok(())
-        },
+        updater::report_launch_failure,
         "reporting launch failure",
         (),
     );
@@ -209,10 +208,7 @@ pub extern "C" fn shorebird_report_launch_failure() {
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_success() {
     log_on_error(
-        || {
-            updater::report_launch_success()?;
-            Ok(())
-        },
+        updater::report_launch_success,
         "reporting launch success",
         (),
     );
