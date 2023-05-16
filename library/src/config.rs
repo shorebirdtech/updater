@@ -64,18 +64,18 @@ pub fn testing_reset_config() {
 
 pub fn check_initialized_and_call<F, R>(f: F, config: &ResolvedConfig) -> anyhow::Result<R>
 where
-    F: FnOnce(&ResolvedConfig) -> R,
+    F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
 {
     if !config.is_initialized {
         bail!(UpdateError::ConfigNotInitialized);
     }
-    return Ok(f(&config));
+    return f(&config);
 }
 
 #[cfg(test)]
-pub fn with_thread_config<F, R>(f: F) -> R
+pub fn with_thread_config<F, R>(f: F) -> anyhow::Result<R>
 where
-    F: FnOnce(&ThreadConfig) -> R,
+    F: FnOnce(&ThreadConfig) -> anyhow::Result<R>,
 {
     THREAD_CONFIG.with(|thread_config| {
         let thread_config = thread_config.borrow();
@@ -97,7 +97,7 @@ where
 #[cfg(not(test))]
 pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
-    F: FnOnce(&ResolvedConfig) -> R,
+    F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
 {
     // expect() here should be OK, it's job is to propagate a panic across
     // threads if the lock is poisoned.
@@ -110,7 +110,7 @@ where
 #[cfg(test)]
 pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
-    F: FnOnce(&ResolvedConfig) -> R,
+    F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
 {
     // Rust unit tests run on multiple threads in parallel, so we use
     // a per-thread config when unit testing instead of a global config.

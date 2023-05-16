@@ -98,7 +98,7 @@ pub fn check_for_update() -> anyhow::Result<bool> {
         // If there is no state, make an empty state.
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
         send_patch_check_request(&config, &state).map(|res| res.patch_available)
-    })?
+    })
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
@@ -389,7 +389,7 @@ where
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return state.next_boot_patch();
+        return Ok(state.next_boot_patch());
     })
 }
 
@@ -399,7 +399,7 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return state.current_boot_patch();
+        return Ok(state.current_boot_patch());
     })
 }
 
@@ -411,7 +411,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
         // Make that patch the "booted" patch.
         state.activate_current_patch()?;
         state.save()
-    })?
+    })
 }
 
 /// Report that the current active path failed to launch.
@@ -432,7 +432,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         state
             .activate_latest_bootable_patch()
             .map_err(|err| anyhow::Error::from(err))
-    })?
+    })
 }
 
 pub fn report_launch_success() -> anyhow::Result<()> {
@@ -450,22 +450,12 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         state
             .save()
             .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
-    })?
+    })
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
 pub fn update() -> anyhow::Result<UpdateStatus> {
-    with_config(|config| {
-        let result = update_internal(&config);
-        match result {
-            Err(err) => {
-                error!("Problem updating: {err}");
-                error!("{}", err.backtrace());
-                return UpdateStatus::UpdateHadError;
-            }
-            Ok(status) => status,
-        }
-    })
+    with_config(|config| update_internal(&config))
 }
 
 /// This does not return status.  The only output is the change to the saved
@@ -526,6 +516,7 @@ mod tests {
                 })
                 .expect("move failed");
             state.save().expect("save failed");
+            Ok(())
         })
         .unwrap();
         assert!(crate::next_boot_patch().unwrap().is_some());
