@@ -1,6 +1,4 @@
 // This file handles the global config for the updater library.
-use anyhow::bail;
-
 #[cfg(test)]
 use crate::network::{DownloadFileFn, PatchCheckRequestFn};
 #[cfg(test)]
@@ -67,7 +65,7 @@ where
     F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
 {
     if !config.is_initialized {
-        bail!(UpdateError::ConfigNotInitialized);
+        anyhow::bail!(UpdateError::ConfigNotInitialized);
     }
     return f(&config);
 }
