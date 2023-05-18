@@ -1,8 +1,16 @@
 # Updater library
 
-This is the Rust side of the Shorebird code push system.  This is built
-in Rust with a C API for easy calling from other languages, most notably
-for linking into `libflutter.so`.
+This is the Rust side of the Shorebird code push system. This library is used to
+update the code running a Flutter app. It is built in Rust with a C API for easy
+calling from other languages, most notably for linking into `libflutter.so`.
+
+## Background
+
+The primary modification Shorebird makes to the stock Flutter engine
+is adding support for the updater library (this repo). The updater library is
+written in Rust and is used to update the code running in the Flutter
+app. The updater library is built as a static library and is linked
+into the Flutter engine during build time.
 
 ## Parts
 * `dart_cli`: Test ffi wrapping of updater library.
