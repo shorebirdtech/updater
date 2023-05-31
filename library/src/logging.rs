@@ -11,8 +11,17 @@ pub fn init_logging() {
     debug!("Logging initialized");
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "ios")]
 pub fn init_logging() {
-    // Nothing to do on non-Android platforms.
-    // Eventually iOS/MacOS may need something here.
+    // I could not figure out how to get fancier logging set up on iOS
+    // but logging to stderr seems to work.
+    use log::LevelFilter;
+    use std::io;
+    simple_logging::log_to(io::stderr(), LevelFilter::Info);
+    debug!("Logging initialized");
+}
+
+#[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+pub fn init_logging() {
+    // Nothing to do on non-Android, non-iOS platforms.
 }

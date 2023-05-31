@@ -220,5 +220,7 @@ pub fn current_platform() -> &'static str {
     static PLATFORM: &str = "windows";
     #[cfg(target_os = "android")]
     static PLATFORM: &str = "android";
+    #[cfg(target_os = "ios")]
+    static PLATFORM: &str = "ios";
     return PLATFORM;
 }
