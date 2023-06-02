@@ -134,3 +134,14 @@ When testing on my machine, I use something like:
 $PATH_TO_ENGINE_SRC="$HOME/Documents/GitHub/engine/src"
 shorebird --local-engine-src-path=$PATH_TO_ENGINE_SRC --local-engine=android_release_arm64 run
 ```
+
+
+# For iOS
+
+```
+rustup target add aarch64-apple-ios x86_64-apple-ios
+```
+
+```
+cargo build --target aarch64-apple-ios --target x86_64-apple-ios --release
+```
