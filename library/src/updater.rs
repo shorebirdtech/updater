@@ -2,7 +2,7 @@
 
 use std::fmt::{Display, Formatter};
 use std::fs;
-#[cfg(any(platform = "android", test))]
+#[cfg(any(target_os = "android", test))]
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
@@ -220,7 +220,7 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
-#[cfg(any(platform = "android", test))]
+#[cfg(any(target_os = "android", test))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
