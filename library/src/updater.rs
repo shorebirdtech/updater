@@ -16,7 +16,7 @@ use crate::yaml::YamlConfig;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as warn, println as debug, println as error}; // Workaround to use println! for logs.
+use std::{println as info, println as warn, println as error, println as debug}; // Workaround to use println! for logs.
 
 #[cfg(test)]
 // Expose testing_reset_config for integration tests.
@@ -137,7 +137,7 @@ fn prepare_for_install(
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    use crate::android::{app_data_dir_from_libapp_path, open_base_lib}
+    use crate::android::{app_data_dir_from_libapp_path, open_base_lib};
 
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but
