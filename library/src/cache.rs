@@ -71,37 +71,37 @@ impl UpdaterState {
 }
 
 impl UpdaterState {
-    pub fn is_known_good_patch(&self, patch: &PatchInfo) -> bool {
-        self.successful_patches.iter().any(|v| v == &patch.number)
+    pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
+        self.successful_patches.iter().any(|v| v == &patch_number)
     }
 
-    pub fn is_known_bad_patch(&self, patch: &PatchInfo) -> bool {
-        self.failed_patches.iter().any(|v| v == &patch.number)
+    pub fn is_known_bad_patch(&self, patch_number: usize) -> bool {
+        self.failed_patches.iter().any(|v| v == &patch_number)
     }
 
-    pub fn mark_patch_as_bad(&mut self, patch: &PatchInfo) {
-        if self.is_known_good_patch(patch) {
+    pub fn mark_patch_as_bad(&mut self, patch_number: usize) {
+        if self.is_known_good_patch(patch_number) {
             warn!("Tried to report failed launch for a known good patch.  Ignoring.");
             return;
         }
 
-        if self.is_known_bad_patch(patch) {
+        if self.is_known_bad_patch(patch_number) {
             return;
         }
-        info!("Marking patch {} as bad", patch.number);
-        self.failed_patches.push(patch.number.clone());
+        info!("Marking patch {} as bad", patch_number);
+        self.failed_patches.push(patch_number);
     }
 
-    pub fn mark_patch_as_good(&mut self, patch: &PatchInfo) {
-        if self.is_known_bad_patch(patch) {
+    pub fn mark_patch_as_good(&mut self, patch_number: usize) {
+        if self.is_known_bad_patch(patch_number) {
             warn!("Tried to report successful launch for a known bad patch.  Ignoring.");
             return;
         }
 
-        if self.is_known_good_patch(patch) {
+        if self.is_known_good_patch(patch_number) {
             return;
         }
-        self.successful_patches.push(patch.number.clone());
+        self.successful_patches.push(patch_number);
     }
 
     fn load(cache_dir: &str) -> anyhow::Result<Self> {
@@ -117,26 +117,29 @@ impl UpdaterState {
 
     pub fn load_or_new_on_error(cache_dir: &str, release_version: &str) -> Self {
         let load_result = Self::load(cache_dir);
-        if let Err(e) = load_result {
-            // FIXME: Should match on errorKind and display a warning if it's
-            // not a file not found error.
-            info!("No cached state, making empty: {:#}", e);
-            return Self::new(cache_dir.to_owned(), release_version.to_owned());
+        match load_result {
+            Ok(mut loaded) => {
+                if loaded.release_version != release_version {
+                    info!(
+                        "release_version changed {} -> {}, clearing updater state",
+                        loaded.release_version, release_version
+                    );
+                    return Self::new(cache_dir.to_owned(), release_version.to_owned());
+                }
+                let validate_result = loaded.validate();
+                if let Err(e) = validate_result {
+                    info!("Error while validating state: {:#}, clearing state.", e);
+                    return Self::new(cache_dir.to_owned(), release_version.to_owned());
+                }
+                loaded
+            }
+            Err(e) => {
+                // FIXME: Should match on errorKind and display a warning if it's
+                // not a file not found error.
+                info!("No cached state, making empty: {:#}", e);
+                Self::new(cache_dir.to_owned(), release_version.to_owned())
+            }
         }
-        let mut loaded = load_result.unwrap();
-        if loaded.release_version != release_version {
-            info!(
-                "release_version changed {} -> {}, clearing updater state",
-                loaded.release_version, release_version
-            );
-            return Self::new(cache_dir.to_owned(), release_version.to_owned());
-        }
-        let validate_result = loaded.validate();
-        if let Err(e) = validate_result {
-            info!("Error while validating state: {:#}, clearing state.", e);
-            return Self::new(cache_dir.to_owned(), release_version.to_owned());
-        }
-        loaded
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -154,10 +157,15 @@ impl UpdaterState {
             return None;
         }
         let slot = &self.slots[index];
-        Some(PatchInfo {
-            path: self.patch_path(index).to_str().unwrap().to_owned(),
-            number: slot.patch_number,
-        })
+        // to_str only ever fails if the path is invalid utf8, which should
+        // never happen, but this way we don't crash if it is.
+        match self.patch_path_for_index(index).to_str() {
+            None => None,
+            Some(path) => Some(PatchInfo {
+                path: path.to_owned(),
+                number: slot.patch_number,
+            }),
+        }
     }
 
     /// This is the current patch that is running.
@@ -205,10 +213,7 @@ impl UpdaterState {
 
     fn validate_slot(&self, slot: &Slot) -> bool {
         // Check if the patch is known bad.
-        if self.is_known_bad_patch(&PatchInfo {
-            path: String::new(),
-            number: slot.patch_number,
-        }) {
+        if self.is_known_bad_patch(slot.patch_number) {
             info!("Slot {:?} is known bad.", slot);
             return false;
         }
@@ -216,7 +221,7 @@ impl UpdaterState {
             .slots
             .iter()
             .position(|s| s.patch_number == slot.patch_number);
-        let patch_path = self.patch_path(index.unwrap());
+        let patch_path = self.patch_path_for_index(index.unwrap());
         if !patch_path.exists() {
             info!("Slot {:?} {} does not exist.", slot, patch_path.display());
             return false;
@@ -275,7 +280,7 @@ impl UpdaterState {
             return Ok(());
         }
         self.slots[index] = Slot::default();
-        let slot_dir_string = self.slot_dir(index);
+        let slot_dir_string = self.slot_dir_for_index(index);
         if slot_dir_string.exists() {
             std::fs::remove_dir_all(&slot_dir_string)?;
         }
@@ -293,17 +298,17 @@ impl UpdaterState {
         self.slots[index] = slot
     }
 
-    fn patch_path(&self, index: usize) -> PathBuf {
-        self.slot_dir(index).join("dlc.vmcode")
+    fn patch_path_for_index(&self, index: usize) -> PathBuf {
+        self.slot_dir_for_index(index).join("dlc.vmcode")
     }
 
-    fn slot_dir(&self, index: usize) -> PathBuf {
+    fn slot_dir_for_index(&self, index: usize) -> PathBuf {
         Path::new(&self.cache_dir).join(format!("slot_{}", index))
     }
 
     pub fn install_patch(&mut self, patch: PatchInfo) -> anyhow::Result<()> {
         let slot_index = self.available_slot();
-        let slot_dir_string = self.slot_dir(slot_index);
+        let slot_dir_string = self.slot_dir_for_index(slot_index);
         let slot_dir = PathBuf::from(&slot_dir_string);
 
         // Clear the slot.
@@ -311,7 +316,7 @@ impl UpdaterState {
         self.save()?;
         std::fs::create_dir_all(&slot_dir)?;
 
-        if self.is_known_bad_patch(&patch) {
+        if self.is_known_bad_patch(patch.number) {
             return Err(UpdateError::InvalidArgument(
                 "patch".to_owned(),
                 format!("Refusing to install known bad patch: {:?}", patch),
@@ -342,7 +347,7 @@ impl UpdaterState {
         }
         self.save()?;
 
-        let path = self.patch_path(slot_index);
+        let path = self.patch_path_for_index(slot_index);
         if !path.exists() {
             warn!(
                 "Patch {} installed but does not exist {:?}",
@@ -384,13 +389,13 @@ impl UpdaterState {
         // We probably could do this with chain and max?
         let installed_max = self.slots.iter().map(|s| s.patch_number).max();
         let failed_max = self.failed_patches.clone().into_iter().max();
-        if installed_max.is_none() {
-            return failed_max;
+        match installed_max {
+            None => failed_max,
+            Some(installed) => match failed_max {
+                None => return installed_max,
+                Some(failed) => Some(std::cmp::max(installed, failed)),
+            },
         }
-        if failed_max.is_none() {
-            return installed_max;
-        }
-        Some(std::cmp::max(installed_max.unwrap(), failed_max.unwrap()))
     }
 }
 
@@ -463,7 +468,7 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut state = test_state(&tmp_dir);
         let bad_patch = fake_patch(&tmp_dir, 1);
-        state.mark_patch_as_bad(&bad_patch);
+        state.mark_patch_as_bad(bad_patch.number);
         assert!(state.install_patch(bad_patch).is_err());
     }
 }

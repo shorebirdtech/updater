@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
 use crate::UpdateError;
+use anyhow::Context;
 
 #[cfg(not(test))]
 use once_cell::sync::OnceCell;
@@ -188,7 +189,10 @@ pub fn set_config(app_config: AppConfig, yaml: YamlConfig) -> anyhow::Result<()>
         config.cache_dir = app_config.cache_dir.to_string();
         let mut cache_path = std::path::PathBuf::from(app_config.cache_dir);
         cache_path.push("downloads");
-        config.download_dir = cache_path.to_str().unwrap().to_string();
+        config.download_dir = cache_path
+            .to_str()
+            .context("invalid cache path")?
+            .to_string();
         config.app_id = yaml.app_id.to_string();
         config.release_version = app_config.release_version.to_string();
         config.original_libapp_paths = app_config.original_libapp_paths;
