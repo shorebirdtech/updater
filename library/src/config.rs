@@ -204,10 +204,8 @@ pub fn current_arch() -> &'static str {
     static ARCH: &str = "x86";
     #[cfg(target_arch = "x86_64")]
     static ARCH: &str = "x86_64";
-    #[cfg(all(target_arch = "aarch64", not(target_os = "ios")))]
+    #[cfg(target_arch = "aarch64")]
     static ARCH: &str = "aarch64";
-    #[cfg(all(target_arch = "aarch64", target_os = "ios"))]
-    static ARCH: &str = "arm64"; // hack for now.
     #[cfg(target_arch = "arm")]
     static ARCH: &str = "arm";
     return ARCH;
