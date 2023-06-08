@@ -2,7 +2,7 @@
 
 use std::fmt::{Display, Formatter};
 use std::fs;
-#[cfg(platform = "android")]
+#[cfg(any(platform = "android", test))]
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,7 @@ use crate::yaml::YamlConfig;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as warn}; // Workaround to use println! for logs.
+use std::{println as info, println as warn, println as debug, println as error}; // Workaround to use println! for logs.
 
 #[cfg(test)]
 // Expose testing_reset_config for integration tests.
@@ -131,13 +131,13 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
 
 // This is just a place to put our terrible android hacks.
 // And also avoid (for now) dealing with inflating patches on iOS.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn prepare_for_install(
     config: &ResolvedConfig,
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    use android::app_data_dir_from_libapp_path;
+    use crate::android::{app_data_dir_from_libapp_path, open_base_lib}
 
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but
@@ -165,7 +165,7 @@ fn prepare_for_install(
     inflate(&download_path, base_r, &output_path)
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", test)))]
 fn prepare_for_install(
     _config: &ResolvedConfig,
     download_path: &Path,
@@ -220,7 +220,7 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
-#[cfg(platform = "android")]
+#[cfg(any(platform = "android", test))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,

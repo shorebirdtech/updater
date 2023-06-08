@@ -427,32 +427,36 @@ mod tests {
         assert_eq!(state.next_boot_patch(), None);
     }
 
-    // #[test]
-    // fn release_version_changed() {
-    //     let tmp_dir = TempDir::new("example").unwrap();
-    //     let mut state = test_state(&tmp_dir);
-    //     state.latest_downloaded_patch = Some(1);
-    //     state.save().unwrap();
-    //     let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
-    //     assert_eq!(loaded.latest_downloaded_patch, Some(1));
+    #[test]
+    fn release_version_changed() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut state = test_state(&tmp_dir);
+        state.next_boot_slot_index = Some(1);
+        state.save().unwrap();
+        let loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
+        assert_eq!(loaded.next_boot_slot_index, Some(1));
 
-    //     let loaded_after_version_change =
-    //         UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2");
-    //     assert_eq!(loaded_after_version_change.latest_downloaded_patch, None);
-    // }
+        let loaded_after_version_change =
+            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2");
+        assert_eq!(loaded_after_version_change.next_boot_slot_index, None);
+    }
 
-    // #[test]
-    // fn latest_downloaded_patch() {
-    //     let tmp_dir = TempDir::new("example").unwrap();
-    //     let mut state = test_state(&tmp_dir);
-    //     assert_eq!(state.latest_downloaded_patch, None);
-    //     state.install_patch(fake_patch(&tmp_dir, 1)).unwrap();
-    //     assert_eq!(state.latest_downloaded_patch, Some(1));
-    //     state.install_patch(fake_patch(&tmp_dir, 2)).unwrap();
-    //     assert_eq!(state.latest_downloaded_patch, Some(2));
-    //     state.install_patch(fake_patch(&tmp_dir, 1)).unwrap();
-    //     assert_eq!(state.latest_downloaded_patch, Some(2));
-    // }
+    #[test]
+    fn latest_downloaded_patch() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut state = test_state(&tmp_dir);
+        assert_eq!(state.latest_patch_number(), None);
+        state.install_patch(fake_patch(&tmp_dir, 1)).unwrap();
+        assert_eq!(state.latest_patch_number(), Some(1));
+        state.install_patch(fake_patch(&tmp_dir, 2)).unwrap();
+        assert_eq!(state.latest_patch_number(), Some(2));
+        state.install_patch(fake_patch(&tmp_dir, 1)).unwrap();
+        // This probably should be Some(2) assuming we didn't write
+        // over the top of patch 2 when re-installing patch 1.
+        // I expect if we support rollbacks we might be more explicit
+        // that it's a rollback?
+        assert_eq!(state.latest_patch_number(), Some(1));
+    }
 
     #[test]
     fn do_not_install_known_bad_patch() {
