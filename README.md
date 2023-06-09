@@ -1,6 +1,8 @@
 # Updater library
 
 [![codecov](https://codecov.io/gh/shorebirdtech/updater/branch/main/graph/badge.svg)](https://codecov.io/gh/shorebirdtech/updater)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE-MIT)
+[![License: Apache](https://img.shields.io/badge/license-Apache-orange.svg)](./LICENSE-APACHE)
 
 This is the Rust side of the Shorebird code push system.  This is built
 in Rust with a C API for easy calling from other languages, most notably
