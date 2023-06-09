@@ -15,3 +15,6 @@ Cargo.lock
 
 # Cache directory from updater cli.
 updater_cache
+
+# Test related
+lcov.info
