@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+  push:
     branches:
       - main
 
@@ -56,6 +57,7 @@ jobs:
       - name: 🦀 Build ${{ matrix.package }}
         uses: ./.github/actions/rust_crate
         with:
+          codecov_token: ${{ secrets.CODECOV_TOKEN }}
           working_directory: ${{ matrix.crate }}
 
   ci:
