@@ -11,8 +11,3 @@ dev_dependencies:
   test: ^1.19.2
   very_good_analysis: ^5.0.0
 
-ffigen:
-  output: 'generated_bindings.dart'
-  headers:
-    entry-points:
-      - 'updater.h'
