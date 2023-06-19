@@ -63,6 +63,7 @@ class Updater {
   /// Whether a new patch is available.
   bool checkForUpdate() => bindings.shorebird_check_for_update();
 
+  /// A wrapper for ffi functions that return [Pointer<Char].
   String? _returnsMaybeString(ffi.Pointer<ffi.Char> Function() f) {
     var cString = ffi.Pointer<ffi.Char>.fromAddress(0);
     cString = f();
