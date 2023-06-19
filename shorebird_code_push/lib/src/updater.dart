@@ -62,6 +62,7 @@ class Updater {
 
   /// Whether a new patch is available.
   bool checkForUpdate() => bindings.shorebird_check_for_update();
+
   String? _returnsMaybeString(ffi.Pointer<ffi.Char> Function() f) {
     var cString = ffi.Pointer<ffi.Char>.fromAddress(0);
     cString = f();
@@ -80,6 +81,7 @@ class Updater {
       bindings.shorebird_free_string(cString);
     }
   }
+
   // TODO(bryanoltman): reintroduce this when working on Dart command line.
   // This is only used when called from a Dart command line.
   // Shorebird will have initialized the library already for you when
