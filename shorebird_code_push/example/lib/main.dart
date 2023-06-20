@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
-final ShorebirdCodePush shorebirdCodePush = ShorebirdCodePush();
-
 void main() {
   runApp(const MyApp());
 }
@@ -25,7 +23,7 @@ class MyApp extends StatelessWidget {
 }
 
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+  const MyHomePage({required this.title, super.key});
 
   final String title;
 
@@ -34,13 +32,16 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  final ShorebirdCodePush _shorebirdCodePush = ShorebirdCodePush();
   int? _patchVersion;
-  var _isCheckingForUpdate = false;
+  bool _isCheckingForUpdate = false;
 
   @override
   void initState() {
     super.initState();
-    shorebirdCodePush.currentPatchVersion().then((version) {
+    _shorebirdCodePush.currentPatchVersion().then((version) {
+      if (!mounted) return;
+
       setState(() {
         _patchVersion = version;
       });
@@ -52,13 +53,13 @@ class _MyHomePageState extends State<MyHomePage> {
       _isCheckingForUpdate = true;
     });
 
-    final isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
+    final isUpdateAvailable = await _shorebirdCodePush.checkForUpdate();
+
+    if (!mounted) return;
 
     setState(() {
       _isCheckingForUpdate = false;
     });
-
-    if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -89,7 +90,7 @@ class _MyHomePageState extends State<MyHomePage> {
               height: 20,
             ),
             ElevatedButton(
-              onPressed: _isCheckingForUpdate ? null : () => _checkForUpdate(),
+              onPressed: _isCheckingForUpdate ? null : _checkForUpdate,
               child: _isCheckingForUpdate
                   ? const SizedBox(
                       height: 14,
