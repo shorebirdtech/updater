@@ -56,13 +56,14 @@ bool shorebird_init(const struct AppParameters *c_params,
                     const char *c_yaml);
 
 /**
- * Return the active patch number, or NULL if there is no active patch.
+ * The patch number that will boot on the next run of the app, or 0 if there is
+ * no next patch.
  */
-SHOREBIRD_EXPORT char *shorebird_next_boot_patch_number(void);
+SHOREBIRD_EXPORT uintptr_t shorebird_next_boot_patch_number(void);
 
 /**
- * Return the path to the active patch for the app, or NULL if there is no
- * active patch.
+ * The path to the patch that will boot on the next run of the app, or NULL if
+ * there is no next patch.
  */
 SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
 
