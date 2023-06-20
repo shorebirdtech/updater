@@ -15,7 +15,7 @@ void main() {
     setUp(() {
       updater = _MockUpdater();
       shorebirdCodePush = ShorebirdCodePush(
-        initUpdater: () => updater,
+        createUpdater: () => updater,
       );
     });
 
@@ -32,12 +32,12 @@ void main() {
     });
 
     group('currentPatchNumber', () {
-      test('forwards the return value of updater.currentPatchNumber', () {
+      test('forwards the return value of updater.currentPatchNumber', () async {
         when(() => updater.currentPatchNumber()).thenReturn(1);
-        expect(shorebirdCodePush.currentPatchVersion(), 1);
+        expect(await shorebirdCodePush.currentPatchVersion(), 1);
 
         when(() => updater.currentPatchNumber()).thenReturn(null);
-        expect(shorebirdCodePush.currentPatchVersion(), null);
+        expect(await shorebirdCodePush.currentPatchVersion(), null);
       });
     });
   });
