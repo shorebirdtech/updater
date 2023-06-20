@@ -1,6 +1,7 @@
 name: shorebird_code_push
 description: Get info about your Shorebird code push app
 version: 0.1.0+1
+homepage: https://shorebird.dev
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
