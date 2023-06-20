@@ -33,17 +33,21 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final _shorebirdCodePush = ShorebirdCodePush();
-  int? _patchVersion;
+  int? _currentPatchVersion;
+  int? _nextPatchVersion;
   bool _isCheckingForUpdate = false;
 
   @override
   void initState() {
     super.initState();
-    _shorebirdCodePush.currentPatchVersion().then((version) {
+    _shorebirdCodePush.currentPatchVersion().then((currentPatchVersion) async {
+      final nextPatchVersion = await _shorebirdCodePush.nextPatchVersion();
+
       if (!mounted) return;
 
       setState(() {
-        _patchVersion = version;
+        _currentPatchVersion = currentPatchVersion;
+        _nextPatchVersion = nextPatchVersion;
       });
     });
   }
@@ -83,9 +87,24 @@ class _MyHomePageState extends State<MyHomePage> {
           children: <Widget>[
             const Text('Current patch version:'),
             Text(
-              _patchVersion != null ? _patchVersion.toString() : 'none',
+              _currentPatchVersion != null
+                  ? _currentPatchVersion.toString()
+                  : 'none',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            if (_nextPatchVersion != null &&
+                _nextPatchVersion != _currentPatchVersion)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 10),
+                  const Text('Next patch version:'),
+                  Text(
+                    _nextPatchVersion.toString(),
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ],
+              ),
             const SizedBox(
               height: 20,
             ),
