@@ -56,6 +56,12 @@ bool shorebird_init(const struct AppParameters *c_params,
                     const char *c_yaml);
 
 /**
+ * The currently running patch number, or 0 if the release has not been
+ * patched.
+ */
+SHOREBIRD_EXPORT uintptr_t shorebird_current_boot_patch_number(void);
+
+/**
  * The patch number that will boot on the next run of the app, or 0 if there is
  * no next patch.
  */
@@ -89,8 +95,9 @@ SHOREBIRD_EXPORT void shorebird_start_update_thread(void);
 
 /**
  * Tell the updater that we're launching from what it told us was the
- * next patch to boot from.  This will copy the next_boot patch to be
- * the current_boot patch.
+ * next patch to boot from. This will copy the next_boot patch to be the
+ * current_boot patch.
+ *
  * It is required to call this function before calling
  * shorebird_report_launch_success or shorebird_report_launch_failure.
  */
@@ -108,6 +115,7 @@ SHOREBIRD_EXPORT void shorebird_report_launch_failure(void);
  * as having been launched successfully.  We don't currently do anything
  * with this information, but it could be used to record a point at which
  * we will not roll back from.
+ *
  * This is not currently wired up to be called from the Engine.  It's unclear
  * where best to connect it.  Expo waits 5 seconds after the app launches
  * and then marks the launch as successful.  We could do something similar.

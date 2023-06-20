@@ -32,7 +32,7 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final ShorebirdCodePush _shorebirdCodePush = ShorebirdCodePush();
+  final _shorebirdCodePush = ShorebirdCodePush();
   int? _patchVersion;
   bool _isCheckingForUpdate = false;
 

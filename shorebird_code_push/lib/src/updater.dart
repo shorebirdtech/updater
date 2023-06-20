@@ -22,7 +22,7 @@ class Updater {
   // available. It should instead always return the current patch version.
   int currentPatchNumber() {
     try {
-      return bindings.shorebird_next_boot_patch_number();
+      return bindings.shorebird_current_boot_patch_number();
     } catch (e) {
       return 0;
     }

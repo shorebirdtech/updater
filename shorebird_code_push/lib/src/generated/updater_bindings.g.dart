@@ -2086,6 +2086,18 @@ class UpdaterBindings {
 
   /// The patch number that will boot on the next run of the app, or 0 if there is
   /// no next patch.
+  int shorebird_currnet_boot_patch_number() {
+    return _shorebird_currnet_boot_patch_number();
+  }
+
+  late final _shorebird_currnet_boot_patch_numberPtr =
+      _lookup<ffi.NativeFunction<ffi.UintPtr Function()>>(
+          'shorebird_currnet_boot_patch_number');
+  late final _shorebird_currnet_boot_patch_number =
+      _shorebird_currnet_boot_patch_numberPtr.asFunction<int Function()>();
+
+  /// The patch number that will boot on the next run of the app, or 0 if there is
+  /// no next patch.
   int shorebird_next_boot_patch_number() {
     return _shorebird_next_boot_patch_number();
   }
