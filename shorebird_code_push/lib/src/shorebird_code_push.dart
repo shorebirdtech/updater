@@ -1,14 +1,16 @@
 import 'dart:isolate';
 
+import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/updater.dart';
-
-/// A function that constructs an [Updater] instance. Used for testing.
-typedef UpdaterBuilder = Updater Function();
 
 /// A logging function for errors arising from interacting with the native code.
 ///
 /// Used to override the default behavior of using [print].
 typedef ShorebirdLog = void Function(Object? object);
+
+/// A function that constructs an [Updater] instance. Used for testing.
+@visibleForTesting
+typedef UpdaterBuilder = Updater Function();
 
 /// {@template shorebird_code_push}
 /// Get info about your Shorebird code push app.
@@ -17,8 +19,14 @@ class ShorebirdCodePush {
   /// {@macro shorebird_code_push}
   ShorebirdCodePush({
     this.logError = print,
-    UpdaterBuilder? buildUpdater, // for testing
-  }) : _buildUpdater = buildUpdater ?? Updater.new;
+  }) : _buildUpdater = Updater.new;
+
+  /// A test-only constructor that allows overriding the Updater constructor.
+  @visibleForTesting
+  ShorebirdCodePush.forTest({
+    required this.logError,
+    required UpdaterBuilder buildUpdater,
+  }) : _buildUpdater = buildUpdater;
 
   /// Logs error messages arising from interacting with the native code.
   ///

@@ -16,7 +16,7 @@ void main() {
     setUp(() {
       loggedError = null;
       updater = _MockUpdater();
-      shorebirdCodePush = ShorebirdCodePush(
+      shorebirdCodePush = ShorebirdCodePush.forTest(
         logError: ([object]) => loggedError = object,
         buildUpdater: () => updater,
       );
