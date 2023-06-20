@@ -48,8 +48,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _checkForUpdate() async {
-    _isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
-    setState(() {});
+    setState(() async {
+      _isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
+    });
   }
 
   @override
