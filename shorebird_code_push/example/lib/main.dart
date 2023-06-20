@@ -52,7 +52,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _isCheckingForUpdate = true;
     });
 
-    bool isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
+    final isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
 
     setState(() {
       _isCheckingForUpdate = false;
