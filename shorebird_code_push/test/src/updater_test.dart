@@ -2,94 +2,26 @@ import 'dart:ffi' as ffi;
 
 import 'package:ffi/ffi.dart';
 import 'package:mocktail/mocktail.dart';
-import 'package:platform/platform.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 import 'package:test/test.dart';
-
-class _MockPlatform extends Mock implements Platform {}
 
 class _MockUpdaterBindings extends Mock implements UpdaterBindings {}
 
 void main() {
   group(Updater, () {
-    late Platform platform;
     late UpdaterBindings updaterBindings;
     late Updater updater;
 
     setUp(() {
-      platform = _MockPlatform();
       updaterBindings = _MockUpdaterBindings();
 
-      updater = Updater.init();
+      updater = Updater();
       Updater.bindings = updaterBindings;
-      Updater.platform = platform;
     });
 
     test('initializes from currently loaded library', () {
       expect(updater, isNotNull);
-    });
-
-    group('initWithLibrary', () {
-      const libDirectory = 'lib';
-      const libName = 'MyLibrary';
-
-      test('opens libName.dylib on macOS', () {
-        when(() => platform.isMacOS).thenReturn(true);
-        when(() => platform.isWindows).thenReturn(false);
-        when(() => platform.isLinux).thenReturn(false);
-
-        var capturedPath = '';
-        final updater = Updater.initWithLibrary(
-          directory: libDirectory,
-          name: libName,
-          ffiOpen: (path) {
-            capturedPath = path;
-            return ffi.DynamicLibrary.process();
-          },
-        );
-
-        expect(updater, isNotNull);
-        expect(capturedPath, 'lib/libMyLibrary.dylib');
-      });
-
-      test('opens name.dll on Windows', () {
-        when(() => platform.isMacOS).thenReturn(false);
-        when(() => platform.isWindows).thenReturn(true);
-        when(() => platform.isLinux).thenReturn(false);
-
-        var capturedPath = '';
-        final updater = Updater.initWithLibrary(
-          directory: libDirectory,
-          name: libName,
-          ffiOpen: (path) {
-            capturedPath = path;
-            return ffi.DynamicLibrary.process();
-          },
-        );
-
-        expect(updater, isNotNull);
-        expect(capturedPath, 'lib/MyLibrary.dll');
-      });
-
-      test('opens libName.so on Linux', () {
-        when(() => platform.isMacOS).thenReturn(false);
-        when(() => platform.isWindows).thenReturn(false);
-        when(() => platform.isLinux).thenReturn(true);
-
-        var capturedPath = '';
-        final updater = Updater.initWithLibrary(
-          directory: libDirectory,
-          name: libName,
-          ffiOpen: (path) {
-            capturedPath = path;
-            return ffi.DynamicLibrary.process();
-          },
-        );
-
-        expect(updater, isNotNull);
-        expect(capturedPath, 'lib/libMyLibrary.so');
-      });
     });
 
     group('currentPatchNumber', () {

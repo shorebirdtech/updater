@@ -40,8 +40,10 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    setState(() {
-      _patchVersion = shorebirdCodePush.currentPatchVersion();
+    shorebirdCodePush.currentPatchVersion().then((version) {
+      setState(() {
+        _patchVersion = version;
+      });
     });
   }
 
