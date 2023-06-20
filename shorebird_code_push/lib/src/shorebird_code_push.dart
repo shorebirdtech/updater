@@ -34,7 +34,7 @@ class ShorebirdCodePush {
   Future<bool> checkForUpdate() {
     return _runInIsolate(
       (updater) => updater.checkForUpdate(),
-      defaultValue: false,
+      fallbackValue: false,
     );
   }
 
@@ -46,7 +46,7 @@ class ShorebirdCodePush {
         final patchNumber = updater.currentPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
-      defaultValue: null,
+      fallbackValue: null,
     );
   }
 
@@ -59,7 +59,7 @@ class ShorebirdCodePush {
         final patchNumber = updater.nextPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
-      defaultValue: null,
+      fallbackValue: null,
     );
   }
 
@@ -67,7 +67,7 @@ class ShorebirdCodePush {
   Future<void> downloadUpdate() async {
     await _runInIsolate(
       (updater) => updater.downloadUpdate(),
-      defaultValue: null,
+      fallbackValue: null,
     );
   }
 
@@ -86,17 +86,17 @@ $logMessage
   }
 
   /// Creates an [Updater] in a separate isolate and runs the given function. If
-  /// an error occurs, the error is logged and [defaultValue] is returned.
+  /// an error occurs, the error is logged and [fallbackValue] is returned.
   Future<T> _runInIsolate<T>(
     T Function(Updater updater) f, {
-    required T defaultValue,
+    required T fallbackValue,
   }) async {
     try {
       // Create a new Updater in the new isolate.
       return await Isolate.run(() => f(_buildUpdater()));
     } catch (error) {
       _logError(error);
-      return defaultValue;
+      return fallbackValue;
     }
   }
 }
