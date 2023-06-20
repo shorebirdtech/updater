@@ -35,7 +35,7 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   int? _patchVersion;
-  bool? _isUpdateAvailable;
+  var _isCheckingForUpdate = false;
 
   @override
   void initState() {
@@ -48,9 +48,25 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _checkForUpdate() async {
-    setState(() async {
-      _isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
+    setState(() {
+      _isCheckingForUpdate = true;
     });
+
+    bool isUpdateAvailable = await shorebirdCodePush.checkForUpdate();
+
+    setState(() {
+      _isCheckingForUpdate = false;
+    });
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isUpdateAvailable ? 'Update available' : 'No update available',
+        ),
+      ),
+    );
   }
 
   @override
@@ -69,13 +85,20 @@ class _MyHomePageState extends State<MyHomePage> {
               _patchVersion != null ? _patchVersion.toString() : 'none',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
-            if (_isUpdateAvailable != null)
-              Text(
-                'Is update available: ${_isUpdateAvailable! ? 'Yes' : 'No'}',
-              ),
+            const SizedBox(
+              height: 20,
+            ),
             ElevatedButton(
-              onPressed: () => _checkForUpdate(),
-              child: const Text('Check for update'),
+              onPressed: _isCheckingForUpdate ? null : () => _checkForUpdate(),
+              child: _isCheckingForUpdate
+                  ? const SizedBox(
+                      height: 14,
+                      width: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Text('Check for update'),
             ),
           ],
         ),

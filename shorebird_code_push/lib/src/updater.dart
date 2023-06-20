@@ -20,8 +20,20 @@ class Updater {
   /// The currently active patch number.
   // TODO(bryanoltman): this will return the current number + 1 if an update is
   // available. It should instead always return the current patch version.
-  int currentPatchNumber() => bindings.shorebird_next_boot_patch_number();
+  int currentPatchNumber() {
+    try {
+      return bindings.shorebird_next_boot_patch_number();
+    } catch (e) {
+      return 0;
+    }
+  }
 
   /// Whether a new patch is available.
-  bool checkForUpdate() => bindings.shorebird_check_for_update();
+  bool checkForUpdate() {
+    try {
+      return bindings.shorebird_check_for_update();
+    } catch (e) {
+      return false;
+    }
+  }
 }
