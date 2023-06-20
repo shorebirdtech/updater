@@ -40,8 +40,8 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    _shorebirdCodePush.currentPatchVersion().then((currentPatchVersion) async {
-      final nextPatchVersion = await _shorebirdCodePush.nextPatchVersion();
+    _shorebirdCodePush.currentPatchNumber().then((currentPatchVersion) async {
+      final nextPatchVersion = await _shorebirdCodePush.nextPatchNumber();
 
       if (!mounted) return;
 
