@@ -39,13 +39,13 @@ impl core::fmt::Debug for NetworkHooks {
 impl Default for NetworkHooks {
     fn default() -> Self {
         Self {
-            patch_check_request_fn: patch_check_request_hook,
-            download_file_fn: download_file_hook,
+            patch_check_request_fn: patch_check_request_default,
+            download_file_fn: download_file_default,
         }
     }
 }
 
-pub fn patch_check_request_hook(
+pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
@@ -55,7 +55,7 @@ pub fn patch_check_request_hook(
 }
 
 // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
-pub fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
+pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     let client = reqwest::blocking::Client::new();
     let response = client.get(url).send()?;
     let bytes = response.bytes()?;
@@ -136,15 +136,21 @@ pub fn send_patch_check_request(
     };
     info!("Sending patch check request: {:?}", request);
     let url = &patches_check_url(&config.base_url);
-    let response = patch_check_request_hook(url, request)?;
+    let patch_check_request_fn = config.network_hooks.patch_check_request_fn;
+    let response = patch_check_request_fn(url, request)?;
 
     info!("Patch check response: {:?}", response);
     return Ok(response);
 }
 
-pub fn download_to_path(url: &str, path: &Path) -> anyhow::Result<()> {
+pub fn download_to_path(
+    network_hooks: &NetworkHooks,
+    url: &str,
+    path: &Path,
+) -> anyhow::Result<()> {
     info!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
+    let download_file_hook = network_hooks.download_file_fn;
     let mut bytes = download_file_hook(url)?;
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {

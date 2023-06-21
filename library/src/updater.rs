@@ -220,7 +220,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
     // Consider supporting allowing the system to download for us (e.g. iOS).
-    download_to_path(&patch.download_url, &download_path)?;
+    download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
     // Should not pass config, rather should read necessary information earlier.
