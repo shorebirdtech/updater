@@ -8,6 +8,7 @@ use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
 use crate::UpdateError;
 use anyhow::Context;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(test))]
 use once_cell::sync::OnceCell;
@@ -26,89 +27,40 @@ const DEFAULT_BASE_URL: &'static str = "https://api.shorebird.dev";
 const DEFAULT_CHANNEL: &'static str = "stable";
 
 #[cfg(not(test))]
-fn global_config() -> &'static Mutex<ResolvedConfig> {
-    static INSTANCE: OnceCell<Mutex<ResolvedConfig>> = OnceCell::new();
-    INSTANCE.get_or_init(|| Mutex::new(ResolvedConfig::empty()))
+fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
+    static INSTANCE: OnceCell<Mutex<Option<UpdateConfig>>> = OnceCell::new();
+    INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
 #[cfg(test)]
-pub struct ThreadConfig {
-    resolved_config: ResolvedConfig,
-    pub patch_check_request_fn: Option<PatchCheckRequestFn>,
-    pub download_file_fn: Option<DownloadFileFn>,
-}
-
-// TODO(eseidel): The mocking for network feels wrong.  We currently compile
-// with different network functions during cfg(test) which in turn grab the
-// ThreadConfig to determine what test-provided stub they should call.  Better
-// would be to move the function pointers onto the ResolvedConfig struct and
-// then test functions can modify that rather than needing separate compile time
-// behavior.
-// I suspect I wrote it this way initially because Reqwest doesn't provide easy
-// ways to create fake Response objects, which may make choosing the right
-// injection layer difficult.  But it would be valid to just bottle these two
-// functions into a struct and set that on ResolvedConfig instead of passing
-// them here.
-// https://crates.io/crates/reqwest_mock or similar might help?
-#[cfg(test)]
-impl ThreadConfig {
-    fn empty() -> Self {
-        Self {
-            resolved_config: ResolvedConfig::empty(),
-            patch_check_request_fn: None,
-            download_file_fn: None,
-        }
-    }
-}
-
-#[cfg(test)]
-thread_local!(static THREAD_CONFIG: RefCell<ThreadConfig> = RefCell::new(ThreadConfig::empty()));
+thread_local!(static THREAD_CONFIG: RefCell<Option<UpdateConfig>> = RefCell::new(None));
 
 #[cfg(test)]
 /// Unit tests should call this to reset the config between tests.
 pub fn testing_reset_config() {
     THREAD_CONFIG.with(|thread_config| {
         let mut thread_config = thread_config.borrow_mut();
-        *thread_config = ThreadConfig::empty();
+        *thread_config = None;
     });
 }
 
-pub fn check_initialized_and_call<F, R>(f: F, config: &ResolvedConfig) -> anyhow::Result<R>
+pub fn check_initialized_and_call<F, R>(
+    f: F,
+    maybe_config: &Option<UpdateConfig>,
+) -> anyhow::Result<R>
 where
-    F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
+    F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
 {
-    if !config.is_initialized {
-        anyhow::bail!(UpdateError::ConfigNotInitialized);
+    match maybe_config {
+        Some(config) => f(&config),
+        None => anyhow::bail!(UpdateError::ConfigNotInitialized),
     }
-    return f(&config);
-}
-
-#[cfg(test)]
-pub fn with_thread_config<F, R>(f: F) -> anyhow::Result<R>
-where
-    F: FnOnce(&ThreadConfig) -> anyhow::Result<R>,
-{
-    THREAD_CONFIG.with(|thread_config| {
-        let thread_config = thread_config.borrow();
-        f(&thread_config)
-    })
-}
-
-#[cfg(test)]
-pub fn with_thread_config_mut<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut ThreadConfig) -> R,
-{
-    THREAD_CONFIG.with(|thread_config| {
-        let mut thread_config = thread_config.borrow_mut();
-        f(&mut thread_config)
-    })
 }
 
 #[cfg(not(test))]
 pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
-    F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
+    F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
 {
     // expect() here should be OK, it's job is to propagate a panic across
     // threads if the lock is poisoned.
@@ -121,21 +73,21 @@ where
 #[cfg(test)]
 pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
-    F: FnOnce(&ResolvedConfig) -> anyhow::Result<R>,
+    F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
 {
     // Rust unit tests run on multiple threads in parallel, so we use
     // a per-thread config when unit testing instead of a global config.
     // The global config code paths are covered by the integration tests.
     THREAD_CONFIG.with(|thread_config| {
         let thread_config = thread_config.borrow();
-        check_initialized_and_call(f, &thread_config.resolved_config)
+        check_initialized_and_call(f, &thread_config)
     })
 }
 
 #[cfg(not(test))]
 pub fn with_config_mut<F, R>(f: F) -> R
 where
-    F: FnOnce(&mut ResolvedConfig) -> R,
+    F: FnOnce(&mut Option<UpdateConfig>) -> R,
 {
     let mut lock = global_config()
         .lock()
@@ -146,70 +98,60 @@ where
 #[cfg(test)]
 pub fn with_config_mut<F, R>(f: F) -> R
 where
-    F: FnOnce(&mut ResolvedConfig) -> R,
+    F: FnOnce(&mut Option<UpdateConfig>) -> R,
 {
     THREAD_CONFIG.with(|thread_config| {
         let mut thread_config = thread_config.borrow_mut();
-        f(&mut thread_config.resolved_config)
+        f(&mut thread_config)
     })
 }
 
-#[derive(Debug)]
-pub struct ResolvedConfig {
-    // is_initialized could be Option<ResolvedConfig> with some refactoring.
-    is_initialized: bool,
-    pub cache_dir: String,
-    pub download_dir: String,
+// The config passed into init.  This is immutable once set and copyable.
+#[derive(Debug, Clone)]
+pub struct UpdateConfig {
+    pub cache_dir: PathBuf,
+    pub download_dir: PathBuf,
     pub channel: String,
     pub app_id: String,
     pub release_version: String,
-    pub original_libapp_paths: Vec<String>,
+    pub libapp_path: PathBuf,
     pub base_url: String,
 }
 
-impl ResolvedConfig {
-    pub fn empty() -> Self {
-        Self {
-            is_initialized: false,
-            cache_dir: String::new(),
-            download_dir: String::new(),
-            channel: String::new(),
-            app_id: String::new(),
-            release_version: String::new(),
-            original_libapp_paths: Vec::new(),
-            base_url: String::new(),
-        }
-    }
-}
-
-pub fn set_config(app_config: AppConfig, yaml: YamlConfig) -> anyhow::Result<()> {
+pub fn set_config(
+    app_config: AppConfig,
+    libapp_path: PathBuf,
+    yaml: YamlConfig,
+) -> anyhow::Result<()> {
     with_config_mut(|config| {
         // Tests currently call set_config() multiple times, so we can't check
         // this yet.
         // anyhow::ensure!(!lock.is_initialized, "Updater config can only be set once.");
 
-        config.base_url = yaml
-            .base_url
-            .as_deref()
-            .unwrap_or(DEFAULT_BASE_URL)
-            .to_owned();
-        config.channel = yaml
-            .channel
-            .as_deref()
-            .unwrap_or(DEFAULT_CHANNEL)
-            .to_owned();
-        config.cache_dir = app_config.cache_dir.to_string();
         let mut cache_path = std::path::PathBuf::from(app_config.cache_dir);
         cache_path.push("downloads");
-        config.download_dir = cache_path
-            .to_str()
-            .context("invalid cache path")?
-            .to_string();
-        config.app_id = yaml.app_id.to_string();
-        config.release_version = app_config.release_version.to_string();
-        config.original_libapp_paths = app_config.original_libapp_paths;
-        config.is_initialized = true;
+        let download_dir = cache_path;
+
+        let new_config = UpdateConfig {
+            cache_dir: std::path::PathBuf::from(app_config.cache_dir),
+            download_dir: download_dir,
+            channel: yaml
+                .channel
+                .as_deref()
+                .unwrap_or(DEFAULT_CHANNEL)
+                .to_owned(),
+            app_id: yaml.app_id.to_string(),
+            release_version: app_config.release_version.to_string(),
+            libapp_path,
+            base_url: yaml
+                .base_url
+                .as_deref()
+                .unwrap_or(DEFAULT_BASE_URL)
+                .to_owned(),
+        };
         info!("Updater configured with: {:?}", config);
+        *config = Some(new_config);
+
         Ok(())
     })
 }

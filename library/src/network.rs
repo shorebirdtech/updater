@@ -2,20 +2,18 @@
 // of the updater library.
 
 use serde::{Deserialize, Serialize};
+use sha2::digest::Update;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::string::ToString;
 
 use crate::cache::UpdaterState;
-use crate::config::{current_arch, current_platform, ResolvedConfig};
+use crate::config::{current_arch, current_platform, UpdateConfig};
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
 use std::println as info; // Workaround to use println! for logs.
-
-#[cfg(test)]
-use crate::config::{with_thread_config, with_thread_config_mut};
 
 fn patches_check_url(base_url: &str) -> String {
     return format!("{}/api/v1/patches/check", base_url);
@@ -118,7 +116,7 @@ pub struct PatchCheckResponse {
 }
 
 pub fn send_patch_check_request(
-    config: &ResolvedConfig,
+    config: &UpdateConfig,
     state: &UpdaterState,
 ) -> anyhow::Result<PatchCheckResponse> {
     let latest_patch_number = state.latest_patch_number();

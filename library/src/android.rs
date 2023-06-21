@@ -152,6 +152,26 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
     Ok(Cursor::new(buffer))
 }
 
+fn libapp_path_from_settings(original_libapp_paths: Vec<String>) -> anyhow::Result<PathBuf> {
+    // FIXME: This makes the assumption that the last path provided is the full
+    // path to the libapp.so file.  This is true for the current engine, but
+    // may not be true in the future.  Better would be for the engine to
+    // pass us the path to the base.apk.
+    // https://github.com/shorebirdtech/shorebird/issues/283
+    // This is where the paths are set today:
+    // First path is "libapp.so" (for dlopen), second is a full path:
+    // https://github.com/flutter/engine/blob/a7c9cc58a71c5850be0215ab1997db92cc5e8d3e/shell/platform/android/io/flutter/embedding/engine/loader/FlutterLoader.java#L264
+    // Which is composed from nativeLibraryDir:
+    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#nativeLibraryDir
+    let full_libapp_path = original_libapp_paths.last().context("No libapp paths")?;
+    // We could probably use sourceDir instead?
+    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#sourceDir
+    // and splitSourceDirs (api 21+)
+    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#splitSourceDirs
+    debug!("Finding apk from: {:?}", full_libapp_path);
+    app_data_dir_from_libapp_path(full_libapp_path)
+}
+
 // These are mostly stub tests to prevent warnings about unused fields.
 #[cfg(test)]
 mod tests {

@@ -148,7 +148,9 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
         || {
-            let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
+            let maybe_path = updater::next_boot_patch()?
+                .map(|p| p.path)
+                .map(|p| p.to_str().map(|s| s.to_owned()));
             to_c_string(maybe_path)
         },
         "fetching next_boot_patch_path",
@@ -427,5 +429,4 @@ mod test {
         // background update thread may be waiting a long time on a network
         // request.
     }
-
 }

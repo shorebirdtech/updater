@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 
 use crate::cache::{PatchInfo, UpdaterState};
-use crate::config::{set_config, with_config, ResolvedConfig};
+use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
 use crate::network::{download_to_path, send_patch_check_request};
 use crate::yaml::YamlConfig;
@@ -78,6 +78,21 @@ pub struct AppConfig {
     pub original_libapp_paths: Vec<String>,
 }
 
+// On Android we don't use a direct path to libapp.so, but rather a data dir
+// and a hard-coded name for the libapp file which we look up in the
+// split APKs in that datadir. On other platforms we just use a path.
+#[cfg(not(target_os = "android"))]
+fn libapp_path_from_settings(original_libapp_paths: Vec<String>) -> anyhow::Result<PathBuf> {
+    let first =
+        original_libapp_paths
+            .first()
+            .ok_or(anyhow::Error::from(UpdateError::InvalidArgument(
+                "original_libapp_paths".to_string(),
+                "empty".to_string(),
+            )));
+    first.map(|path| PathBuf::from(path))
+}
+
 /// Initialize the updater library.
 /// Takes a AppConfig struct and a yaml string.
 /// The yaml string is the contents of the shorebird.yaml file.
@@ -87,7 +102,10 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
     init_logging();
     let config = YamlConfig::from_yaml(&yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
-    set_config(app_config, config).map_err(|err| UpdateError::InvalidState(err.to_string()))
+
+    let libapp_path = libapp_path_from_settings(app_config.original_libapp_paths)?;
+    set_config(app_config, libapp_path, config)
+        .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
 /// Synchronously checks for an update and returns true if an update is available.
@@ -131,41 +149,19 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
 // And also avoid (for now) dealing with inflating patches on iOS.
 #[cfg(any(target_os = "android", test))]
 fn prepare_for_install(
-    config: &ResolvedConfig,
+    config: &UpdateConfig,
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    use crate::android::{app_data_dir_from_libapp_path, open_base_lib};
-
-    // FIXME: This makes the assumption that the last path provided is the full
-    // path to the libapp.so file.  This is true for the current engine, but
-    // may not be true in the future.  Better would be for the engine to
-    // pass us the path to the base.apk.
-    // https://github.com/shorebirdtech/shorebird/issues/283
-    // This is where the paths are set today:
-    // First path is "libapp.so" (for dlopen), second is a full path:
-    // https://github.com/flutter/engine/blob/a7c9cc58a71c5850be0215ab1997db92cc5e8d3e/shell/platform/android/io/flutter/embedding/engine/loader/FlutterLoader.java#L264
-    // Which is composed from nativeLibraryDir:
-    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#nativeLibraryDir
-    let full_libapp_path = config
-        .original_libapp_paths
-        .last()
-        .context("No libapp paths")?;
-    // We could probably use sourceDir instead?
-    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#sourceDir
-    // and splitSourceDirs (api 21+)
-    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#splitSourceDirs
-    debug!("Finding apk from: {:?}", full_libapp_path);
-    let app_dir = app_data_dir_from_libapp_path(full_libapp_path)?;
+    let app_dir = config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
     let base_r = open_base_lib(&app_dir, "libapp.so")?;
-
     inflate(&download_path, base_r, &output_path)
 }
 
 #[cfg(not(any(target_os = "android", test)))]
 fn prepare_for_install(
-    _config: &ResolvedConfig,
+    _config: &UpdateConfig,
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
@@ -174,9 +170,38 @@ fn prepare_for_install(
     Ok(())
 }
 
-// Run the update logic with the resolved config.
-fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
+// Just enough state for one update check, copied out of ResolveConfig to
+// avoid holding the lock while we do network requests.
+struct UpdateConfig {
+    cache_dir: String,
+    download_dir: String,
+    release_version: String,
+}
 
+fn get_update_config() -> anyhow::Result<UpdateConfig> {
+    with_config(|config| Ok(UpdateConfig {}))
+}
+
+/// Synchronously checks for an update and downloads and installs it if available.
+pub fn update() -> anyhow::Result<UpdateStatus> {
+    // Only one copy of Update can be running at a time.
+    // Update will take the global Updater lock.
+    // Update will need to take the Config lock at times, but will only
+    // do so as long as is needed to read from the config and will not
+    // hold the config lock across network requests.
+    // Steps:
+    // Checks Update lock, if held, return error, otherwise takes lock for
+    // entire duration of update.
+    // Loads state from disk (holds Config lock while reading).
+    // Uses current update information to build request and send to server.
+    // If update is not available, returns.
+    // Update is avaiable, so uses returned information to download update.
+    // Downloads update to a temporary location.
+    // Checks hash of downloaded file.
+    // Takes Config lock and installs patch.
+    // Saves state to disk (holds Config lock while writing).
+
+    let config = get_update_config()?;
 
     // Load the state from disk.
     let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
@@ -336,19 +361,10 @@ pub fn report_launch_success() -> anyhow::Result<()> {
     })
 }
 
-/// Synchronously checks for an update and downloads and installs it if available.
-pub fn update() -> anyhow::Result<UpdateStatus> {
-    // update_internal is used to share logic with the updater thread
-    update_internal()
-}
-
 /// This does not return status.  The only output is the change to the saved
 /// cache. The Engine calls this during boot and it will check for an update
 /// and install it if available.
 pub fn start_update_thread() {
-    // This holds the lock on the config for the entire duration of the update
-    // call which is wrong. We should be able to release the lock during the
-    // network requests.
     std::thread::spawn(move || {
         let status = update().unwrap_or(UpdateStatus::UpdateHadError);
         info!("Update thread finished with status: {}", status);
