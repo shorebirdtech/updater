@@ -116,21 +116,34 @@ pub extern "C" fn shorebird_init(
     )
 }
 
-/// Return the active patch number, or NULL if there is no active patch.
+/// The currently running patch number, or 0 if the release has not been
+/// patched.
 #[no_mangle]
-pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
+pub extern "C" fn shorebird_current_boot_patch_number() -> usize {
     log_on_error(
         || {
-            let maybe_patch_number = updater::next_boot_patch()?.map(|p| p.number.to_string());
-            to_c_string(maybe_patch_number)
+            Ok(updater::current_boot_patch()?
+                .map(|p| p.number)
+                .unwrap_or(0))
         },
         "fetching next_boot_patch_number",
-        std::ptr::null_mut(),
+        0,
     )
 }
 
-/// Return the path to the active patch for the app, or NULL if there is no
-/// active patch.
+/// The patch number that will boot on the next run of the app, or 0 if there is
+/// no next patch.
+#[no_mangle]
+pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
+    log_on_error(
+        || Ok(updater::next_boot_patch()?.map(|p| p.number).unwrap_or(0)),
+        "fetching next_boot_patch_number",
+        0,
+    )
+}
+
+/// The path to the patch that will boot on the next run of the app, or NULL if
+/// there is no next patch.
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
@@ -177,8 +190,9 @@ pub extern "C" fn shorebird_start_update_thread() {
 }
 
 /// Tell the updater that we're launching from what it told us was the
-/// next patch to boot from.  This will copy the next_boot patch to be
-/// the current_boot patch.
+/// next patch to boot from. This will copy the next_boot patch to be the
+/// current_boot patch.
+///
 /// It is required to call this function before calling
 /// shorebird_report_launch_success or shorebird_report_launch_failure.
 #[no_mangle]
@@ -202,6 +216,7 @@ pub extern "C" fn shorebird_report_launch_failure() {
 /// as having been launched successfully.  We don't currently do anything
 /// with this information, but it could be used to record a point at which
 /// we will not roll back from.
+///
 /// This is not currently wired up to be called from the Engine.  It's unclear
 /// where best to connect it.  Expo waits 5 seconds after the app launches
 /// and then marks the launch as successful.  We could do something similar.
@@ -323,9 +338,9 @@ mod test {
         free_c_string(c_yaml);
         free_parameters(c_params);
 
-        // Number and path are empty (but do not crash) when we have an
+        // Number is 0 and path is empty (but do not crash) when we have an
         // empty cache and update has not been called.
-        assert_eq!(shorebird_next_boot_patch_number(), null_mut());
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_path(), null_mut());
 
         // Similarly we can report launches with no patch without crashing.
@@ -389,8 +404,8 @@ mod test {
         );
         shorebird_update();
 
-        let version = to_rust(shorebird_next_boot_patch_number()).unwrap();
-        assert!(version.eq("1"));
+        let version = shorebird_next_boot_patch_number();
+        assert_eq!(version, 1);
 
         // Read path contents into memory and check against expected.
         let path = to_rust(shorebird_next_boot_patch_path()).unwrap();
