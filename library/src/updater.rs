@@ -29,7 +29,6 @@ pub use crate::network::{
 pub enum UpdateStatus {
     NoUpdate,
     UpdateAvailable,
-    UpdateDownloaded,
     UpdateInstalled,
     UpdateHadError,
 }
@@ -39,7 +38,6 @@ impl Display for UpdateStatus {
         match self {
             UpdateStatus::NoUpdate => write!(f, "No update"),
             UpdateStatus::UpdateAvailable => write!(f, "Update available"),
-            UpdateStatus::UpdateDownloaded => write!(f, "Update downloaded"),
             UpdateStatus::UpdateInstalled => write!(f, "Update installed"),
             UpdateStatus::UpdateHadError => write!(f, "Update had error"),
         }
