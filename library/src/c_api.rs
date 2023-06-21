@@ -6,6 +6,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::path::PathBuf;
 
 use crate::updater;
 
@@ -45,14 +46,6 @@ fn to_rust(c_string: *const libc::c_char) -> anyhow::Result<String> {
 fn allocate_c_string(rust_string: &str) -> anyhow::Result<*mut c_char> {
     let c_str = CString::new(rust_string)?;
     Ok(c_str.into_raw())
-}
-
-/// Converts a Rust string to a C string, caller must free the C string.
-fn to_c_string(maybe_string: Option<String>) -> anyhow::Result<*mut c_char> {
-    Ok(match maybe_string {
-        Some(v) => allocate_c_string(&v)?,
-        None => std::ptr::null_mut(),
-    })
 }
 
 fn to_rust_vector(
@@ -142,16 +135,21 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
     )
 }
 
+fn path_to_c_string(path: Option<PathBuf>) -> anyhow::Result<*mut c_char> {
+    Ok(match path {
+        Some(v) => allocate_c_string(v.to_str().unwrap())?,
+        None => std::ptr::null_mut(),
+    })
+}
+
 /// The path to the patch that will boot on the next run of the app, or NULL if
 /// there is no next patch.
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
         || {
-            let maybe_path = updater::next_boot_patch()?
-                .map(|p| p.path)
-                .map(|p| p.to_str().map(|s| s.to_owned()));
-            to_c_string(maybe_path)
+            let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
+            path_to_c_string(maybe_path)
         },
         "fetching next_boot_patch_path",
         std::ptr::null_mut(),

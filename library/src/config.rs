@@ -1,14 +1,12 @@
 // This file handles the global config for the updater library.
-#[cfg(test)]
-use crate::network::{DownloadFileFn, PatchCheckRequestFn};
+use crate::network::NetworkHooks;
 #[cfg(test)]
 use std::cell::RefCell;
 
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
 use crate::UpdateError;
-use anyhow::Context;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(not(test))]
 use once_cell::sync::OnceCell;
@@ -116,19 +114,21 @@ pub struct UpdateConfig {
     pub release_version: String,
     pub libapp_path: PathBuf,
     pub base_url: String,
+    pub network_hooks: NetworkHooks,
 }
 
 pub fn set_config(
     app_config: AppConfig,
     libapp_path: PathBuf,
     yaml: YamlConfig,
+    network_hooks: NetworkHooks,
 ) -> anyhow::Result<()> {
     with_config_mut(|config| {
         // Tests currently call set_config() multiple times, so we can't check
         // this yet.
         // anyhow::ensure!(!lock.is_initialized, "Updater config can only be set once.");
 
-        let mut cache_path = std::path::PathBuf::from(app_config.cache_dir);
+        let mut cache_path = std::path::PathBuf::from(&app_config.cache_dir);
         cache_path.push("downloads");
         let download_dir = cache_path;
 
@@ -148,6 +148,7 @@ pub fn set_config(
                 .as_deref()
                 .unwrap_or(DEFAULT_BASE_URL)
                 .to_owned(),
+            network_hooks,
         };
         info!("Updater configured with: {:?}", config);
         *config = Some(new_config);

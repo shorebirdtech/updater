@@ -2,7 +2,6 @@
 // of the updater library.
 
 use serde::{Deserialize, Serialize};
-use sha2::digest::Update;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -19,11 +18,34 @@ fn patches_check_url(base_url: &str) -> String {
     return format!("{}/api/v1/patches/check", base_url);
 }
 
-#[cfg(test)]
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
+pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
 
-#[cfg(not(test))]
-fn patch_check_request_hook(
+#[derive(Clone)]
+pub struct NetworkHooks {
+    pub patch_check_request_fn: PatchCheckRequestFn,
+    pub download_file_fn: DownloadFileFn,
+}
+
+impl core::fmt::Debug for NetworkHooks {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkHooks")
+            .field("patch_check_request_fn", &"<fn>")
+            .field("download_file_fn", &"<fn>")
+            .finish()
+    }
+}
+
+impl Default for NetworkHooks {
+    fn default() -> Self {
+        Self {
+            patch_check_request_fn: patch_check_request_hook,
+            download_file_fn: download_file_hook,
+        }
+    }
+}
+
+pub fn patch_check_request_hook(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
@@ -32,37 +54,12 @@ fn patch_check_request_hook(
     Ok(response)
 }
 
-#[cfg(test)]
-fn patch_check_request_hook(
-    url: &str,
-    request: PatchCheckRequest,
-) -> anyhow::Result<PatchCheckResponse> {
-    with_thread_config(|config| {
-        let patch_check_request_fn = config
-            .patch_check_request_fn
-            .unwrap_or(patch_check_request_hook);
-        patch_check_request_fn(url, request)
-    })
-}
-
-#[cfg(test)]
-pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
-
-#[cfg(not(test))]
 // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
-fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
+pub fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
     let client = reqwest::blocking::Client::new();
     let response = client.get(url).send()?;
     let bytes = response.bytes()?;
     Ok(bytes.to_vec())
-}
-
-#[cfg(test)]
-fn download_file_hook(url: &str) -> anyhow::Result<Vec<u8>> {
-    with_thread_config(|config| {
-        let download_file_fn = config.download_file_fn.unwrap_or(download_file_hook);
-        download_file_fn(url)
-    })
 }
 
 #[cfg(test)]
@@ -71,9 +68,16 @@ pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_file_fn: DownloadFileFn,
 ) {
-    with_thread_config_mut(|thread_config| {
-        thread_config.patch_check_request_fn = Some(patch_check_request_fn);
-        thread_config.download_file_fn = Some(download_file_fn);
+    crate::config::with_config_mut(|maybe_config| match maybe_config {
+        Some(config) => {
+            config.network_hooks = NetworkHooks {
+                patch_check_request_fn,
+                download_file_fn,
+            };
+        }
+        None => {
+            panic!("testing_set_network_hooks called before config was initialized");
+        }
     });
 }
 

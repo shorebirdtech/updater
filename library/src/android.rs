@@ -152,6 +152,7 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
     Ok(Cursor::new(buffer))
 }
 
+#[cfg(target_os = "android")]
 fn libapp_path_from_settings(original_libapp_paths: Vec<String>) -> anyhow::Result<PathBuf> {
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but

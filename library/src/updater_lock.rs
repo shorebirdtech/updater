@@ -1,3 +1,5 @@
+use crate::updater::UpdateError;
+
 // This file's job is to handle the boiler plate around locking for the
 // updater thread.
 // We should be able to share more of this code with similar boilerplate around
@@ -25,8 +27,17 @@ where
     // Unlike our ResolveConfig lock, our UpdaterThread lock does not wait
     // if an updater thread is already running. We use try_lock instead
     // of lock to error out immediately.
-    let lock = updater_lock().try_lock()?;
-    f(&lock)
+    let lock = updater_lock().try_lock();
+    match lock {
+        Ok(lock) => f(&lock),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            anyhow::bail!(UpdateError::UpdateAlreadyInProgress)
+        }
+        // This should never happen. Poisoning only happens if a thread panics
+        // while holding the lock, and we never allow the updater thread to
+        // panic.
+        Err(std::sync::TryLockError::Poisoned(e)) => panic!("Updater lock poisoned: {:?}", e),
+    }
 }
 
 #[derive(Debug)]

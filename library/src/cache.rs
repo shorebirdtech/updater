@@ -159,13 +159,10 @@ impl UpdaterState {
         let slot = &self.slots[index];
         // to_str only ever fails if the path is invalid utf8, which should
         // never happen, but this way we don't crash if it is.
-        match self.patch_path_for_index(index).to_str() {
-            None => None,
-            Some(path) => Some(PatchInfo {
-                path: path.to_owned(),
-                number: slot.patch_number,
-            }),
-        }
+        Some(PatchInfo {
+            path: self.patch_path_for_index(index),
+            number: slot.patch_number,
+        })
     }
 
     /// This is the current patch that is running.
@@ -401,7 +398,6 @@ impl UpdaterState {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use tempdir::TempDir;
 
     use crate::cache::{PatchInfo, UpdaterState};
@@ -414,10 +410,7 @@ mod tests {
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
         let path = tmp_dir.path().join(format!("patch_{}", number));
         std::fs::write(&path, "fake patch").unwrap();
-        PatchInfo {
-            number,
-            path: path.to_str().unwrap().to_owned(),
-        }
+        PatchInfo { number, path }
     }
 
     #[test]

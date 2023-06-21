@@ -11,7 +11,10 @@ use anyhow::Context;
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
-use crate::network::{download_to_path, send_patch_check_request};
+use crate::network::{
+    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
+};
+use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
@@ -51,6 +54,7 @@ pub enum UpdateError {
     BadServerResponse,
     FailedToSaveState,
     ConfigNotInitialized,
+    UpdateAlreadyInProgress,
 }
 
 impl std::error::Error for UpdateError {}
@@ -65,6 +69,9 @@ impl Display for UpdateError {
             UpdateError::FailedToSaveState => write!(f, "Failed to save state"),
             UpdateError::BadServerResponse => write!(f, "Bad server response"),
             UpdateError::ConfigNotInitialized => write!(f, "Config not initialized"),
+            UpdateError::UpdateAlreadyInProgress => {
+                write!(f, "Update already in progress")
+            }
         }
     }
 }
@@ -82,14 +89,13 @@ pub struct AppConfig {
 // and a hard-coded name for the libapp file which we look up in the
 // split APKs in that datadir. On other platforms we just use a path.
 #[cfg(not(target_os = "android"))]
-fn libapp_path_from_settings(original_libapp_paths: Vec<String>) -> anyhow::Result<PathBuf> {
-    let first =
-        original_libapp_paths
-            .first()
-            .ok_or(anyhow::Error::from(UpdateError::InvalidArgument(
-                "original_libapp_paths".to_string(),
-                "empty".to_string(),
-            )));
+fn libapp_path_from_settings(original_libapp_paths: &Vec<String>) -> Result<PathBuf, UpdateError> {
+    let first = original_libapp_paths
+        .first()
+        .ok_or(UpdateError::InvalidArgument(
+            "original_libapp_paths".to_string(),
+            "empty".to_string(),
+        ));
     first.map(|path| PathBuf::from(path))
 }
 
@@ -103,19 +109,23 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
     let config = YamlConfig::from_yaml(&yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
-    let libapp_path = libapp_path_from_settings(app_config.original_libapp_paths)?;
-    set_config(app_config, libapp_path, config)
+    let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
+    set_config(app_config, libapp_path, config, NetworkHooks::default())
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
-/// Synchronously checks for an update and returns true if an update is available.
-pub fn check_for_update() -> anyhow::Result<bool> {
+fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     with_config(|config| {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        send_patch_check_request(&config, &state).map(|res| res.patch_available)
+        send_patch_check_request(&config, &state)
     })
+}
+
+/// Synchronously checks for an update and returns true if an update is available.
+pub fn check_for_update() -> anyhow::Result<bool> {
+    check_for_update_internal().map(|res| res.patch_available)
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
@@ -153,9 +163,10 @@ fn prepare_for_install(
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    let app_dir = config.libapp_path;
+    // We abuse libapp_path to actually be the path to the data dir for now.
+    let app_dir = &config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
-    let base_r = open_base_lib(&app_dir, "libapp.so")?;
+    let base_r = crate::android::open_base_lib(&app_dir, "libapp.so")?;
     inflate(&download_path, base_r, &output_path)
 }
 
@@ -170,20 +181,13 @@ fn prepare_for_install(
     Ok(())
 }
 
-// Just enough state for one update check, copied out of ResolveConfig to
-// avoid holding the lock while we do network requests.
-struct UpdateConfig {
-    cache_dir: String,
-    download_dir: String,
-    release_version: String,
+fn copy_update_config() -> anyhow::Result<UpdateConfig> {
+    with_config(|config| Ok(config.clone()))
 }
 
-fn get_update_config() -> anyhow::Result<UpdateConfig> {
-    with_config(|config| Ok(UpdateConfig {}))
-}
-
-/// Synchronously checks for an update and downloads and installs it if available.
-pub fn update() -> anyhow::Result<UpdateStatus> {
+// Callers must possess the Updater lock, but we don't care about the contents
+// since they're empty.
+fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Only one copy of Update can be running at a time.
     // Update will take the global Updater lock.
     // Update will need to take the Config lock at times, but will only
@@ -201,7 +205,7 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
     // Takes Config lock and installs patch.
     // Saves state to disk (holds Config lock while writing).
 
-    let config = get_update_config()?;
+    let config = copy_update_config()?;
 
     // Load the state from disk.
     let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
@@ -220,7 +224,7 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
 
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
     // Should not pass config, rather should read necessary information earlier.
-    prepare_for_install(config, &download_path, &output_path)?;
+    prepare_for_install(&config, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
     let hash_ok = check_hash(&output_path, &patch.hash)?;
@@ -229,10 +233,7 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
     }
 
     let patch_info = PatchInfo {
-        path: output_path
-            .to_str()
-            .context("invalid output path")?
-            .to_string(),
+        path: output_path,
         number: patch.number,
     };
     // Move/state update should be "atomic" (it isn't today).
@@ -242,6 +243,11 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
     // we now have a different "next" version of the app from the current
     // booted version (patched or not).
     return Ok(UpdateStatus::UpdateInstalled);
+}
+
+/// Synchronously checks for an update and downloads and installs it if available.
+pub fn update() -> anyhow::Result<UpdateStatus> {
+    with_updater_thread_lock(update_internal)
 }
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
@@ -411,7 +417,7 @@ mod tests {
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             state
                 .install_patch(PatchInfo {
-                    path: artifact_path.to_str().unwrap().to_string(),
+                    path: artifact_path,
                     number: 1,
                 })
                 .expect("move failed");
