@@ -38,6 +38,18 @@ pub struct ThreadConfig {
     pub download_file_fn: Option<DownloadFileFn>,
 }
 
+// TODO(eseidel): The mocking for network feels wrong.  We currently compile
+// with different network functions during cfg(test) which in turn grab the
+// ThreadConfig to determine what test-provided stub they should call.  Better
+// would be to move the function pointers onto the ResolvedConfig struct and
+// then test functions can modify that rather than needing separate compile time
+// behavior.
+// I suspect I wrote it this way initially because Reqwest doesn't provide easy
+// ways to create fake Response objects, which may make choosing the right
+// injection layer difficult.  But it would be valid to just bottle these two
+// functions into a struct and set that on ResolvedConfig instead of passing
+// them here.
+// https://crates.io/crates/reqwest_mock or similar might help?
 #[cfg(test)]
 impl ThreadConfig {
     fn empty() -> Self {

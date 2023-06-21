@@ -412,4 +412,20 @@ mod test {
         let new = std::fs::read_to_string(path).unwrap();
         assert_eq!(new, expected_new);
     }
+
+    #[test]
+    fn init_twice() {
+        // It should only be possible to init once per process.
+        // Successive calls should log a warning, but not hang or crash.
+        // This may be difficult to test because in unit tests we use a
+        // thread_local to reset the config between tests.
+    }
+
+    #[test]
+    fn usage_during_hung_update() {
+        // It should be possible to call into shorebird, even when an
+        // background update thread may be waiting a long time on a network
+        // request.
+    }
+
 }

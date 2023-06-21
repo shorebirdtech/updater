@@ -176,6 +176,8 @@ fn prepare_for_install(
 
 // Run the update logic with the resolved config.
 fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
+
+
     // Load the state from disk.
     let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
     // Check for update.
@@ -192,6 +194,7 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     download_to_path(&patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
+    // Should not pass config, rather should read necessary information earlier.
     prepare_for_install(config, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
@@ -335,7 +338,8 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
 /// Synchronously checks for an update and downloads and installs it if available.
 pub fn update() -> anyhow::Result<UpdateStatus> {
-    with_config(|config| update_internal(&config))
+    // update_internal is used to share logic with the updater thread
+    update_internal()
 }
 
 /// This does not return status.  The only output is the change to the saved
