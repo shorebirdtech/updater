@@ -24,6 +24,7 @@ pub fn with_updater_thread_lock<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&UpdaterLockState) -> anyhow::Result<R>,
 {
+    println!("Waiting for updater thread lock");
     // Unlike our ResolveConfig lock, our UpdaterThread lock does not wait
     // if an updater thread is already running. We use try_lock instead
     // of lock to error out immediately.

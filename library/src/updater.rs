@@ -186,12 +186,13 @@ fn prepare_for_install(
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
-    with_config(|config| Ok(config.clone()))
+    with_config(|config: &UpdateConfig| Ok(config.clone()))
 }
 
 // Callers must possess the Updater lock, but we don't care about the contents
 // since they're empty.
 fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
+    println!("update_internal");
     // Only one copy of Update can be running at a time.
     // Update will take the global Updater lock.
     // Update will need to take the Config lock at times, but will only

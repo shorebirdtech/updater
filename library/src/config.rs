@@ -124,9 +124,7 @@ pub fn set_config(
     network_hooks: NetworkHooks,
 ) -> anyhow::Result<()> {
     with_config_mut(|config| {
-        // Tests currently call set_config() multiple times, so we can't check
-        // this yet.
-        // anyhow::ensure!(!lock.is_initialized, "Updater config can only be set once.");
+        anyhow::ensure!(config.is_none(), "shorebird_init has already been called.");
 
         let mut cache_path = std::path::PathBuf::from(&app_config.cache_dir);
         cache_path.push("downloads");

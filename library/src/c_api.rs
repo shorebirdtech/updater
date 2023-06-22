@@ -322,7 +322,7 @@ mod test {
     fn init_with_bad_yaml() {
         testing_reset_config();
         let tmp_dir = TempDir::new("example").unwrap();
-        let c_params = parameters(&tmp_dir, "libapp.so");
+        let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         let c_yaml = c_string("bad yaml");
         assert_eq!(shorebird_init(&c_params, c_yaml), false);
         free_c_string(c_yaml);
@@ -419,8 +419,27 @@ mod test {
     fn init_twice() {
         // It should only be possible to init once per process.
         // Successive calls should log a warning, but not hang or crash.
-        // This may be difficult to test because in unit tests we use a
-        // thread_local to reset the config between tests.
+        // This is slightly different as a unit test because we use a
+        // thread local for the storage, but it should test the same idea.
+
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/libapp.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: foo");
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/libapp.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: bar");
+        assert_eq!(shorebird_init(&c_params, c_yaml), false);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
     }
 
     #[test]
@@ -428,5 +447,53 @@ mod test {
         // It should be possible to call into shorebird, even when an
         // background update thread may be waiting a long time on a network
         // request.
+
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/libapp.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: foo");
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        use std::sync::Mutex;
+        static CALLBACK_MUTEX: Mutex<u32> = Mutex::new(0);
+
+        // set up the network hooks to return a patch.
+        testing_set_network_hooks(
+            |_url: &str, _request| {
+                // Hang until we have the lock.
+                let lock = CALLBACK_MUTEX.lock().unwrap();
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: "ignored".to_owned(),
+                        download_url: "ignored".to_owned(),
+                    }),
+                })
+            },
+            |_url| {
+                // Never called.
+                Ok(Vec::new())
+            },
+        );
+        {
+            // Lock the mutex before starting the thread.
+            let lock = CALLBACK_MUTEX.lock().unwrap();
+            // Start our thread, which should hang on that lock.
+            shorebird_start_update_thread();
+            // Wait for the thread to start.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            println!("Second update");
+            assert!(updater::update().is_err());
+        }
+        // Unlock the lock, and wait for the thread to finish.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Now we should be able to call into shorebird again.
+        // assert!(updater::update().is_ok());
     }
 }
