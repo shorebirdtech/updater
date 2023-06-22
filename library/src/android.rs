@@ -5,12 +5,17 @@ use std::path::{Path, PathBuf};
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
+use std::println as debug;
 
-pub(crate) fn app_data_dir_from_libapp_path(libapp_path: &str) -> anyhow::Result<PathBuf> {
+use crate::UpdateError; // Workaround to use println! for logs.
+
+fn app_data_dir_from_libapp_path(libapp_path: &str) -> Result<PathBuf, UpdateError> {
     // "/data/app/~~7LtReIkm5snW_oXeDoJ5TQ==/com.example.shorebird_test-rpkDZSLBRv2jWcc1gQpwdg==/lib/x86_64/libapp.so"
     let path = PathBuf::from(libapp_path);
-    let root = path.ancestors().nth(3).context("Invalid libapp path")?;
+    let root = path.ancestors().nth(3).ok_or(UpdateError::InvalidArgument(
+        "original_libapp_paths".to_string(),
+        format!("Invalid path: {}", libapp_path),
+    ))?;
     Ok(PathBuf::from(root))
 }
 
@@ -152,8 +157,9 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
     Ok(Cursor::new(buffer))
 }
 
-#[cfg(target_os = "android")]
-fn libapp_path_from_settings(original_libapp_paths: Vec<String>) -> anyhow::Result<PathBuf> {
+pub fn libapp_path_from_settings(
+    original_libapp_paths: &Vec<String>,
+) -> Result<PathBuf, UpdateError> {
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but
     // may not be true in the future.  Better would be for the engine to
@@ -164,7 +170,12 @@ fn libapp_path_from_settings(original_libapp_paths: Vec<String>) -> anyhow::Resu
     // https://github.com/flutter/engine/blob/a7c9cc58a71c5850be0215ab1997db92cc5e8d3e/shell/platform/android/io/flutter/embedding/engine/loader/FlutterLoader.java#L264
     // Which is composed from nativeLibraryDir:
     // https://developer.android.com/reference/android/content/pm/ApplicationInfo#nativeLibraryDir
-    let full_libapp_path = original_libapp_paths.last().context("No libapp paths")?;
+    let full_libapp_path = original_libapp_paths
+        .last()
+        .ok_or(UpdateError::InvalidArgument(
+            "original_libapp_paths".to_string(),
+            "empty".to_string(),
+        ))?;
     // We could probably use sourceDir instead?
     // https://developer.android.com/reference/android/content/pm/ApplicationInfo#sourceDir
     // and splitSourceDirs (api 21+)

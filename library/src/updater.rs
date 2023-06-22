@@ -88,7 +88,7 @@ pub struct AppConfig {
 // On Android we don't use a direct path to libapp.so, but rather a data dir
 // and a hard-coded name for the libapp file which we look up in the
 // split APKs in that datadir. On other platforms we just use a path.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", test)))]
 fn libapp_path_from_settings(original_libapp_paths: &Vec<String>) -> Result<PathBuf, UpdateError> {
     let first = original_libapp_paths
         .first()
@@ -105,11 +105,15 @@ fn libapp_path_from_settings(original_libapp_paths: &Vec<String>) -> Result<Path
 /// The AppConfig struct is information about the running app and where
 /// the updater should keep its cache.
 pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
+    #[cfg(any(target_os = "android", test))]
+    use crate::android::libapp_path_from_settings;
+
     init_logging();
     let config = YamlConfig::from_yaml(&yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
+    info!("libapp_path: {:?}", libapp_path);
     set_config(app_config, libapp_path, config, NetworkHooks::default())
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
