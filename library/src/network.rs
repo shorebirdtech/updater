@@ -218,4 +218,34 @@ mod tests {
         assert_eq!(patch.download_url, "https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode");
         assert_eq!(patch.hash, "#");
     }
+
+    // This confirms that the default network hooks throw an error in cfg(test).
+    // In cfg(not(test)) they should be set to the default implementation
+    // which makes real network calls.
+    #[test]
+    fn default_network_hooks_throws() {
+        let network_hooks = super::NetworkHooks::default();
+        let result = (network_hooks.patch_check_request_fn)(
+            "",
+            super::PatchCheckRequest {
+                app_id: "".to_string(),
+                channel: "".to_string(),
+                release_version: "".to_string(),
+                patch_number: None,
+                platform: "".to_string(),
+                arch: "".to_string(),
+            },
+        );
+        assert!(result.is_err());
+        let result = (network_hooks.download_file_fn)("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn network_hooks_debug() {
+        let network_hooks = super::NetworkHooks::default();
+        let debug = format!("{:?}", network_hooks);
+        assert!(debug.contains("patch_check_request_fn"));
+        assert!(debug.contains("download_file_fn"));
+    }
 }
