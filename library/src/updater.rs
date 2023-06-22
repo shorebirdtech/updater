@@ -168,6 +168,8 @@ fn prepare_for_install(
     output_path: &Path,
 ) -> anyhow::Result<()> {
     // We abuse libapp_path to actually be the path to the data dir for now.
+    // This is an abuse because the variable name is libapp_path, but
+    // we're making it point to a the app_data directory instead.
     let app_dir = &config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
     let base_r = crate::android::open_base_lib(&app_dir, "libapp.so")?;
@@ -203,7 +205,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Loads state from disk (holds Config lock while reading).
     // Uses current update information to build request and send to server.
     // If update is not available, returns.
-    // Update is avaiable, so uses returned information to download update.
+    // Update is available, so uses returned information to download update.
     // Downloads update to a temporary location.
     // Checks hash of downloaded file.
     // Takes Config lock and installs patch.

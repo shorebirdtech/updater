@@ -423,6 +423,14 @@ mod test {
 
     #[serial]
     #[test]
+    fn forgot_init() {
+        testing_reset_config();
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
+        assert_eq!(shorebird_next_boot_patch_path(), null_mut());
+    }
+
+    #[serial]
+    #[test]
     fn init_twice() {
         // It should only be possible to init once per process.
         // Successive calls should log a warning, but not hang or crash.

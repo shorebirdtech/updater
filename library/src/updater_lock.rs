@@ -1,10 +1,13 @@
 use crate::updater::UpdateError;
 
-// This file's job is to handle the boiler plate around locking for the
+// This file's job is to handle the boilerplate around locking for the
 // updater thread.
-// We should be able to share more of this code with similar boilerplate around
-// the ResolveConfig global lock with a little refactoring.
-
+// We lock because it doesn't make a lot of sense to ask for multiple updates
+// at once.  We have a *separate* lock from UpdateConfig because we want to
+// only guard against multiple updates at once, not against multiple threads
+// trying to read the config at once.  We also want to allow multiple threads
+// to read the config at once while an update is running.
+// We could share code with config.rs which does similar for UpdateConfig.
 fn updater_lock() -> &'static std::sync::Mutex<UpdaterLockState> {
     use once_cell::sync::OnceCell;
     use std::sync::Mutex;
@@ -13,18 +16,18 @@ fn updater_lock() -> &'static std::sync::Mutex<UpdaterLockState> {
 }
 
 // Note: it is not OK to ever ask for the Updater lock *while* holding the
-// ResolveConfig lock because the updater thread *will* block on getting the
-// ResolveConfig lock while holding the Updater lock.  Allowing the inverse
+// UpdateConfig lock because the updater thread *will* block on getting the
+// UpdateConfig lock while holding the Updater lock.  Allowing the inverse
 // could cause a deadlock.  We could add a check for that here by doing a
-// tryLock on the ResolveConfig lock and erroring out if we can't get it, but
+// tryLock on the UpdateConfig lock and erroring out if we can't get it, but
 // that would probably have false postives since it is OK for some other call to
-// be holding the ResolveConfig lock while another thread asks for the Updater
+// be holding the UpdateConfig lock while another thread asks for the Updater
 // lock.
 pub fn with_updater_thread_lock<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&UpdaterLockState) -> anyhow::Result<R>,
 {
-    // Unlike our ResolveConfig lock, our UpdaterThread lock does not wait
+    // Unlike our UpdateConfig lock, our UpdaterThread lock does not wait
     // if an updater thread is already running. We use try_lock instead
     // of lock to error out immediately.
     let lock = updater_lock().try_lock();

@@ -21,12 +21,16 @@ fn patches_check_url(base_url: &str) -> String {
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
 
+/// A container for network clalbacks which can be mocked out for testing.
 #[derive(Clone)]
 pub struct NetworkHooks {
+    /// The function to call to send a patch check request.
     pub patch_check_request_fn: PatchCheckRequestFn,
+    /// The function to call to download a file.
     pub download_file_fn: DownloadFileFn,
 }
 
+// We have to implement Debug by hand since fn types don't implement it.
 impl core::fmt::Debug for NetworkHooks {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkHooks")
@@ -54,11 +58,11 @@ pub fn patch_check_request_default(
     Ok(response)
 }
 
-// Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
 pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     let client = reqwest::blocking::Client::new();
     let response = client.get(url).send()?;
     let bytes = response.bytes()?;
+    // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
     Ok(bytes.to_vec())
 }
 
