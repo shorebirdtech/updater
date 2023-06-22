@@ -21,7 +21,7 @@ use std::{println as info, println as warn}; // Workaround to use println! for l
 /// The public interace for talking about patches to the Cache.
 #[derive(PartialEq, Debug)]
 pub struct PatchInfo {
-    pub path: String,
+    pub path: PathBuf,
     pub number: usize,
 }
 
@@ -37,7 +37,7 @@ struct Slot {
 #[derive(Deserialize, Serialize)]
 pub struct UpdaterState {
     /// Where this writes to disk.
-    cache_dir: String,
+    cache_dir: PathBuf,
     /// The release version this cache corresponds to.
     /// If this does not match the release version we're booting from we will
     /// clear the cache.
@@ -57,7 +57,7 @@ pub struct UpdaterState {
 }
 
 impl UpdaterState {
-    fn new(cache_dir: String, release_version: String) -> Self {
+    fn new(cache_dir: PathBuf, release_version: String) -> Self {
         Self {
             cache_dir,
             release_version,
@@ -104,9 +104,9 @@ impl UpdaterState {
         self.successful_patches.push(patch_number);
     }
 
-    fn load(cache_dir: &str) -> anyhow::Result<Self> {
+    fn load(cache_dir: &Path) -> anyhow::Result<Self> {
         // Load UpdaterState from disk
-        let path = Path::new(cache_dir).join("state.json");
+        let path = cache_dir.join("state.json");
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         // TODO: Now that we depend on serde_yaml for shorebird.yaml
@@ -115,7 +115,7 @@ impl UpdaterState {
         Ok(state)
     }
 
-    pub fn load_or_new_on_error(cache_dir: &str, release_version: &str) -> Self {
+    pub fn load_or_new_on_error(cache_dir: &Path, release_version: &str) -> Self {
         let load_result = Self::load(cache_dir);
         match load_result {
             Ok(mut loaded) => {
@@ -159,13 +159,10 @@ impl UpdaterState {
         let slot = &self.slots[index];
         // to_str only ever fails if the path is invalid utf8, which should
         // never happen, but this way we don't crash if it is.
-        match self.patch_path_for_index(index).to_str() {
-            None => None,
-            Some(path) => Some(PatchInfo {
-                path: path.to_owned(),
-                number: slot.patch_number,
-            }),
-        }
+        Some(PatchInfo {
+            path: self.patch_path_for_index(index),
+            number: slot.patch_number,
+        })
     }
 
     /// This is the current patch that is running.
@@ -401,23 +398,19 @@ impl UpdaterState {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use tempdir::TempDir;
 
     use crate::cache::{PatchInfo, UpdaterState};
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
-        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
-        UpdaterState::new(cache_dir, "1.0.0+1".to_string())
+        let cache_dir = tmp_dir.path();
+        UpdaterState::new(cache_dir.to_owned(), "1.0.0+1".to_string())
     }
 
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
-        let path = PathBuf::from(tmp_dir.path()).join(format!("patch_{}", number));
+        let path = tmp_dir.path().join(format!("patch_{}", number));
         std::fs::write(&path, "fake patch").unwrap();
-        PatchInfo {
-            number,
-            path: path.to_str().unwrap().to_owned(),
-        }
+        PatchInfo { number, path }
     }
 
     #[test]
