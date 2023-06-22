@@ -395,7 +395,7 @@ mod tests {
             crate::AppConfig {
                 cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
-                original_libapp_paths: vec!["original_libapp_path".to_string()],
+                original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
             },
             "app_id: 1234",
         )

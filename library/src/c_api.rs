@@ -239,18 +239,18 @@ mod test {
 
     use std::{ffi::CString, ptr::null_mut};
 
-    pub fn c_string(string: &str) -> *mut libc::c_char {
+    fn c_string(string: &str) -> *mut libc::c_char {
         let c_string = CString::new(string).unwrap().into_raw();
         c_string
     }
 
-    pub fn free_c_string(string: *mut libc::c_char) {
+    fn free_c_string(string: *mut libc::c_char) {
         unsafe {
             drop(CString::from_raw(string));
         }
     }
 
-    pub fn c_array(strings: Vec<String>) -> *mut *mut libc::c_char {
+    fn c_array(strings: Vec<String>) -> *mut *mut libc::c_char {
         let mut c_strings = Vec::new();
         for string in strings {
             c_strings.push(c_string(&string));
@@ -264,7 +264,7 @@ mod test {
         ptr
     }
 
-    pub fn free_c_array(strings: *mut *mut libc::c_char, size: usize) {
+    fn free_c_array(strings: *mut *mut libc::c_char, size: usize) {
         let v = unsafe { Vec::from_raw_parts(strings, size, size) };
 
         // Now drop one string at a time.
@@ -273,9 +273,11 @@ mod test {
         }
     }
 
-    pub fn parameters(tmp_dir: &TempDir, base_path: &str) -> super::AppParameters {
+    // libapp_path is currently Android-style with a virtual path
+    // of at least 3 directories in depth ending in libapp.so.
+    fn parameters(tmp_dir: &TempDir, libapp_path: &str) -> super::AppParameters {
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
-        let app_paths_vec = vec![base_path.to_owned()];
+        let app_paths_vec = vec![libapp_path.to_owned()];
         let app_paths_size = app_paths_vec.len() as i32;
         let app_paths = c_array(app_paths_vec);
 
@@ -287,7 +289,7 @@ mod test {
         }
     }
 
-    pub fn free_parameters(params: super::AppParameters) {
+    fn free_parameters(params: super::AppParameters) {
         free_c_string(params.cache_dir as *mut libc::c_char);
         free_c_string(params.release_version as *mut libc::c_char);
         free_c_array(
@@ -331,7 +333,7 @@ mod test {
     fn empty_state_no_update() {
         testing_reset_config();
         let tmp_dir = TempDir::new("example").unwrap();
-        let c_params = parameters(&tmp_dir, "libapp.so");
+        let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
         assert_eq!(shorebird_init(&c_params, c_yaml), true);
