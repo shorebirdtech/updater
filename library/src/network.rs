@@ -40,15 +40,38 @@ impl core::fmt::Debug for NetworkHooks {
     }
 }
 
+#[cfg(test)]
+fn patch_check_request_throws(
+    _url: &str,
+    _request: PatchCheckRequest,
+) -> anyhow::Result<PatchCheckResponse> {
+    anyhow::bail!("please set a patch_check_request_fn");
+}
+
+#[cfg(test)]
+fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
+    anyhow::bail!("please set a download_file_fn");
+}
+
 impl Default for NetworkHooks {
+    #[cfg(not(test))]
     fn default() -> Self {
         Self {
             patch_check_request_fn: patch_check_request_default,
             download_file_fn: download_file_default,
         }
     }
+
+    #[cfg(test)]
+    fn default() -> Self {
+        Self {
+            patch_check_request_fn: patch_check_request_throws,
+            download_file_fn: download_file_throws,
+        }
+    }
 }
 
+#[cfg(not(test))]
 pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
@@ -58,6 +81,7 @@ pub fn patch_check_request_default(
     Ok(response)
 }
 
+#[cfg(not(test))]
 pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     let client = reqwest::blocking::Client::new();
     let response = client.get(url).send()?;
