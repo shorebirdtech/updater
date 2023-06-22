@@ -1,16 +1,12 @@
 // This file handles the global config for the updater library.
 use crate::network::NetworkHooks;
-#[cfg(test)]
-use std::cell::RefCell;
 
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
 use crate::UpdateError;
 use std::path::PathBuf;
 
-#[cfg(not(test))]
 use once_cell::sync::OnceCell;
-#[cfg(not(test))]
 use std::sync::Mutex;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
@@ -24,21 +20,16 @@ const DEFAULT_BASE_URL: &'static str = "https://api.shorebird.dev";
 /// cbindgen:ignore
 const DEFAULT_CHANNEL: &'static str = "stable";
 
-#[cfg(not(test))]
 fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
     static INSTANCE: OnceCell<Mutex<Option<UpdateConfig>>> = OnceCell::new();
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
-#[cfg(test)]
-thread_local!(static THREAD_CONFIG: RefCell<Option<UpdateConfig>> = RefCell::new(None));
-
-#[cfg(test)]
 /// Unit tests should call this to reset the config between tests.
+#[cfg(test)]
 pub fn testing_reset_config() {
-    THREAD_CONFIG.with(|thread_config| {
-        let mut thread_config = thread_config.borrow_mut();
-        *thread_config = None;
+    with_config_mut(|config| {
+        *config = None;
     });
 }
 
@@ -55,7 +46,6 @@ where
     }
 }
 
-#[cfg(not(test))]
 pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
@@ -68,21 +58,6 @@ where
     check_initialized_and_call(f, &lock)
 }
 
-#[cfg(test)]
-pub fn with_config<F, R>(f: F) -> anyhow::Result<R>
-where
-    F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
-{
-    // Rust unit tests run on multiple threads in parallel, so we use
-    // a per-thread config when unit testing instead of a global config.
-    // The global config code paths are covered by the integration tests.
-    THREAD_CONFIG.with(|thread_config| {
-        let thread_config = thread_config.borrow();
-        check_initialized_and_call(f, &thread_config)
-    })
-}
-
-#[cfg(not(test))]
 pub fn with_config_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Option<UpdateConfig>) -> R,
@@ -91,17 +66,6 @@ where
         .lock()
         .expect("Failed to acquire updater lock.");
     f(&mut lock)
-}
-
-#[cfg(test)]
-pub fn with_config_mut<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut Option<UpdateConfig>) -> R,
-{
-    THREAD_CONFIG.with(|thread_config| {
-        let mut thread_config = thread_config.borrow_mut();
-        f(&mut thread_config)
-    })
 }
 
 // The config passed into init.  This is immutable once set and copyable.

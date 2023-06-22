@@ -192,7 +192,6 @@ fn copy_update_config() -> anyhow::Result<UpdateConfig> {
 // Callers must possess the Updater lock, but we don't care about the contents
 // since they're empty.
 fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
-    println!("update_internal");
     // Only one copy of Update can be running at a time.
     // Update will take the global Updater lock.
     // Update will need to take the Config lock at times, but will only
@@ -237,17 +236,22 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         return Err(UpdateError::InvalidState("Hash mismatch.  This is most often caused by using the same version number with a different app binary.".to_string()).into());
     }
 
-    let patch_info = PatchInfo {
-        path: output_path,
-        number: patch.number,
-    };
-    // Move/state update should be "atomic" (it isn't today).
-    state.install_patch(patch_info)?;
-    info!("Patch {} successfully installed.", patch.number);
-    // Should set some state to say the status is "update required" and that
-    // we now have a different "next" version of the app from the current
-    // booted version (patched or not).
-    return Ok(UpdateStatus::UpdateInstalled);
+    // We're abusing the config lock as a UpdateState lock for now.
+    // This makes it so we never try to write to the UpdateState file from
+    // two threads at once. We could give UpdateState its own lock instead.
+    with_config(|_| {
+        let patch_info = PatchInfo {
+            path: output_path,
+            number: patch.number,
+        };
+        // Move/state update should be "atomic" (it isn't today).
+        state.install_patch(patch_info)?;
+        info!("Patch {} successfully installed.", patch.number);
+        // Should set some state to say the status is "update required" and that
+        // we now have a different "next" version of the app from the current
+        // booted version (patched or not).
+        return Ok(UpdateStatus::UpdateInstalled);
+    })
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
@@ -384,6 +388,7 @@ pub fn start_update_thread() {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
     use std::fs;
     use tempdir::TempDir;
 
@@ -403,6 +408,7 @@ mod tests {
         .unwrap();
     }
 
+    #[serial]
     #[test]
     fn ignore_version_after_marked_bad() {
         let tmp_dir = TempDir::new("example").unwrap();
@@ -475,6 +481,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn init_missing_yaml() {
         let tmp_dir = TempDir::new("example").unwrap();
@@ -495,6 +502,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn report_launch_result_with_no_current_patch() {
         let tmp_dir = TempDir::new("example").unwrap();

@@ -235,6 +235,7 @@ mod test {
     use crate::{
         network::PatchCheckResponse, testing_set_network_hooks, updater::testing_reset_config,
     };
+    use serial_test::serial;
     use tempdir::TempDir;
 
     use std::{ffi::CString, ptr::null_mut};
@@ -298,6 +299,7 @@ mod test {
         )
     }
 
+    #[serial]
     #[test]
     fn init_with_nulls() {
         testing_reset_config();
@@ -305,6 +307,7 @@ mod test {
         assert_eq!(shorebird_init(std::ptr::null(), std::ptr::null()), false);
     }
 
+    #[serial]
     #[test]
     fn init_with_null_app_parameters() {
         testing_reset_config();
@@ -318,6 +321,7 @@ mod test {
         assert_eq!(shorebird_init(&c_params, std::ptr::null()), false);
     }
 
+    #[serial]
     #[test]
     fn init_with_bad_yaml() {
         testing_reset_config();
@@ -329,6 +333,7 @@ mod test {
         free_parameters(c_params);
     }
 
+    #[serial]
     #[test]
     fn empty_state_no_update() {
         testing_reset_config();
@@ -363,6 +368,7 @@ mod test {
         zip.finish().unwrap();
     }
 
+    #[serial]
     #[test]
     fn patch_success() {
         testing_reset_config();
@@ -415,6 +421,7 @@ mod test {
         assert_eq!(new, expected_new);
     }
 
+    #[serial]
     #[test]
     fn init_twice() {
         // It should only be possible to init once per process.
@@ -442,6 +449,7 @@ mod test {
         free_parameters(c_params);
     }
 
+    #[serial]
     #[test]
     fn usage_during_hung_update() {
         // It should be possible to call into shorebird, even when an
@@ -461,12 +469,13 @@ mod test {
 
         use std::sync::Mutex;
         static CALLBACK_MUTEX: Mutex<u32> = Mutex::new(0);
+        // static WAIT_PAIR: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
         // set up the network hooks to return a patch.
         testing_set_network_hooks(
             |_url: &str, _request| {
                 // Hang until we have the lock.
-                let lock = CALLBACK_MUTEX.lock().unwrap();
+                let _lock = CALLBACK_MUTEX.lock().unwrap();
                 Ok(PatchCheckResponse {
                     patch_available: false,
                     patch: Some(crate::Patch {
@@ -483,12 +492,11 @@ mod test {
         );
         {
             // Lock the mutex before starting the thread.
-            let lock = CALLBACK_MUTEX.lock().unwrap();
+            let _lock = CALLBACK_MUTEX.lock().unwrap();
             // Start our thread, which should hang on that lock.
             shorebird_start_update_thread();
             // Wait for the thread to start.
             std::thread::sleep(std::time::Duration::from_millis(100));
-            println!("Second update");
             assert!(updater::update().is_err());
         }
         // Unlock the lock, and wait for the thread to finish.
