@@ -6,11 +6,16 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// A logging function for errors arising from interacting with the native code.
 ///
 /// Used to override the default behavior of using [print].
-typedef ShorebirdLog = void Function(Object? object);
+typedef ShorebirdLog = void Function(Object? object, StackTrace? trace);
 
 /// A function that constructs an [Updater] instance. Used for testing.
 @visibleForTesting
 typedef UpdaterBuilder = Updater Function();
+
+/// A function that prints error object.
+///
+/// Default use of [ShorebirdLog].
+void printError(Object? object, StackTrace? trace) => print(object);
 
 /// {@template shorebird_code_push}
 /// Get info about your Shorebird code push app.
@@ -18,7 +23,7 @@ typedef UpdaterBuilder = Updater Function();
 class ShorebirdCodePush {
   /// {@macro shorebird_code_push}
   ShorebirdCodePush({
-    this.logError = print,
+    this.logError = printError,
   }) : _buildUpdater = Updater.new;
 
   /// A test-only constructor that allows overriding the Updater constructor.
@@ -92,7 +97,7 @@ class ShorebirdCodePush {
     return nextPatch != null && currentPatch != nextPatch;
   }
 
-  void _logError(Object error) {
+  void _logError(Object error, StackTrace? trace) {
     final logMessage = '$_loggingPrefix $error';
     if (error is ArgumentError) {
       // ffi function lookup failures manifest as ArgumentErrors.
@@ -100,9 +105,10 @@ class ShorebirdCodePush {
         '''
 $logMessage
   This is likely because you are not running with the Shorebird Flutter engine (that is, if you ran with `flutter run` instead of `shorebird run`).''',
+        trace,
       );
     } else {
-      logError(logMessage);
+      logError(logMessage, trace);
     }
   }
 
@@ -115,8 +121,8 @@ $logMessage
     try {
       // Create a new Updater in the new isolate.
       return await Isolate.run(() => f(_buildUpdater()));
-    } catch (error) {
-      _logError(error);
+    } catch (error, trace) {
+      _logError(error, trace);
       return fallbackValue;
     }
   }

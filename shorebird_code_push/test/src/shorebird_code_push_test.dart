@@ -12,12 +12,16 @@ void main() {
     late Updater updater;
     late ShorebirdCodePush shorebirdCodePush;
     Object? loggedError;
+    StackTrace? trace;
 
     setUp(() {
       loggedError = null;
       updater = _MockUpdater();
       shorebirdCodePush = ShorebirdCodePush.forTest(
-        logError: ([object]) => loggedError = object,
+        logError: ([object, trc]) {
+          loggedError = object;
+          trace = trc;
+        },
         buildUpdater: () => updater,
       );
     });
@@ -46,6 +50,11 @@ void main() {
         );
         expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
       });
+
+      test('provides trace containing checkForUpdate', () async {
+        when(() => updater.checkForUpdate()).thenThrow(Exception());
+        expect(trace.toString(), contains('checkForUpdate'));
+      });
     });
 
     group('currentPatchNumber', () {
@@ -65,6 +74,11 @@ void main() {
         when(() => updater.currentPatchNumber()).thenThrow(Exception('oh no'));
         expect(await shorebirdCodePush.currentPatchNumber(), isNull);
         expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
+      });
+
+      test('provides trace containing currentPatchNumber', () async {
+        when(() => updater.currentPatchNumber()).thenThrow(Exception());
+        expect(trace.toString(), contains('currentPatchNumber'));
       });
     });
 
@@ -86,6 +100,11 @@ void main() {
         expect(await shorebirdCodePush.nextPatchNumber(), isNull);
         expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
       });
+
+      test('provides trace containing nextPatchNumber', () async {
+        when(() => updater.nextPatchNumber()).thenThrow(Exception());
+        expect(trace.toString(), contains('nextPatchNumber'));
+      });
     });
 
     group('downloadUpdate', () {
@@ -99,6 +118,11 @@ void main() {
         when(() => updater.downloadUpdate()).thenThrow(Exception('oh no'));
         await expectLater(shorebirdCodePush.downloadUpdate(), completes);
         expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
+      });
+
+      test('provides trace containing downloadUpdate', () async {
+        when(() => updater.downloadUpdate()).thenThrow(Exception());
+        expect(trace.toString(), contains('downloadUpdate'));
       });
     });
 
