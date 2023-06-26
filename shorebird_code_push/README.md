@@ -21,10 +21,8 @@ final currentPatchversion = shorebirdCodePush.currentPatchVersion();
 // Check whether a patch is available to install.
 final isUpdateAvailable = await shorebirdCodePush.isNewPatchAvailableForDownload();
 
-if (isUpdateAvailable) {
-  // Download the patch.
-  await shorebirdCodePush.downloadUpdate();
-}
+// Download a new patch.
+await shorebirdCodePush.downloadUpdateIfAvailable();
 ```
 
 ## Developing
