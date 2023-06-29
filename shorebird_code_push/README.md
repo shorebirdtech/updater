@@ -1,5 +1,6 @@
 # Shorebird Code Push
 
+[![Discord](https://dcbadge.vercel.app/api/server/shorebird)](https://discord.gg/shorebird)
 [![License: MIT][license_badge]][license_link]
 
 A Dart package for communicating with the [Shorebird](https://shorebird.dev)
