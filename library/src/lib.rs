@@ -11,7 +11,11 @@ mod config;
 mod logging;
 mod network;
 mod updater;
+mod updater_lock;
 mod yaml;
+
+#[cfg(any(target_os = "android", test))]
+mod android;
 
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;

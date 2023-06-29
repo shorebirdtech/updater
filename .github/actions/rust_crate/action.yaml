@@ -2,6 +2,9 @@ name: Rust Crate Workflow
 description: Build and test your Rust crate
 
 inputs:
+  codecov_token:
+    required: true
+    description: The codecov token used to upload coverage reports.
   working_directory:
     required: false
     default: "."
@@ -18,4 +21,11 @@ runs:
     - name: Test
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}
-      run: cargo test --verbose
+      run: |
+        cargo install cargo-llvm-cov
+        cargo llvm-cov --lcov --output-path lcov.info
+    
+    - name: Upload Coverage
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ inputs.codecov_token }}

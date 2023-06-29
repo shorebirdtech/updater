@@ -2,15 +2,19 @@
 
 use std::fmt::{Display, Formatter};
 use std::fs;
-use std::io::{Cursor, Read, Seek};
+#[cfg(any(target_os = "android", test))]
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
 use crate::cache::{PatchInfo, UpdaterState};
-use crate::config::{set_config, with_config, ResolvedConfig};
+use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
-use crate::network::{download_to_path, send_patch_check_request};
+use crate::network::{
+    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
+};
+use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
@@ -28,7 +32,6 @@ pub use crate::network::{
 pub enum UpdateStatus {
     NoUpdate,
     UpdateAvailable,
-    UpdateDownloaded,
     UpdateInstalled,
     UpdateHadError,
 }
@@ -38,7 +41,6 @@ impl Display for UpdateStatus {
         match self {
             UpdateStatus::NoUpdate => write!(f, "No update"),
             UpdateStatus::UpdateAvailable => write!(f, "Update available"),
-            UpdateStatus::UpdateDownloaded => write!(f, "Update downloaded"),
             UpdateStatus::UpdateInstalled => write!(f, "Update installed"),
             UpdateStatus::UpdateHadError => write!(f, "Update had error"),
         }
@@ -52,6 +54,7 @@ pub enum UpdateError {
     BadServerResponse,
     FailedToSaveState,
     ConfigNotInitialized,
+    UpdateAlreadyInProgress,
 }
 
 impl std::error::Error for UpdateError {}
@@ -66,6 +69,9 @@ impl Display for UpdateError {
             UpdateError::FailedToSaveState => write!(f, "Failed to save state"),
             UpdateError::BadServerResponse => write!(f, "Bad server response"),
             UpdateError::ConfigNotInitialized => write!(f, "Config not initialized"),
+            UpdateError::UpdateAlreadyInProgress => {
+                write!(f, "Update already in progress")
+            }
         }
     }
 }
@@ -79,26 +85,51 @@ pub struct AppConfig {
     pub original_libapp_paths: Vec<String>,
 }
 
+// On Android we don't use a direct path to libapp.so, but rather a data dir
+// and a hard-coded name for the libapp file which we look up in the
+// split APKs in that datadir. On other platforms we just use a path.
+#[cfg(not(any(target_os = "android", test)))]
+fn libapp_path_from_settings(original_libapp_paths: &Vec<String>) -> Result<PathBuf, UpdateError> {
+    let first = original_libapp_paths
+        .first()
+        .ok_or(UpdateError::InvalidArgument(
+            "original_libapp_paths".to_string(),
+            "empty".to_string(),
+        ));
+    first.map(|path| PathBuf::from(path))
+}
+
 /// Initialize the updater library.
 /// Takes a AppConfig struct and a yaml string.
 /// The yaml string is the contents of the shorebird.yaml file.
 /// The AppConfig struct is information about the running app and where
 /// the updater should keep its cache.
 pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
+    #[cfg(any(target_os = "android", test))]
+    use crate::android::libapp_path_from_settings;
+
     init_logging();
     let config = YamlConfig::from_yaml(&yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
-    set_config(app_config, config).map_err(|err| UpdateError::InvalidState(err.to_string()))
+
+    let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
+    info!("libapp_path: {:?}", libapp_path);
+    set_config(app_config, libapp_path, config, NetworkHooks::default())
+        .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
-/// Synchronously checks for an update and returns true if an update is available.
-pub fn check_for_update() -> anyhow::Result<bool> {
+fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     with_config(|config| {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        send_patch_check_request(&config, &state).map(|res| res.patch_available)
+        send_patch_check_request(&config, &state)
     })
+}
+
+/// Synchronously checks for an update and returns true if an update is available.
+pub fn check_for_update() -> anyhow::Result<bool> {
+    check_for_update_internal().map(|res| res.patch_available)
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
@@ -128,152 +159,60 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
     return Ok(hash_matches);
 }
 
-fn app_data_dir_from_libapp_path(libapp_path: &str) -> anyhow::Result<PathBuf> {
-    // "/data/app/~~7LtReIkm5snW_oXeDoJ5TQ==/com.example.shorebird_test-rpkDZSLBRv2jWcc1gQpwdg==/lib/x86_64/libapp.so"
-    let path = PathBuf::from(libapp_path);
-    let root = path.ancestors().nth(3).context("Invalid libapp path")?;
-    Ok(PathBuf::from(root))
+// This is just a place to put our terrible android hacks.
+// And also avoid (for now) dealing with inflating patches on iOS.
+#[cfg(any(target_os = "android", test))]
+fn prepare_for_install(
+    config: &UpdateConfig,
+    download_path: &Path,
+    output_path: &Path,
+) -> anyhow::Result<()> {
+    // We abuse libapp_path to actually be the path to the data dir for now.
+    // This is an abuse because the variable name is libapp_path, but
+    // we're making it point to a the app_data directory instead.
+    let app_dir = &config.libapp_path;
+    debug!("app_dir: {:?}", app_dir);
+    let base_r = crate::android::open_base_lib(&app_dir, "libapp.so")?;
+    inflate(&download_path, base_r, &output_path)
 }
 
-struct ArchNames {
-    apk_split: &'static str,
-    lib_dir: &'static str,
+#[cfg(not(any(target_os = "android", test)))]
+fn prepare_for_install(
+    _config: &UpdateConfig,
+    download_path: &Path,
+    output_path: &Path,
+) -> anyhow::Result<()> {
+    // On iOS we don't yet support compressed patches, just copy the file.
+    fs::copy(download_path, output_path)?;
+    Ok(())
 }
 
-fn android_arch_names() -> &'static ArchNames {
-    // This was generated by looking at what apk splits are generated by
-    // bundletool.
-    // https://developer.android.com/ndk/guides/abis
-    #[cfg(target_arch = "x86")]
-    static ARCH: ArchNames = ArchNames {
-        apk_split: "x86",
-        lib_dir: "x86",
-    };
-    #[cfg(target_arch = "x86_64")]
-    // x86_64 uses _ for both split and library paths.
-    static ARCH: ArchNames = ArchNames {
-        apk_split: "x86_64", // e.g. standalone-x86_64_hdpi.apk
-        lib_dir: "x86_64",   // e.g. lib/x86_64/libapp.so
-    };
-    #[cfg(target_arch = "aarch64")]
-    // Note the _ in the split name, but the - in the lib dir.
-    static ARCH: ArchNames = ArchNames {
-        apk_split: "arm64_v8a",
-        lib_dir: "arm64-v8a",
-    };
-    #[cfg(target_arch = "arm")]
-    // Note the _ in the split name, but the - in the lib dir.
-    static ARCH: ArchNames = ArchNames {
-        apk_split: "armeabi_v7a", // e.g. base-armeabi_v7a.apk
-        lib_dir: "armeabi-v7a",   // e.g. lib/armeabi-v7a/libapp.so
-    };
-    return &ARCH;
+fn copy_update_config() -> anyhow::Result<UpdateConfig> {
+    with_config(|config: &UpdateConfig| Ok(config.clone()))
 }
 
-/// This is public only for testing.
-pub(crate) fn get_relative_lib_path(lib_name: &str) -> PathBuf {
-    PathBuf::from("lib")
-        .join(android_arch_names().lib_dir)
-        .join(lib_name)
-}
+// Callers must possess the Updater lock, but we don't care about the contents
+// since they're empty.
+fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
+    // Only one copy of Update can be running at a time.
+    // Update will take the global Updater lock.
+    // Update will need to take the Config lock at times, but will only
+    // do so as long as is needed to read from the config and will not
+    // hold the config lock across network requests.
+    // Steps:
+    // Checks Update lock, if held, return error, otherwise takes lock for
+    // entire duration of update.
+    // Loads state from disk (holds Config lock while reading).
+    // Uses current update information to build request and send to server.
+    // If update is not available, returns.
+    // Update is available, so uses returned information to download update.
+    // Downloads update to a temporary location.
+    // Checks hash of downloaded file.
+    // Takes Config lock and installs patch.
+    // Saves state to disk (holds Config lock while writing).
 
-// This is just a tuple of the archive and the internal path to the library.
-// Ideally we'd just return the ZipFile itself, but I don't know how to set
-// up the references correctly, ZipFile contains a borrow into the ZipArchive.
-// And I'm not the right Rust to keep a reference to both with proper lifetimes.
-struct ZipLocation {
-    archive: zip::ZipArchive<fs::File>,
-    internal_path: String,
-}
+    let config = copy_update_config()?;
 
-fn check_for_lib_path(zip_path: &Path, lib_path: &str) -> anyhow::Result<ZipLocation> {
-    let apk = zip::ZipArchive::new(fs::File::open(zip_path)?)?;
-    if apk.file_names().any(|name| name == lib_path) {
-        return Ok(ZipLocation {
-            archive: apk,
-            internal_path: lib_path.to_owned(),
-        });
-    }
-    return Err(anyhow::anyhow!("Library not found in APK"));
-}
-
-/// Given a directory of APKs, find the one that contains the library we want.
-/// This has to be done due to split APKs.
-fn find_and_open_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<ZipLocation> {
-    // Read the library out of the APK.  We only really need to do this if it
-    // isn't already extracted on disk (which it won't be by default from the
-    // play store).
-
-    // First check ones with our arch in the name, in any order.
-    let arch = android_arch_names();
-    let lib_path = get_relative_lib_path(lib_name)
-        .to_str()
-        .context("Invalid lib path")?
-        .to_owned();
-
-    for entry in fs::read_dir(apks_dir)? {
-        let entry = entry?;
-        let path = entry.path(); // returns the absolute path.
-        if path.is_dir() {
-            continue;
-        }
-        // Using match to avoid unwrap possibly panicking.
-        match path.file_name() {
-            None => continue,
-            Some(filename) => match filename.to_str() {
-                None => continue,
-                Some(filename) => {
-                    if !filename.ends_with(".apk") {
-                        continue;
-                    }
-                    if !filename.contains(arch.apk_split) {
-                        debug!("Ignoring APK: {:?}", path);
-                        continue;
-                    }
-                }
-            },
-        }
-        debug!("Checking APK split: {:?}", path);
-        if let Ok(zip) = check_for_lib_path(&path, &lib_path) {
-            debug!("Found lib in apk split: {:?}", path);
-            return Ok(zip);
-        }
-    }
-    let base_apk_path = apks_dir.join("base.apk");
-    debug!("Checking base APK: {:?}", base_apk_path);
-    return check_for_lib_path(&base_apk_path, &lib_path);
-}
-
-fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<Cursor<Vec<u8>>> {
-    // As far as I can tell, Android provides no apis for reading per-platform
-    // assets (e.g. libapp.so) from an APK.  Both Facebook and Chromium
-    // seem to have written their own code to do this:
-    // https://github.com/facebook/SoLoader/blob/main/java/com/facebook/soloader/DirectApkSoSource.java
-    // https://chromium.googlesource.com/chromium/src/base/+/a5ca5def0453df367b9c42e9817a33d2a21e75fe/android/java/src/org/chromium/base/library_loader/Linker.java
-    // Previously I tried reading libapp.so from from the AssetManager, but
-    // it does show the lib/ directory in the list of assets.
-    // https://github.com/shorebirdtech/updater/pull/6
-
-    // Ideally we would do this apk reading from the C++ side and keep the rust
-    // portable, but we have a zip library here, and don't on the C++ side.
-
-    let mut zip_location = find_and_open_lib(apks_dir, lib_name)?;
-    let mut zip_file = zip_location
-        .archive
-        .by_name(&zip_location.internal_path)
-        .context("Failed to find libapp.so in APK")?;
-
-    // Cursor (rather than ZipFile) is only necessary because bipatch expects
-    // Seek + Read for the input file.  I don't think it actually needs to
-    // seek backwards, so Read is probably sufficient.  If we made bipatch
-    // only depend on Read we could avoid loading the library fully into memory.
-    let mut buffer = Vec::new();
-    zip_file.read_to_end(&mut buffer)?;
-    Ok(Cursor::new(buffer))
-}
-
-// Run the update logic with the resolved config.
-fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     // Load the state from disk.
     let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
     // Check for update.
@@ -287,33 +226,11 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
     // Consider supporting allowing the system to download for us (e.g. iOS).
-    download_to_path(&patch.download_url, &download_path)?;
-
-    // FIXME: This makes the assumption that the last path provided is the full
-    // path to the libapp.so file.  This is true for the current engine, but
-    // may not be true in the future.  Better would be for the engine to
-    // pass us the path to the base.apk.
-    // https://github.com/shorebirdtech/shorebird/issues/283
-    // This is where the paths are set today:
-    // First path is "libapp.so" (for dlopen), second is a full path:
-    // https://github.com/flutter/engine/blob/a7c9cc58a71c5850be0215ab1997db92cc5e8d3e/shell/platform/android/io/flutter/embedding/engine/loader/FlutterLoader.java#L264
-    // Which is composed from nativeLibraryDir:
-    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#nativeLibraryDir
-    let full_libapp_path = config
-        .original_libapp_paths
-        .last()
-        .context("No libapp paths")?;
-    // We could probably use sourceDir instead?
-    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#sourceDir
-    // and splitSourceDirs (api 21+)
-    // https://developer.android.com/reference/android/content/pm/ApplicationInfo#splitSourceDirs
-    debug!("Finding apk from: {:?}", full_libapp_path);
-    let app_dir = app_data_dir_from_libapp_path(full_libapp_path)?;
-    debug!("app_dir: {:?}", app_dir);
-    let base_r = open_base_lib(&app_dir, "libapp.so")?;
+    download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
-    inflate(&download_path, base_r, &output_path)?;
+    // Should not pass config, rather should read necessary information earlier.
+    prepare_for_install(&config, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
     let hash_ok = check_hash(&output_path, &patch.hash)?;
@@ -321,24 +238,32 @@ fn update_internal(config: &ResolvedConfig) -> anyhow::Result<UpdateStatus> {
         return Err(UpdateError::InvalidState("Hash mismatch.  This is most often caused by using the same version number with a different app binary.".to_string()).into());
     }
 
-    let patch_info = PatchInfo {
-        path: output_path
-            .to_str()
-            .context("invalid output path")?
-            .to_string(),
-        number: patch.number,
-    };
-    // Move/state update should be "atomic" (it isn't today).
-    state.install_patch(patch_info)?;
-    info!("Patch {} successfully installed.", patch.number);
-    // Should set some state to say the status is "update required" and that
-    // we now have a different "next" version of the app from the current
-    // booted version (patched or not).
-    return Ok(UpdateStatus::UpdateInstalled);
+    // We're abusing the config lock as a UpdateState lock for now.
+    // This makes it so we never try to write to the UpdateState file from
+    // two threads at once. We could give UpdateState its own lock instead.
+    with_config(|_| {
+        let patch_info = PatchInfo {
+            path: output_path,
+            number: patch.number,
+        };
+        // Move/state update should be "atomic" (it isn't today).
+        state.install_patch(patch_info)?;
+        info!("Patch {} successfully installed.", patch.number);
+        // Should set some state to say the status is "update required" and that
+        // we now have a different "next" version of the app from the current
+        // booted version (patched or not).
+        return Ok(UpdateStatus::UpdateInstalled);
+    })
+}
+
+/// Synchronously checks for an update and downloads and installs it if available.
+pub fn update() -> anyhow::Result<UpdateStatus> {
+    with_updater_thread_lock(update_internal)
 }
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
+#[cfg(any(target_os = "android", test))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
@@ -428,7 +353,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
-        state.mark_patch_as_bad(&patch);
+        state.mark_patch_as_bad(patch.number);
         state
             .activate_latest_bootable_patch()
             .map_err(|err| anyhow::Error::from(err))
@@ -446,25 +371,17 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
-        state.mark_patch_as_good(&patch);
+        state.mark_patch_as_good(patch.number);
         state
             .save()
             .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
     })
 }
 
-/// Synchronously checks for an update and downloads and installs it if available.
-pub fn update() -> anyhow::Result<UpdateStatus> {
-    with_config(|config| update_internal(&config))
-}
-
 /// This does not return status.  The only output is the change to the saved
 /// cache. The Engine calls this during boot and it will check for an update
 /// and install it if available.
 pub fn start_update_thread() {
-    // This holds the lock on the config for the entire duration of the update
-    // call which is wrong. We should be able to release the lock during the
-    // network requests.
     std::thread::spawn(move || {
         let status = update().unwrap_or(UpdateStatus::UpdateHadError);
         info!("Update thread finished with status: {}", status);
@@ -473,6 +390,7 @@ pub fn start_update_thread() {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
     use std::fs;
     use tempdir::TempDir;
 
@@ -485,13 +403,14 @@ mod tests {
             crate::AppConfig {
                 cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
-                original_libapp_paths: vec!["original_libapp_path".to_string()],
+                original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
             },
             "app_id: 1234",
         )
         .unwrap();
     }
 
+    #[serial]
     #[test]
     fn ignore_version_after_marked_bad() {
         let tmp_dir = TempDir::new("example").unwrap();
@@ -511,7 +430,7 @@ mod tests {
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             state
                 .install_patch(PatchInfo {
-                    path: artifact_path.to_str().unwrap().to_string(),
+                    path: artifact_path,
                     number: 1,
                 })
                 .expect("move failed");
@@ -564,6 +483,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn init_missing_yaml() {
         let tmp_dir = TempDir::new("example").unwrap();
@@ -584,6 +504,7 @@ mod tests {
         );
     }
 
+    #[serial]
     #[test]
     fn report_launch_result_with_no_current_patch() {
         let tmp_dir = TempDir::new("example").unwrap();

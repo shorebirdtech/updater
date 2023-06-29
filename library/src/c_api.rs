@@ -6,6 +6,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::path::PathBuf;
 
 use crate::updater;
 
@@ -45,14 +46,6 @@ fn to_rust(c_string: *const libc::c_char) -> anyhow::Result<String> {
 fn allocate_c_string(rust_string: &str) -> anyhow::Result<*mut c_char> {
     let c_str = CString::new(rust_string)?;
     Ok(c_str.into_raw())
-}
-
-/// Converts a Rust string to a C string, caller must free the C string.
-fn to_c_string(maybe_string: Option<String>) -> anyhow::Result<*mut c_char> {
-    Ok(match maybe_string {
-        Some(v) => allocate_c_string(&v)?,
-        None => std::ptr::null_mut(),
-    })
 }
 
 fn to_rust_vector(
@@ -116,27 +109,47 @@ pub extern "C" fn shorebird_init(
     )
 }
 
-/// Return the active patch number, or NULL if there is no active patch.
+/// The currently running patch number, or 0 if the release has not been
+/// patched.
 #[no_mangle]
-pub extern "C" fn shorebird_next_boot_patch_number() -> *mut c_char {
+pub extern "C" fn shorebird_current_boot_patch_number() -> usize {
     log_on_error(
         || {
-            let maybe_patch_number = updater::next_boot_patch()?.map(|p| p.number.to_string());
-            to_c_string(maybe_patch_number)
+            Ok(updater::current_boot_patch()?
+                .map(|p| p.number)
+                .unwrap_or(0))
         },
         "fetching next_boot_patch_number",
-        std::ptr::null_mut(),
+        0,
     )
 }
 
-/// Return the path to the active patch for the app, or NULL if there is no
-/// active patch.
+/// The patch number that will boot on the next run of the app, or 0 if there is
+/// no next patch.
+#[no_mangle]
+pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
+    log_on_error(
+        || Ok(updater::next_boot_patch()?.map(|p| p.number).unwrap_or(0)),
+        "fetching next_boot_patch_number",
+        0,
+    )
+}
+
+fn path_to_c_string(path: Option<PathBuf>) -> anyhow::Result<*mut c_char> {
+    Ok(match path {
+        Some(v) => allocate_c_string(v.to_str().unwrap())?,
+        None => std::ptr::null_mut(),
+    })
+}
+
+/// The path to the patch that will boot on the next run of the app, or NULL if
+/// there is no next patch.
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
         || {
             let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
-            to_c_string(maybe_path)
+            path_to_c_string(maybe_path)
         },
         "fetching next_boot_patch_path",
         std::ptr::null_mut(),
@@ -177,8 +190,9 @@ pub extern "C" fn shorebird_start_update_thread() {
 }
 
 /// Tell the updater that we're launching from what it told us was the
-/// next patch to boot from.  This will copy the next_boot patch to be
-/// the current_boot patch.
+/// next patch to boot from. This will copy the next_boot patch to be the
+/// current_boot patch.
+///
 /// It is required to call this function before calling
 /// shorebird_report_launch_success or shorebird_report_launch_failure.
 #[no_mangle]
@@ -202,6 +216,7 @@ pub extern "C" fn shorebird_report_launch_failure() {
 /// as having been launched successfully.  We don't currently do anything
 /// with this information, but it could be used to record a point at which
 /// we will not roll back from.
+///
 /// This is not currently wired up to be called from the Engine.  It's unclear
 /// where best to connect it.  Expo waits 5 seconds after the app launches
 /// and then marks the launch as successful.  We could do something similar.
@@ -220,22 +235,23 @@ mod test {
     use crate::{
         network::PatchCheckResponse, testing_set_network_hooks, updater::testing_reset_config,
     };
+    use serial_test::serial;
     use tempdir::TempDir;
 
     use std::{ffi::CString, ptr::null_mut};
 
-    pub fn c_string(string: &str) -> *mut libc::c_char {
+    fn c_string(string: &str) -> *mut libc::c_char {
         let c_string = CString::new(string).unwrap().into_raw();
         c_string
     }
 
-    pub fn free_c_string(string: *mut libc::c_char) {
+    fn free_c_string(string: *mut libc::c_char) {
         unsafe {
             drop(CString::from_raw(string));
         }
     }
 
-    pub fn c_array(strings: Vec<String>) -> *mut *mut libc::c_char {
+    fn c_array(strings: Vec<String>) -> *mut *mut libc::c_char {
         let mut c_strings = Vec::new();
         for string in strings {
             c_strings.push(c_string(&string));
@@ -249,7 +265,7 @@ mod test {
         ptr
     }
 
-    pub fn free_c_array(strings: *mut *mut libc::c_char, size: usize) {
+    fn free_c_array(strings: *mut *mut libc::c_char, size: usize) {
         let v = unsafe { Vec::from_raw_parts(strings, size, size) };
 
         // Now drop one string at a time.
@@ -258,9 +274,11 @@ mod test {
         }
     }
 
-    pub fn parameters(tmp_dir: &TempDir, base_path: &str) -> super::AppParameters {
+    // libapp_path is currently Android-style with a virtual path
+    // of at least 3 directories in depth ending in libapp.so.
+    fn parameters(tmp_dir: &TempDir, libapp_path: &str) -> super::AppParameters {
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
-        let app_paths_vec = vec![base_path.to_owned()];
+        let app_paths_vec = vec![libapp_path.to_owned()];
         let app_paths_size = app_paths_vec.len() as i32;
         let app_paths = c_array(app_paths_vec);
 
@@ -272,7 +290,7 @@ mod test {
         }
     }
 
-    pub fn free_parameters(params: super::AppParameters) {
+    fn free_parameters(params: super::AppParameters) {
         free_c_string(params.cache_dir as *mut libc::c_char);
         free_c_string(params.release_version as *mut libc::c_char);
         free_c_array(
@@ -281,6 +299,7 @@ mod test {
         )
     }
 
+    #[serial]
     #[test]
     fn init_with_nulls() {
         testing_reset_config();
@@ -288,6 +307,7 @@ mod test {
         assert_eq!(shorebird_init(std::ptr::null(), std::ptr::null()), false);
     }
 
+    #[serial]
     #[test]
     fn init_with_null_app_parameters() {
         testing_reset_config();
@@ -301,31 +321,33 @@ mod test {
         assert_eq!(shorebird_init(&c_params, std::ptr::null()), false);
     }
 
+    #[serial]
     #[test]
     fn init_with_bad_yaml() {
         testing_reset_config();
         let tmp_dir = TempDir::new("example").unwrap();
-        let c_params = parameters(&tmp_dir, "libapp.so");
+        let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         let c_yaml = c_string("bad yaml");
         assert_eq!(shorebird_init(&c_params, c_yaml), false);
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
 
+    #[serial]
     #[test]
     fn empty_state_no_update() {
         testing_reset_config();
         let tmp_dir = TempDir::new("example").unwrap();
-        let c_params = parameters(&tmp_dir, "libapp.so");
+        let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
         assert_eq!(shorebird_init(&c_params, c_yaml), true);
         free_c_string(c_yaml);
         free_parameters(c_params);
 
-        // Number and path are empty (but do not crash) when we have an
+        // Number is 0 and path is empty (but do not crash) when we have an
         // empty cache and update has not been called.
-        assert_eq!(shorebird_next_boot_patch_number(), null_mut());
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_path(), null_mut());
 
         // Similarly we can report launches with no patch without crashing.
@@ -340,12 +362,13 @@ mod test {
         let options = zip::write::FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
-        let app_path = updater::get_relative_lib_path("libapp.so");
+        let app_path = crate::android::get_relative_lib_path("libapp.so");
         zip.start_file(app_path.to_str().unwrap(), options).unwrap();
         zip.write_all(libapp_contents).unwrap();
         zip.finish().unwrap();
     }
 
+    #[serial]
     #[test]
     fn patch_success() {
         testing_reset_config();
@@ -389,12 +412,104 @@ mod test {
         );
         shorebird_update();
 
-        let version = to_rust(shorebird_next_boot_patch_number()).unwrap();
-        assert!(version.eq("1"));
+        let version = shorebird_next_boot_patch_number();
+        assert_eq!(version, 1);
 
         // Read path contents into memory and check against expected.
         let path = to_rust(shorebird_next_boot_patch_path()).unwrap();
         let new = std::fs::read_to_string(path).unwrap();
         assert_eq!(new, expected_new);
+    }
+
+    #[serial]
+    #[test]
+    fn forgot_init() {
+        testing_reset_config();
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
+        assert_eq!(shorebird_next_boot_patch_path(), null_mut());
+    }
+
+    #[serial]
+    #[test]
+    fn init_twice() {
+        // It should only be possible to init once per process.
+        // Successive calls should log a warning, but not hang or crash.
+        // This is slightly different as a unit test because we use a
+        // thread local for the storage, but it should test the same idea.
+
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/libapp.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: foo");
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/libapp.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: bar");
+        assert_eq!(shorebird_init(&c_params, c_yaml), false);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+    }
+
+    #[serial]
+    #[test]
+    fn usage_during_hung_update() {
+        // It should be possible to call into shorebird, even when an
+        // background update thread may be waiting a long time on a network
+        // request.
+
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/libapp.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        // app_id is required or shorebird_init will fail.
+        let c_yaml = c_string("app_id: foo");
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        use std::sync::Mutex;
+        static CALLBACK_MUTEX: Mutex<u32> = Mutex::new(0);
+        // static WAIT_PAIR: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+        // set up the network hooks to return a patch.
+        testing_set_network_hooks(
+            |_url: &str, _request| {
+                // Hang until we have the lock.
+                let _lock = CALLBACK_MUTEX.lock().unwrap();
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: "ignored".to_owned(),
+                        download_url: "ignored".to_owned(),
+                    }),
+                })
+            },
+            |_url| {
+                // Never called.
+                Ok(Vec::new())
+            },
+        );
+        {
+            // Lock the mutex before starting the thread.
+            let _lock = CALLBACK_MUTEX.lock().unwrap();
+            // Start our thread, which should hang on that lock.
+            shorebird_start_update_thread();
+            // Wait for the thread to start.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(updater::update().is_err());
+        }
+        // Unlock the lock, and wait for the thread to finish.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Now we should be able to call into shorebird again.
+        // assert!(updater::update().is_ok());
     }
 }
