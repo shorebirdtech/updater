@@ -87,7 +87,7 @@ void main() {
     });
 
     group('nextPatchNumber', () {
-      test('returns null if current patch is reported as 0', () async {
+      test('returns null if next patch is reported as 0', () async {
         when(() => updater.nextPatchNumber()).thenReturn(0);
         expect(await shorebirdCodePush.nextPatchNumber(), isNull);
       });
@@ -119,12 +119,42 @@ void main() {
     });
 
     group('downloadUpdate', () {
-      test('forwards the return value of updater.nextPatchNumber', () async {
+      test(
+          '''returns noUpdateAvailable if nextPatchNumber is the same as currentPatchNumber and does not change''',
+          () async {
+        when(() => updater.currentPatchNumber()).thenReturn(1);
+        when(() => updater.nextPatchNumber()).thenReturn(1);
         when(() => updater.downloadUpdate()).thenReturn(null);
-        await expectLater(
-          shorebirdCodePush.downloadUpdateIfAvailable(),
-          completes,
-        );
+
+        final result = await shorebirdCodePush.downloadUpdateIfAvailable();
+
+        expect(result, ShorebirdUpdateDownloadResult.noUpdateAvailable);
+      });
+
+      test(
+          '''returns updateAlreadyDownloaded if nextPatchNumber is different than currentPatchNumber and does not change''',
+          () async {
+        when(() => updater.currentPatchNumber()).thenReturn(1);
+        when(() => updater.nextPatchNumber()).thenReturn(2);
+        when(() => updater.downloadUpdate()).thenReturn(null);
+
+        final result = await shorebirdCodePush.downloadUpdateIfAvailable();
+
+        expect(result, ShorebirdUpdateDownloadResult.updateAlreadyDownloaded);
+      });
+
+      test(
+          '''returns updateDownloaded if nextPatchNumber is different than currentPatchNumber and changes''',
+          () async {
+        var nextPatchNumber = 2;
+        when(() => updater.currentPatchNumber()).thenReturn(1);
+        when(() => updater.nextPatchNumber())
+            .thenAnswer((_) => nextPatchNumber++);
+        when(() => updater.downloadUpdate()).thenReturn(null);
+
+        final result = await shorebirdCodePush.downloadUpdateIfAvailable();
+
+        expect(result, ShorebirdUpdateDownloadResult.updateDownloaded);
       });
 
       test(

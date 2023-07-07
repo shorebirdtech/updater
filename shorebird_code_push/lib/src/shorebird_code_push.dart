@@ -26,6 +26,20 @@ class ShorebirdCodePushException implements Exception {
   String toString() => 'ShorebirdCodePushException: $message';
 }
 
+/// {@template shorebird_update_download_result}
+/// The result of a call to [ShorebirdCodePush.downloadUpdate()].
+/// {@endtemplate}
+enum ShorebirdUpdateDownloadResult {
+  /// No new update is available.
+  noUpdateAvailable,
+
+  /// An update is available and it has already been downloaded.
+  updateAlreadyDownloaded,
+
+  /// An update is available and it was downloaded.
+  updateDownloaded,
+}
+
 /// {@template shorebird_code_push}
 /// Get info about your Shorebird code push app.
 /// {@endtemplate}
@@ -78,10 +92,22 @@ class ShorebirdCodePush {
   }
 
   /// Downloads the latest patch, if available.
-  Future<void> downloadUpdateIfAvailable() async {
-    await _runInIsolate(
-      (updater) => updater.downloadUpdate(),
-      fallbackValue: null,
+  Future<ShorebirdUpdateDownloadResult> downloadUpdateIfAvailable() async {
+    return await _runInIsolate(
+      (updater) {
+        final currentPatchNumber = updater.currentPatchNumber();
+        final originalNextPatchNumber = updater.nextPatchNumber();
+        updater.downloadUpdate();
+        final newNextPatchNumber = updater.nextPatchNumber();
+        if (currentPatchNumber == newNextPatchNumber) {
+          return ShorebirdUpdateDownloadResult.noUpdateAvailable;
+        } else if (originalNextPatchNumber == newNextPatchNumber) {
+          return ShorebirdUpdateDownloadResult.updateAlreadyDownloaded;
+        } else {
+          return ShorebirdUpdateDownloadResult.updateDownloaded;
+        }
+      },
+      fallbackValue: ShorebirdUpdateDownloadResult.noUpdateAvailable,
     );
   }
 
