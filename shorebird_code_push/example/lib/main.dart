@@ -50,6 +50,12 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         _currentPatchVersion = currentPatchVersion;
       });
+    }).onError((error, __) {
+      if (error is ShorebirdCodePushNotAvailableException) {
+        _showShorebirdNotFoundDialog();
+      } else {
+        _showErrorDialog(message: error.toString());
+      }
     });
   }
 
@@ -58,15 +64,26 @@ class _MyHomePageState extends State<MyHomePage> {
       _isCheckingForUpdate = true;
     });
 
-    // Ask the Shorebird servers if there is a new patch available.
-    final isUpdateAvailable =
-        await _shorebirdCodePush.isNewPatchAvailableForDownload();
+    bool isUpdateAvailable;
+    try {
+      // Ask the Shorebird servers if there is a new patch available.
+      isUpdateAvailable =
+          await _shorebirdCodePush.isNewPatchAvailableForDownload();
+    } on ShorebirdCodePushNotAvailableException {
+      _showShorebirdNotFoundDialog();
+      return;
+    } catch (error) {
+      _showErrorDialog(message: error.toString());
+      return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingForUpdate = false;
+        });
+      }
+    }
 
     if (!mounted) return;
-
-    setState(() {
-      _isCheckingForUpdate = false;
-    });
 
     if (isUpdateAvailable) {
       _showUpdateAvailableBanner();
@@ -131,12 +148,66 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  void _showShorebirdNotFoundDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Shorebird not available'),
+          content: const Text(
+            '''This is likely because you are not running with the Shorebird Flutter engine. This is expected if you are running in debug mode or if you used 'flutter run' instead of 'shorebird run'.''',
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Ok'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showErrorDialog({required String message}) {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('An error occurred'),
+          content: Text(message),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Ok'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _downloadUpdate() async {
     _showDownloadingBanner();
-    await _shorebirdCodePush.downloadUpdateIfAvailable();
+    try {
+      await _shorebirdCodePush.downloadUpdateIfAvailable();
+    } on ShorebirdCodePushNotAvailableException {
+      _showShorebirdNotFoundDialog();
+      return;
+    } catch (error) {
+      _showErrorDialog(message: error.toString());
+      return;
+    } finally {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+      }
+    }
+
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
     _showRestartBanner();
   }
 

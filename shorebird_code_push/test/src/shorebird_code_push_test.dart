@@ -11,13 +11,10 @@ void main() {
   group('ShorebirdCodePush', () {
     late Updater updater;
     late ShorebirdCodePush shorebirdCodePush;
-    Object? loggedError;
 
     setUp(() {
-      loggedError = null;
       updater = _MockUpdater();
       shorebirdCodePush = ShorebirdCodePush.forTest(
-        logError: ([object]) => loggedError = object,
         buildUpdater: () => updater,
       );
     });
@@ -29,22 +26,31 @@ void main() {
           await shorebirdCodePush.isNewPatchAvailableForDownload(),
           isFalse,
         );
-        expect(loggedError, isNull);
       });
 
       test('returns true if an update is available', () async {
         when(() => updater.checkForUpdate()).thenAnswer((_) => true);
         expect(await shorebirdCodePush.isNewPatchAvailableForDownload(), true);
-        expect(loggedError, isNull);
       });
 
-      test('returns false if updater throws exception', () async {
+      test(
+          '''throws a ShorebirdCodePushException if the updater throws an exception''',
+          () async {
         when(() => updater.checkForUpdate()).thenThrow(Exception('oh no'));
         expect(
-          await shorebirdCodePush.isNewPatchAvailableForDownload(),
-          isFalse,
+          () async => shorebirdCodePush.isNewPatchAvailableForDownload(),
+          throwsA(isA<ShorebirdCodePushException>()),
         );
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
+      });
+
+      test(
+          '''throws a ShorebirdCodePushNotAvailableException if the updater raises an ArgumentError''',
+          () async {
+        when(() => updater.checkForUpdate()).thenThrow(ArgumentError());
+        expect(
+          () async => shorebirdCodePush.isNewPatchAvailableForDownload(),
+          throwsA(isA<ShorebirdCodePushNotAvailableException>()),
+        );
       });
     });
 
@@ -52,19 +58,31 @@ void main() {
       test('returns null if current patch is reported as 0', () async {
         when(() => updater.currentPatchNumber()).thenReturn(0);
         expect(await shorebirdCodePush.currentPatchNumber(), isNull);
-        expect(loggedError, isNull);
       });
 
       test('forwards the return value of updater.currentPatchNumber', () async {
         when(() => updater.currentPatchNumber()).thenReturn(1);
         expect(await shorebirdCodePush.currentPatchNumber(), 1);
-        expect(loggedError, isNull);
       });
 
-      test('returns null if updater throws exception', () async {
+      test(
+          '''throws a ShorebirdCodePushException if the updater throws an exception''',
+          () async {
         when(() => updater.currentPatchNumber()).thenThrow(Exception('oh no'));
-        expect(await shorebirdCodePush.currentPatchNumber(), isNull);
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
+        expect(
+          () async => shorebirdCodePush.currentPatchNumber(),
+          throwsA(isA<ShorebirdCodePushException>()),
+        );
+      });
+
+      test(
+          '''throws a ShorebirdCodePushNotAvailableException if the updater raises an ArgumentError''',
+          () async {
+        when(() => updater.currentPatchNumber()).thenThrow(ArgumentError());
+        expect(
+          () async => shorebirdCodePush.currentPatchNumber(),
+          throwsA(isA<ShorebirdCodePushNotAvailableException>()),
+        );
       });
     });
 
@@ -72,19 +90,31 @@ void main() {
       test('returns null if current patch is reported as 0', () async {
         when(() => updater.nextPatchNumber()).thenReturn(0);
         expect(await shorebirdCodePush.nextPatchNumber(), isNull);
-        expect(loggedError, isNull);
       });
 
       test('forwards the return value of updater.nextPatchNumber', () async {
         when(() => updater.nextPatchNumber()).thenReturn(1);
         expect(await shorebirdCodePush.nextPatchNumber(), 1);
-        expect(loggedError, isNull);
       });
 
-      test('returns null if updater throws exception', () async {
+      test(
+          '''throws a ShorebirdCodePushException if the updater throws an exception''',
+          () async {
         when(() => updater.nextPatchNumber()).thenThrow(Exception('oh no'));
-        expect(await shorebirdCodePush.nextPatchNumber(), isNull);
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
+        expect(
+          () async => shorebirdCodePush.nextPatchNumber(),
+          throwsA(isA<ShorebirdCodePushException>()),
+        );
+      });
+
+      test(
+          '''throws a ShorebirdCodePushNotAvailableException if the updater raises an ArgumentError''',
+          () async {
+        when(() => updater.nextPatchNumber()).thenThrow(ArgumentError());
+        expect(
+          () async => shorebirdCodePush.nextPatchNumber(),
+          throwsA(isA<ShorebirdCodePushNotAvailableException>()),
+        );
       });
     });
 
@@ -95,16 +125,26 @@ void main() {
           shorebirdCodePush.downloadUpdateIfAvailable(),
           completes,
         );
-        expect(loggedError, isNull);
       });
 
-      test('logs error if updater throws exception', () async {
+      test(
+          '''throws a ShorebirdCodePushException if the updater throws an exception''',
+          () async {
         when(() => updater.downloadUpdate()).thenThrow(Exception('oh no'));
-        await expectLater(
-          shorebirdCodePush.downloadUpdateIfAvailable(),
-          completes,
+        expect(
+          () async => shorebirdCodePush.downloadUpdateIfAvailable(),
+          throwsA(isA<ShorebirdCodePushException>()),
         );
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
+      });
+
+      test(
+          '''throws a ShorebirdCodePushNotAvailableException if the updater raises an ArgumentError''',
+          () async {
+        when(() => updater.downloadUpdate()).thenThrow(ArgumentError());
+        expect(
+          () async => shorebirdCodePush.downloadUpdateIfAvailable(),
+          throwsA(isA<ShorebirdCodePushNotAvailableException>()),
+        );
       });
     });
 

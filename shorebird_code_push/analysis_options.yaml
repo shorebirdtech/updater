@@ -3,3 +3,9 @@ include: package:very_good_analysis/analysis_options.5.0.0.yaml
 analyzer:
   exclude:
     - lib/**.g.dart
+
+# We use `return await` when calling into isolates in shorebird_code_push.dart
+# to provide better stack traces.
+linter:
+  rules:
+    unnecessary_await_in_return: false
