@@ -48,7 +48,6 @@ class ShorebirdCodePush {
   Future<bool> isNewPatchAvailableForDownload() async {
     return await _runInIsolate(
       (updater) => updater.checkForUpdate(),
-      fallbackValue: false,
     );
   }
 
@@ -60,7 +59,6 @@ class ShorebirdCodePush {
         final patchNumber = updater.currentPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
-      fallbackValue: null,
     );
   }
 
@@ -73,16 +71,12 @@ class ShorebirdCodePush {
         final patchNumber = updater.nextPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
-      fallbackValue: null,
     );
   }
 
   /// Downloads the latest patch, if available.
   Future<void> downloadUpdateIfAvailable() async {
-    await _runInIsolate(
-      (updater) => updater.downloadUpdate(),
-      fallbackValue: null,
-    );
+    await _runInIsolate((updater) => updater.downloadUpdate());
   }
 
   /// Whether a new patch has been downloaded and is ready to install.
@@ -98,28 +92,19 @@ class ShorebirdCodePush {
     return nextPatch != null && currentPatch != nextPatch;
   }
 
-  void _handleError(Object error) {
-    final logMessage = '$_loggingPrefix $error';
-    if (error is ArgumentError) {
-      // ffi function lookup failures manifest as ArgumentErrors.
-      throw ShorebirdCodePushNotAvailableException();
-    } else {
-      throw ShorebirdCodePushException(logMessage);
-    }
-  }
-
-  /// Creates an [Updater] in a separate isolate and runs the given function. If
-  /// an error occurs, the error is logged and [fallbackValue] is returned.
-  Future<T> _runInIsolate<T>(
-    T Function(Updater updater) f, {
-    required T fallbackValue,
-  }) async {
+  /// Creates an [Updater] in a separate isolate and runs the given function.
+  Future<T> _runInIsolate<T>(T Function(Updater updater) f) async {
     try {
       // Create a new Updater in the new isolate.
       return await Isolate.run(() => f(_buildUpdater()));
     } catch (error) {
-      _handleError(error);
-      return fallbackValue;
+      final logMessage = '$_loggingPrefix $error';
+      if (error is ArgumentError) {
+        // ffi function lookup failures manifest as ArgumentErrors.
+        throw ShorebirdCodePushNotAvailableException();
+      } else {
+        throw ShorebirdCodePushException(logMessage);
+      }
     }
   }
 }
