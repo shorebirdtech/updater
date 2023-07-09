@@ -43,10 +43,10 @@ jobs:
         id: needs_flutter_build
         with:
           filters: |
-            example:
+            shorebird_code_push_example:
               - ./.github/workflows/main.yaml
               - ./.github/actions/dart_package/action.yaml
-              - shorebird_code_push/**
+              - shorebird_code_push/example/**
 
       - uses: dorny/paths-filter@v2
         name: Build Detection
@@ -88,7 +88,7 @@ jobs:
 
     strategy:
       matrix:
-        package: ${{ fromJSON(needs.changes.outputs.needs_dart_build) }}
+        package: ${{ fromJSON(needs.changes.outputs.needs_dart_build.shorebird_code_push) }}
 
     runs-on: ubuntu-latest
 
@@ -113,7 +113,7 @@ jobs:
 
     strategy:
       matrix:
-        package: ${{ fromJSON(needs.changes.outputs.needs_dart_build) }}
+        package: ${{ fromJSON(needs.changes.outputs.needs_flutter_build.shorebird_code_push_example) }}
 
     runs-on: ubuntu-latest
 
@@ -127,9 +127,6 @@ jobs:
 
       - name: 🎯 Build ${{ matrix.package }}
         uses: subosito/flutter-action@v2.10.0
-        with:
-          coverage_excludes: "**/*.g.dart"
-          working_directory: ${{ matrix.package }}
 
   ci:
     needs:
