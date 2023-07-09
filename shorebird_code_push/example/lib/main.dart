@@ -6,9 +6,11 @@ import 'package:shorebird_code_push/shorebird_code_push.dart';
 // Create an instance of ShorebirdCodePush. Because this example only contains
 // a single widget, we create it here, but you will likely only need to create
 // a single instance of ShorebirdCodePush in your app.
-final _shorebirdCodePush = ShorebirdCodePush();
+late final ShorebirdCodePush? _shorebirdCodePush;
 
-void main() {
+void main() async {
+  _shorebirdCodePush = await ShorebirdCodePush.initialize();
+
   runApp(const MyApp());
 }
 
@@ -40,23 +42,26 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   int? _currentPatchVersion;
   bool _isCheckingForUpdate = false;
+  bool get _isShorebirdAvailable => _shorebirdCodePush != null;
 
   @override
   void initState() {
     super.initState();
-    // Request the current patch number.
-    _shorebirdCodePush.currentPatchNumber().then((currentPatchVersion) {
-      if (!mounted) return;
-      setState(() {
-        _currentPatchVersion = currentPatchVersion;
-      });
-    }).onError((error, __) {
-      if (error is ShorebirdCodePushNotAvailableException) {
-        _showShorebirdNotFoundDialog();
-      } else {
+    if (_isShorebirdAvailable) {
+      // Request the current patch number.
+      _shorebirdCodePush!.currentPatchNumber().then((currentPatchVersion) {
+        if (!mounted) return;
+        setState(() {
+          _currentPatchVersion = currentPatchVersion;
+        });
+      }).onError((error, __) {
         _showErrorDialog(message: error.toString());
-      }
-    });
+      });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showShorebirdNotFoundDialog();
+      });
+    }
   }
 
   Future<void> _checkForUpdate() async {
@@ -68,10 +73,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       // Ask the Shorebird servers if there is a new patch available.
       isUpdateAvailable =
-          await _shorebirdCodePush.isNewPatchAvailableForDownload();
-    } on ShorebirdCodePushNotAvailableException {
-      _showShorebirdNotFoundDialog();
-      return;
+          await _shorebirdCodePush!.isNewPatchAvailableForDownload();
     } catch (error) {
       _showErrorDialog(message: error.toString());
       return;
@@ -193,10 +195,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _downloadUpdate() async {
     _showDownloadingBanner();
     try {
-      await _shorebirdCodePush.downloadUpdateIfAvailable();
-    } on ShorebirdCodePushNotAvailableException {
-      _showShorebirdNotFoundDialog();
-      return;
+      await _shorebirdCodePush!.downloadUpdateIfAvailable();
     } catch (error) {
       _showErrorDialog(message: error.toString());
       return;
@@ -233,7 +232,9 @@ class _MyHomePageState extends State<MyHomePage> {
               height: 20,
             ),
             ElevatedButton(
-              onPressed: _isCheckingForUpdate ? null : _checkForUpdate,
+              onPressed: !_isShorebirdAvailable || _isCheckingForUpdate
+                  ? null
+                  : _checkForUpdate,
               child: _isCheckingForUpdate
                   ? const SizedBox(
                       height: 14,

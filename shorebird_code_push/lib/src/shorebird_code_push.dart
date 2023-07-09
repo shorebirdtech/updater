@@ -3,14 +3,10 @@ import 'dart:isolate';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
-/// A function that constructs an [Updater] instance. Used for testing.
-@visibleForTesting
-typedef UpdaterBuilder = Updater Function();
-
-/// {@template shorebird_code_push_not_available_exception}
-/// Thrown when the Shorebird engine is not available.
-/// {@endtemplate}
-class ShorebirdCodePushNotAvailableException implements Exception {}
+/// A logging function for errors arising from interacting with the native code.
+///
+/// Used to override the default behavior of using [print].
+typedef ShorebirdLog = void Function(Object? object);
 
 /// {@template shorebird_code_push_exception}
 /// Thrown when an error occurs in the Shorebird code push package.
@@ -26,18 +22,47 @@ class ShorebirdCodePushException implements Exception {
   String toString() => 'ShorebirdCodePushException: $message';
 }
 
+/// A function that constructs an [Updater] instance. Used for testing.
+@visibleForTesting
+typedef UpdaterBuilder = Updater Function();
+
 /// {@template shorebird_code_push}
 /// Get info about your Shorebird code push app.
 /// {@endtemplate}
 class ShorebirdCodePush {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePush() : _buildUpdater = Updater.new;
+  ShorebirdCodePush._()
+      : _buildUpdater = Updater.new,
+        logError = print;
 
   /// A test-only constructor that allows overriding the Updater constructor.
   @visibleForTesting
   ShorebirdCodePush.forTest({
+    required this.logError,
     required UpdaterBuilder buildUpdater,
   }) : _buildUpdater = buildUpdater;
+
+  /// Creates a new [ShorebirdCodePush] instance. Returns null if Shorebird is
+  /// not available (i.e., if the app is running with the standard Flutter
+  /// engine instead of the Shorebird engine).
+  static Future<ShorebirdCodePush?> initialize() async {
+    final shorebirdCodePush = ShorebirdCodePush._();
+    final updater = shorebirdCodePush._buildUpdater();
+    try {
+      // Attempt to get the current patch number as a proxy for whether the
+      // updater bindings are available.
+      updater.currentPatchNumber();
+    } catch (_) {
+      return null;
+    }
+
+    return shorebirdCodePush;
+  }
+
+  /// Logs error messages arising from interacting with the native code.
+  ///
+  /// Defaults to [print].
+  final ShorebirdLog logError;
 
   final UpdaterBuilder _buildUpdater;
   static const _loggingPrefix = '[ShorebirdCodePush]';
@@ -48,6 +73,7 @@ class ShorebirdCodePush {
   Future<bool> isNewPatchAvailableForDownload() async {
     return await _runInIsolate(
       (updater) => updater.checkForUpdate(),
+      fallbackValue: false,
     );
   }
 
@@ -59,6 +85,7 @@ class ShorebirdCodePush {
         final patchNumber = updater.currentPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
+      fallbackValue: null,
     );
   }
 
@@ -71,12 +98,16 @@ class ShorebirdCodePush {
         final patchNumber = updater.nextPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
+      fallbackValue: null,
     );
   }
 
   /// Downloads the latest patch, if available.
   Future<void> downloadUpdateIfAvailable() async {
-    await _runInIsolate((updater) => updater.downloadUpdate());
+    await _runInIsolate(
+      (updater) => updater.downloadUpdate(),
+      fallbackValue: null,
+    );
   }
 
   /// Whether a new patch has been downloaded and is ready to install.
@@ -92,19 +123,33 @@ class ShorebirdCodePush {
     return nextPatch != null && currentPatch != nextPatch;
   }
 
-  /// Creates an [Updater] in a separate isolate and runs the given function.
-  Future<T> _runInIsolate<T>(T Function(Updater updater) f) async {
+  void _handleError(Object error) {
+    final logMessage = '$_loggingPrefix $error';
+    if (error is ArgumentError) {
+      // ffi function lookup failures manifest as ArgumentErrors.
+      logError(
+        '''
+$logMessage
+  This is likely because you are not running with the Shorebird Flutter engine (that is, if you ran with `flutter run` instead of `shorebird run`).''',
+      );
+    } else {
+      logError(logMessage);
+      throw ShorebirdCodePushException(logMessage);
+    }
+  }
+
+  /// Creates an [Updater] in a separate isolate and runs the given function. If
+  /// an error occurs, the error is logged and [fallbackValue] is returned.
+  Future<T> _runInIsolate<T>(
+    T Function(Updater updater) f, {
+    required T fallbackValue,
+  }) async {
     try {
       // Create a new Updater in the new isolate.
       return await Isolate.run(() => f(_buildUpdater()));
     } catch (error) {
-      final logMessage = '$_loggingPrefix $error';
-      if (error is ArgumentError) {
-        // ffi function lookup failures manifest as ArgumentErrors.
-        throw ShorebirdCodePushNotAvailableException();
-      } else {
-        throw ShorebirdCodePushException(logMessage);
-      }
+      _handleError(error);
+      return fallbackValue;
     }
   }
 }
