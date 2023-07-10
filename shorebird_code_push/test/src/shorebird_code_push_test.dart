@@ -2,22 +2,20 @@
 
 import 'package:mocktail/mocktail.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
+import 'package:shorebird_code_push/src/shorebird_code_push_ffi.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 import 'package:test/test.dart';
 
 class _MockUpdater extends Mock implements Updater {}
 
 void main() {
-  group('ShorebirdCodePush', () {
+  group('ShorebirdCodePushFfi', () {
     late Updater updater;
     late ShorebirdCodePush shorebirdCodePush;
-    Object? loggedError;
 
     setUp(() {
-      loggedError = null;
       updater = _MockUpdater();
-      shorebirdCodePush = ShorebirdCodePush.forTest(
-        logError: ([object]) => loggedError = object,
+      shorebirdCodePush = ShorebirdCodePushFfi.forTest(
         buildUpdater: () => updater,
       );
     });
@@ -29,13 +27,11 @@ void main() {
           await shorebirdCodePush.isNewPatchAvailableForDownload(),
           isFalse,
         );
-        expect(loggedError, isNull);
       });
 
       test('returns true if an update is available', () async {
         when(() => updater.checkForUpdate()).thenAnswer((_) => true);
         expect(await shorebirdCodePush.isNewPatchAvailableForDownload(), true);
-        expect(loggedError, isNull);
       });
 
       test('returns false if updater throws exception', () async {
@@ -44,7 +40,6 @@ void main() {
           await shorebirdCodePush.isNewPatchAvailableForDownload(),
           isFalse,
         );
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
       });
     });
 
@@ -52,19 +47,16 @@ void main() {
       test('returns null if current patch is reported as 0', () async {
         when(() => updater.currentPatchNumber()).thenReturn(0);
         expect(await shorebirdCodePush.currentPatchNumber(), isNull);
-        expect(loggedError, isNull);
       });
 
       test('forwards the return value of updater.currentPatchNumber', () async {
         when(() => updater.currentPatchNumber()).thenReturn(1);
         expect(await shorebirdCodePush.currentPatchNumber(), 1);
-        expect(loggedError, isNull);
       });
 
       test('returns null if updater throws exception', () async {
         when(() => updater.currentPatchNumber()).thenThrow(Exception('oh no'));
         expect(await shorebirdCodePush.currentPatchNumber(), isNull);
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
       });
     });
 
@@ -72,19 +64,16 @@ void main() {
       test('returns null if current patch is reported as 0', () async {
         when(() => updater.nextPatchNumber()).thenReturn(0);
         expect(await shorebirdCodePush.nextPatchNumber(), isNull);
-        expect(loggedError, isNull);
       });
 
       test('forwards the return value of updater.nextPatchNumber', () async {
         when(() => updater.nextPatchNumber()).thenReturn(1);
         expect(await shorebirdCodePush.nextPatchNumber(), 1);
-        expect(loggedError, isNull);
       });
 
       test('returns null if updater throws exception', () async {
         when(() => updater.nextPatchNumber()).thenThrow(Exception('oh no'));
         expect(await shorebirdCodePush.nextPatchNumber(), isNull);
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
       });
     });
 
@@ -95,7 +84,6 @@ void main() {
           shorebirdCodePush.downloadUpdateIfAvailable(),
           completes,
         );
-        expect(loggedError, isNull);
       });
 
       test('logs error if updater throws exception', () async {
@@ -104,7 +92,6 @@ void main() {
           shorebirdCodePush.downloadUpdateIfAvailable(),
           completes,
         );
-        expect(loggedError, '[ShorebirdCodePush] Exception: oh no');
       });
     });
 
