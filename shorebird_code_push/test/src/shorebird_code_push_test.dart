@@ -82,8 +82,7 @@ void main() {
             () async {
           when(() => updater.checkForUpdate()).thenThrow(Exception('oh no'));
           await expectLater(
-            () async =>
-                await shorebirdCodePush.isNewPatchAvailableForDownload(),
+            () async => shorebirdCodePush.isNewPatchAvailableForDownload(),
             throwsA(
               isA<ShorebirdCodePushException>().having(
                 (exception) => exception.message,
@@ -100,7 +99,9 @@ void main() {
             () async {
           when(() => updater.checkForUpdate()).thenThrow(ArgumentError());
           expect(
-              await shorebirdCodePush.isNewPatchAvailableForDownload(), false);
+            await shorebirdCodePush.isNewPatchAvailableForDownload(),
+            false,
+          );
           expect(
             loggedError,
             '''
@@ -131,7 +132,7 @@ void main() {
           when(() => updater.currentPatchNumber())
               .thenThrow(Exception('oh no'));
           await expectLater(
-            () async => await shorebirdCodePush.currentPatchNumber(),
+            () async => shorebirdCodePush.currentPatchNumber(),
             throwsA(
               isA<ShorebirdCodePushException>().having(
                 (exception) => exception.message,
@@ -232,7 +233,7 @@ void main() {
         });
 
         test(
-            'completes and logs an error if the updater raises an ArgumentError',
+            '''completes and logs an error if the updater raises an ArgumentError''',
             () async {
           when(() => updater.downloadUpdate()).thenThrow(ArgumentError());
           await expectLater(

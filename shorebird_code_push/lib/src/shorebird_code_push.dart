@@ -67,8 +67,8 @@ class ShorebirdCodePush {
   /// Checks whether a new patch is available for download.
   ///
   /// Runs in a separate isolate to avoid blocking the UI thread.
-  Future<bool> isNewPatchAvailableForDownload() async {
-    return await _runInIsolate(
+  Future<bool> isNewPatchAvailableForDownload() {
+    return _runInIsolate(
       (updater) => updater.checkForUpdate(),
       fallbackValue: false,
     );
@@ -76,8 +76,8 @@ class ShorebirdCodePush {
 
   /// The version of the currently-installed patch. Null if no patch is
   /// installed (i.e., the app is running the release version).
-  Future<int?> currentPatchNumber() async {
-    return await _runInIsolate(
+  Future<int?> currentPatchNumber() {
+    return _runInIsolate(
       (updater) {
         final patchNumber = updater.currentPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
@@ -89,8 +89,8 @@ class ShorebirdCodePush {
   /// The version of the patch that will be run on the next app launch. If no
   /// new patch has been downloaded, this will be the same as
   /// [currentPatchNumber].
-  Future<int?> nextPatchNumber() async {
-    return await _runInIsolate(
+  Future<int?> nextPatchNumber() {
+    return _runInIsolate(
       (updater) {
         final patchNumber = updater.nextPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
