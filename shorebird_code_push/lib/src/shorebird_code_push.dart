@@ -31,8 +31,10 @@ abstract class ShorebirdCodePush {
   /// Runs in a separate isolate to avoid blocking the UI thread.
   Future<bool> isNewPatchAvailableForDownload();
 
-  /// The version of the currently-installed patch. Null if no patch is
+  /// The version of the currently-installed patch. `0` if no patch is
   /// installed (i.e., the app is running the release version).
+  ///
+  /// This will return `null` if Shorebird is not available.
   Future<int?> currentPatchNumber();
 
   /// The version of the patch that will be run on the next app launch. If no
