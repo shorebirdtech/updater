@@ -69,6 +69,7 @@ jobs:
         uses: ./.github/actions/rust_crate
         with:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
+          coverage_excludes: "**/*.g.dart"
           working_directory: ${{ matrix.crate }}
 
   build_dart_packages:
