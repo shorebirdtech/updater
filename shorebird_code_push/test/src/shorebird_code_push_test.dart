@@ -6,6 +6,15 @@ import 'package:test/test.dart';
 class _MockUpdater extends Mock implements Updater {}
 
 void main() {
+  group(ShorebirdCodePushException, () {
+    test('toString returns message prepended with class name', () {
+      expect(
+        ShorebirdCodePushException('message').toString(),
+        'ShorebirdCodePushException: message',
+      );
+    });
+  });
+
   group(ShorebirdCodePush, () {
     late Updater updater;
     Object? loggedError;
