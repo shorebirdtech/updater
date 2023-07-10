@@ -30,21 +30,12 @@ class ShorebirdCodePushFfi implements ShorebirdCodePush {
 
   @override
   Future<bool> isNewPatchAvailableForDownload() {
-    return _runInIsolate(
-      (updater) => updater.checkForUpdate(),
-      fallbackValue: false,
-    );
+    return _runInIsolate((updater) => updater.checkForUpdate());
   }
 
   @override
   Future<int?> currentPatchNumber() {
-    return _runInIsolate(
-      (updater) {
-        final patchNumber = updater.currentPatchNumber();
-        return patchNumber == 0 ? null : patchNumber;
-      },
-      fallbackValue: null,
-    );
+    return _runInIsolate((updater) => updater.currentPatchNumber());
   }
 
   @override
@@ -54,16 +45,12 @@ class ShorebirdCodePushFfi implements ShorebirdCodePush {
         final patchNumber = updater.nextPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
-      fallbackValue: null,
     );
   }
 
   @override
   Future<void> downloadUpdateIfAvailable() async {
-    await _runInIsolate(
-      (updater) => updater.downloadUpdate(),
-      fallbackValue: null,
-    );
+    await _runInIsolate((updater) => updater.downloadUpdate());
   }
 
   @override
@@ -76,17 +63,11 @@ class ShorebirdCodePushFfi implements ShorebirdCodePush {
     return nextPatch != null && currentPatch != nextPatch;
   }
 
-  /// Creates an [Updater] in a separate isolate and runs the given function. If
-  /// an error occurs, the error is logged and [fallbackValue] is returned.
-  Future<T> _runInIsolate<T>(
-    T Function(Updater updater) f, {
-    required T fallbackValue,
-  }) async {
-    try {
-      // Create a new Updater in the new isolate.
-      return await Isolate.run(() => f(_buildUpdater()));
-    } catch (error) {
-      return fallbackValue;
-    }
+  @override
+  bool isShorebirdAvailable() => true;
+
+  /// Creates an [Updater] in a separate isolate and runs the given function.
+  Future<T> _runInIsolate<T>(T Function(Updater updater) f) async {
+    return Isolate.run(() => f(_buildUpdater()));
   }
 }

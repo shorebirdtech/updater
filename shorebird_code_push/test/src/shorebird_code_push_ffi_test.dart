@@ -34,29 +34,29 @@ void main() {
         expect(await shorebirdCodePush.isNewPatchAvailableForDownload(), true);
       });
 
-      test('returns false if updater throws exception', () async {
+      test('surfaces exception if updater throws exception', () async {
         when(() => updater.checkForUpdate()).thenThrow(Exception('oh no'));
         expect(
-          await shorebirdCodePush.isNewPatchAvailableForDownload(),
-          isFalse,
+          () => shorebirdCodePush.isNewPatchAvailableForDownload(),
+          throwsException,
         );
       });
     });
 
     group('currentPatchNumber', () {
-      test('returns null if current patch is reported as 0', () async {
+      test('returns 0 if current patch is reported as 0', () async {
         when(() => updater.currentPatchNumber()).thenReturn(0);
-        expect(await shorebirdCodePush.currentPatchNumber(), isNull);
+        expect(await shorebirdCodePush.currentPatchNumber(), equals(0));
       });
 
       test('forwards the return value of updater.currentPatchNumber', () async {
         when(() => updater.currentPatchNumber()).thenReturn(1);
-        expect(await shorebirdCodePush.currentPatchNumber(), 1);
+        expect(await shorebirdCodePush.currentPatchNumber(), equals(1));
       });
 
-      test('returns null if updater throws exception', () async {
+      test('surfaces exception if updater throws exception', () async {
         when(() => updater.currentPatchNumber()).thenThrow(Exception('oh no'));
-        expect(await shorebirdCodePush.currentPatchNumber(), isNull);
+        expect(() => shorebirdCodePush.currentPatchNumber(), throwsException);
       });
     });
 
@@ -68,12 +68,12 @@ void main() {
 
       test('forwards the return value of updater.nextPatchNumber', () async {
         when(() => updater.nextPatchNumber()).thenReturn(1);
-        expect(await shorebirdCodePush.nextPatchNumber(), 1);
+        expect(await shorebirdCodePush.nextPatchNumber(), equals(1));
       });
 
-      test('returns null if updater throws exception', () async {
+      test('surfaces exception if updater throws exception', () async {
         when(() => updater.nextPatchNumber()).thenThrow(Exception('oh no'));
-        expect(await shorebirdCodePush.nextPatchNumber(), isNull);
+        expect(() => shorebirdCodePush.nextPatchNumber(), throwsException);
       });
     });
 
@@ -86,11 +86,11 @@ void main() {
         );
       });
 
-      test('logs error if updater throws exception', () async {
+      test('surfaces exception if updater throws exception', () async {
         when(() => updater.downloadUpdate()).thenThrow(Exception('oh no'));
         await expectLater(
-          shorebirdCodePush.downloadUpdateIfAvailable(),
-          completes,
+          () => shorebirdCodePush.downloadUpdateIfAvailable(),
+          throwsException,
         );
       });
     });

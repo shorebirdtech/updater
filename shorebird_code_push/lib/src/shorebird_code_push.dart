@@ -15,12 +15,16 @@ abstract class ShorebirdCodePush {
   /// that uses ffi to communicate with the Shorebird Engine.
   factory ShorebirdCodePush() {
     try {
+      // If the Shorebird Engine is not available, this will throw an exception.
       Updater().currentPatchNumber();
       return ShorebirdCodePushFfi();
     } catch (error) {
       return ShorebirdCodePushNoop();
     }
   }
+
+  /// Whether the Shorebird Engine is available.
+  bool isShorebirdAvailable();
 
   /// Checks whether a new patch is available for download.
   ///

@@ -17,5 +17,11 @@ class ShorebirdCodePushNoop implements ShorebirdCodePush {
   Future<bool> isNewPatchReadyToInstall() async => false;
 
   @override
-  Future<int?> nextPatchNumber() async => null;
+  bool isShorebirdAvailable() => false;
+
+  @override
+  Future<int?> nextPatchNumber() {
+    // TODO: implement nextPatchNumber
+    throw UnimplementedError();
+  }
 }
