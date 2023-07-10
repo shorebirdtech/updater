@@ -33,7 +33,12 @@ this:
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 // Create an instance of the ShorebirdCodePush class
-final shorebirdCodePush = ShorebirdCodePush();
+final shorebirdCodePush = ShorebirdCodePush.initialize();
+if (shorebirdCodePush == null) {
+  // Shorebird is not available. This will happen if you run the app using
+  // `flutter run`.
+  return;
+}
 
 // Get the current patch version, or null if no patch is installed.
 final currentPatchversion = shorebirdCodePush.currentPatchVersion();
