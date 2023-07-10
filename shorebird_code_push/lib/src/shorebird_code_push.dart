@@ -31,13 +31,7 @@ typedef UpdaterBuilder = Updater Function();
 /// {@endtemplate}
 class ShorebirdCodePush {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePush._()
-      : _buildUpdater = Updater.new,
-        logError = print;
-
-  /// A test-only constructor that allows overriding the Updater constructor.
-  @visibleForTesting
-  ShorebirdCodePush.forTest({
+  ShorebirdCodePush._({
     required this.logError,
     required UpdaterBuilder buildUpdater,
   }) : _buildUpdater = buildUpdater;
@@ -45,18 +39,21 @@ class ShorebirdCodePush {
   /// Creates a new [ShorebirdCodePush] instance. Returns null if Shorebird is
   /// not available (i.e., if the app is running with the standard Flutter
   /// engine instead of the Shorebird engine).
-  static Future<ShorebirdCodePush?> initialize() async {
-    final shorebirdCodePush = ShorebirdCodePush._();
-    final updater = shorebirdCodePush._buildUpdater();
+  static Future<ShorebirdCodePush?> initialize({
+    ShorebirdLog logError = print,
+    UpdaterBuilder buildUpdater = Updater.new,
+  }) async {
+    final updater = buildUpdater();
     try {
       // Attempt to get the current patch number as a proxy for whether the
       // updater bindings are available.
       updater.currentPatchNumber();
-    } catch (_) {
+    } catch (error) {
+      logError('$_loggingPrefix Error initializing: $error');
       return null;
     }
 
-    return shorebirdCodePush;
+    return ShorebirdCodePush._(logError: logError, buildUpdater: buildUpdater);
   }
 
   /// Logs error messages arising from interacting with the native code.
@@ -146,7 +143,10 @@ $logMessage
   }) async {
     try {
       // Create a new Updater in the new isolate.
-      return await Isolate.run(() => f(_buildUpdater()));
+      return await Isolate.run(() {
+        final updater = _buildUpdater();
+        return f(updater);
+      });
     } catch (error) {
       _handleError(error);
       return fallbackValue;
