@@ -8,6 +8,20 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// Used to override the default behavior of using [print].
 typedef ShorebirdLog = void Function(Object? object);
 
+/// {@template shorebird_code_push_exception}
+/// Thrown when an error occurs in the Shorebird code push package.
+/// {@endtemplate}
+class ShorebirdCodePushException implements Exception {
+  /// {@macro shorebird_code_push_exception}
+  ShorebirdCodePushException(this.message);
+
+  /// The error message.
+  final String message;
+
+  @override
+  String toString() => 'ShorebirdCodePushException: $message';
+}
+
 /// A function that constructs an [Updater] instance. Used for testing.
 @visibleForTesting
 typedef UpdaterBuilder = Updater Function();
@@ -17,16 +31,30 @@ typedef UpdaterBuilder = Updater Function();
 /// {@endtemplate}
 class ShorebirdCodePush {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePush({
-    this.logError = print,
-  }) : _buildUpdater = Updater.new;
-
-  /// A test-only constructor that allows overriding the Updater constructor.
-  @visibleForTesting
-  ShorebirdCodePush.forTest({
+  ShorebirdCodePush._({
     required this.logError,
     required UpdaterBuilder buildUpdater,
   }) : _buildUpdater = buildUpdater;
+
+  /// Creates a new [ShorebirdCodePush] instance. Returns null if Shorebird is
+  /// not available (i.e., if the app is running with the standard Flutter
+  /// engine instead of the Shorebird engine).
+  static Future<ShorebirdCodePush?> initialize({
+    ShorebirdLog logError = print,
+    UpdaterBuilder buildUpdater = Updater.new,
+  }) async {
+    final updater = buildUpdater();
+    try {
+      // Attempt to get the current patch number as a proxy for whether the
+      // updater bindings are available.
+      updater.currentPatchNumber();
+    } catch (error) {
+      logError('$_loggingPrefix Error initializing: $error');
+      return null;
+    }
+
+    return ShorebirdCodePush._(logError: logError, buildUpdater: buildUpdater);
+  }
 
   /// Logs error messages arising from interacting with the native code.
   ///
@@ -92,7 +120,7 @@ class ShorebirdCodePush {
     return nextPatch != null && currentPatch != nextPatch;
   }
 
-  void _logError(Object error) {
+  void _handleError(Object error) {
     final logMessage = '$_loggingPrefix $error';
     if (error is ArgumentError) {
       // ffi function lookup failures manifest as ArgumentErrors.
@@ -103,6 +131,7 @@ $logMessage
       );
     } else {
       logError(logMessage);
+      throw ShorebirdCodePushException(logMessage);
     }
   }
 
@@ -114,9 +143,12 @@ $logMessage
   }) async {
     try {
       // Create a new Updater in the new isolate.
-      return await Isolate.run(() => f(_buildUpdater()));
+      return await Isolate.run(() {
+        final updater = _buildUpdater();
+        return f(updater);
+      });
     } catch (error) {
-      _logError(error);
+      _handleError(error);
       return fallbackValue;
     }
   }

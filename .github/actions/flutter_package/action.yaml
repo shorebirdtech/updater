@@ -1,5 +1,5 @@
-name: Dart Package Workflow
-description: Build and test your Dart packages.
+name: Flutter Package Workflow
+description: Build and test your Flutter packages.
 
 inputs:
   codecov_token:
@@ -13,10 +13,6 @@ inputs:
     required: false
     default: ""
     description: Globs to exclude from coverage
-  dart_sdk:
-    required: false
-    default: "stable"
-    description: "The dart sdk version to use"
   working_directory:
     required: false
     default: "."
@@ -41,14 +37,12 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: dart-lang/setup-dart@v1
-      with:
-        sdk: ${{inputs.dart_sdk}}
+    - uses: subosito/flutter-action@v2
 
     - name: Install Dependencies
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}
-      run: dart pub get
+      run: flutter pub get
 
     - name: Format
       working-directory: ${{ inputs.working_directory }}
@@ -64,7 +58,7 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}
       run: |
-        dart pub global activate coverage
+        flutter pub global activate coverage
         dart test -j ${{inputs.concurrency}} --coverage=coverage --platform=${{inputs.platform}} && dart pub global run coverage:format_coverage --lcov --in=coverage --out=coverage/lcov.info --packages=.dart_tool/package_config.json --report-on=${{inputs.report_on}} --check-ignore
 
     - name: Upload Coverage

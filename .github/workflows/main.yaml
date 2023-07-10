@@ -69,6 +69,7 @@ jobs:
         uses: ./.github/actions/rust_crate
         with:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
+          coverage_excludes: "**/*.g.dart"
           working_directory: ${{ matrix.crate }}
 
   build_dart_packages:
@@ -90,7 +91,7 @@ jobs:
           submodules: recursive
 
       - name: 🎯 Build ${{ matrix.package }}
-        uses: subosito/flutter-action@v2.10.0
+        uses: ./.github/actions/flutter_package
         with:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
           coverage_excludes: "**/*.g.dart"
