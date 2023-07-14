@@ -1,0 +1,73 @@
+name: Flutter Package Workflow
+description: Build and test your Flutter packages.
+
+inputs:
+  codecov_token:
+    required: true
+    description: The Codecov token used to upload coverage
+  concurrency:
+    required: false
+    default: "4"
+    description: The value of the concurrency flag (-j) used when running tests
+  coverage_excludes:
+    required: false
+    default: ""
+    description: Globs to exclude from coverage
+  working_directory:
+    required: false
+    default: "."
+    description: The working directory for this workflow
+  min_coverage:
+    required: false
+    default: "100"
+    description: The minimum coverage percentage value
+  analyze_directories:
+    required: false
+    default: "lib test"
+    description: Directories to analyze
+  report_on:
+    required: false
+    default: "lib"
+    description: Directories to report on when collecting coverage
+  platform:
+    required: false
+    default: "vm"
+    description: Platform to use when running tests
+
+runs:
+  using: "composite"
+  steps:
+    - uses: subosito/flutter-action@v2
+
+    - name: Install Dependencies
+      working-directory: ${{ inputs.working_directory }}
+      shell: ${{ inputs.shell }}
+      run: flutter pub get
+
+    - name: Format
+      working-directory: ${{ inputs.working_directory }}
+      shell: ${{ inputs.shell }}
+      run: dart format --set-exit-if-changed .
+
+    - name: Analyze
+      working-directory: ${{ inputs.working_directory }}
+      shell: ${{ inputs.shell }}
+      run: dart analyze --fatal-warnings ${{inputs.analyze_directories}}
+
+    - name: Test
+      working-directory: ${{ inputs.working_directory }}
+      shell: ${{ inputs.shell }}
+      run: |
+        flutter pub global activate coverage
+        dart test -j ${{inputs.concurrency}} --coverage=coverage --platform=${{inputs.platform}} && dart pub global run coverage:format_coverage --lcov --in=coverage --out=coverage/lcov.info --packages=.dart_tool/package_config.json --report-on=${{inputs.report_on}} --check-ignore
+
+    - name: Upload Coverage
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ inputs.codecov_token }}
+
+    - uses: VeryGoodOpenSource/very_good_coverage@v2
+      with:
+        path: ${{inputs.working_directory}}/coverage/lcov.info
+        exclude: ${{inputs.coverage_excludes}}
+        min_coverage: ${{inputs.min_coverage}}
