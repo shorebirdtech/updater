@@ -21,6 +21,7 @@ class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
   Future<int?> currentPatchNumber() {
     return Isolate.run(() {
       final currentPatchNumber = _updater.currentPatchNumber();
+      // 0 means no patch is installed so we return null.
       return currentPatchNumber == 0 ? null : currentPatchNumber;
     });
   }
@@ -30,6 +31,7 @@ class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
     return Isolate.run(
       () {
         final patchNumber = _updater.nextPatchNumber();
+        // 0 means no patch is next so we return null.
         return patchNumber == 0 ? null : patchNumber;
       },
     );
