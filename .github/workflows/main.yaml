@@ -90,7 +90,7 @@ jobs:
           submodules: recursive
 
       - name: 🎯 Build ${{ matrix.package }}
-        uses: subosito/flutter-action@v2.10.0
+        uses: ./.github/actions/dart_package
         with:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
           coverage_excludes: "**/*.g.dart"
