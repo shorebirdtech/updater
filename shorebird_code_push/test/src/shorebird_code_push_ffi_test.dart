@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 class _MockUpdater extends Mock implements Updater {}
 
 void main() {
-  group('ShorebirdCodePushFfi', () {
+  group(ShorebirdCodePushFfi, () {
     late Updater updater;
     late ShorebirdCodePushBase shorebirdCodePush;
 
