@@ -13,7 +13,7 @@ void main() {
     setUp(() {
       updaterBindings = _MockUpdaterBindings();
 
-      updater = Updater();
+      updater = const Updater();
       Updater.bindings = updaterBindings;
     });
 

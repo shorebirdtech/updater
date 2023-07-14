@@ -8,7 +8,8 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// {@endtemplate}
 class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePushFfi({Updater? updater}) : _updater = updater ?? Updater();
+  ShorebirdCodePushFfi({Updater? updater})
+      : _updater = updater ?? const Updater();
 
   final Updater _updater;
 
