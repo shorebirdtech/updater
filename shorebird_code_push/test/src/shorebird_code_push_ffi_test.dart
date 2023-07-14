@@ -15,6 +15,12 @@ void main() {
       shorebirdCodePush = ShorebirdCodePushFfi(updater: updater);
     });
 
+    group('isShorebirdAvailable', () {
+      test('returns true', () {
+        expect(shorebirdCodePush.isShorebirdAvailable(), isTrue);
+      });
+    });
+
     group('isNewPatchAvailableForDownload', () {
       test('returns false if no update is available', () async {
         when(() => updater.checkForUpdate()).thenAnswer((_) => false);

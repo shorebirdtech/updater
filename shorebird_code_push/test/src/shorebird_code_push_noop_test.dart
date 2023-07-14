@@ -27,6 +27,12 @@ void main() {
       expect(printLogs, equals([expected]));
     });
 
+    group('isShorebirdAvailable', () {
+      test('returns false', () {
+        expect(shorebirdCodePush.isShorebirdAvailable(), isFalse);
+      });
+    });
+
     group('isNewPatchAvailableForDownload', () {
       test('returns false', () {
         expectLater(

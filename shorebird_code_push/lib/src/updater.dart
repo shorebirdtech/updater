@@ -8,6 +8,9 @@ import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
 /// translates ffi types into easier to use Dart types.
 /// {@endtemplate}
 class Updater {
+  /// {@macro updater}
+  const Updater();
+
   /// The ffi bindings to the Updater library.
   @visibleForTesting
   static UpdaterBindings bindings =

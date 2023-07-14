@@ -1,3 +1,4 @@
+import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/shorebird_code_push_base.dart';
 import 'package:shorebird_code_push/src/shorebird_code_push_ffi.dart';
 import 'package:shorebird_code_push/src/shorebird_code_push_noop.dart';
@@ -8,10 +9,17 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// {@endtemplate}
 class ShorebirdCodePush implements ShorebirdCodePushBase {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePush() {
+  ShorebirdCodePush() : this._(updater: const Updater());
+
+  /// Constructor used for testing which allows injecting a mock [Updater].
+  @visibleForTesting
+  ShorebirdCodePush.test({Updater updater = const Updater()})
+      : this._(updater: updater);
+
+  ShorebirdCodePush._({required Updater updater}) {
     try {
       // If the Shorebird Engine is not available, this will throw an exception.
-      final updater = Updater()..currentPatchNumber();
+      updater.currentPatchNumber();
       _delegate = ShorebirdCodePushFfi(updater: updater);
     } catch (error) {
       // ignore: avoid_print
