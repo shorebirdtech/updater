@@ -1,32 +1,17 @@
 import 'dart:isolate';
 
-import 'package:meta/meta.dart';
-import 'package:shorebird_code_push/shorebird_code_push.dart';
+import 'package:shorebird_code_push/src/shorebird_code_push_base.dart';
 import 'package:shorebird_code_push/src/updater.dart';
-
-/// A logging function for errors arising from interacting with the native code.
-///
-/// Used to override the default behavior of using [print].
-typedef ShorebirdLog = void Function(Object? object);
-
-/// A function that constructs an [Updater] instance. Used for testing.
-@visibleForTesting
-typedef UpdaterBuilder = Updater Function();
 
 /// {@template shorebird_code_push}
 /// Get info about your Shorebird code push app.
 /// {@endtemplate}
-class ShorebirdCodePushFfi implements ShorebirdCodePush {
+class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePushFfi() : _buildUpdater = Updater.new;
+  ShorebirdCodePushFfi({Updater Function()? buildUpdater})
+      : _buildUpdater = buildUpdater ?? Updater.new;
 
-  /// A test-only constructor that allows overriding the Updater constructor.
-  @visibleForTesting
-  ShorebirdCodePushFfi.forTest({
-    required UpdaterBuilder buildUpdater,
-  }) : _buildUpdater = buildUpdater;
-
-  final UpdaterBuilder _buildUpdater;
+  final Updater Function() _buildUpdater;
 
   @override
   Future<bool> isNewPatchAvailableForDownload() {

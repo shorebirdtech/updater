@@ -1,7 +1,7 @@
 // ignore_for_file: prefer_const_constructors
 
 import 'package:mocktail/mocktail.dart';
-import 'package:shorebird_code_push/shorebird_code_push.dart';
+import 'package:shorebird_code_push/src/shorebird_code_push_base.dart';
 import 'package:shorebird_code_push/src/shorebird_code_push_ffi.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 import 'package:test/test.dart';
@@ -11,11 +11,11 @@ class _MockUpdater extends Mock implements Updater {}
 void main() {
   group('ShorebirdCodePushFfi', () {
     late Updater updater;
-    late ShorebirdCodePush shorebirdCodePush;
+    late ShorebirdCodePushBase shorebirdCodePush;
 
     setUp(() {
       updater = _MockUpdater();
-      shorebirdCodePush = ShorebirdCodePushFfi.forTest(
+      shorebirdCodePush = ShorebirdCodePushFfi(
         buildUpdater: () => updater,
       );
     });

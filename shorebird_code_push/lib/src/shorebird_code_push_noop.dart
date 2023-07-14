@@ -1,9 +1,9 @@
-import 'package:shorebird_code_push/shorebird_code_push.dart';
+import 'package:shorebird_code_push/src/shorebird_code_push_base.dart';
 
-/// A no-op implementation of [ShorebirdCodePush].
+/// A no-op implementation of [ShorebirdCodePushBase].
 ///
 /// This is used when the build does not contain the Shorebird Engine.
-class ShorebirdCodePushNoop implements ShorebirdCodePush {
+class ShorebirdCodePushNoop implements ShorebirdCodePushBase {
   @override
   Future<int?> currentPatchNumber() async => null;
 
@@ -20,8 +20,5 @@ class ShorebirdCodePushNoop implements ShorebirdCodePush {
   bool isShorebirdAvailable() => false;
 
   @override
-  Future<int?> nextPatchNumber() {
-    // TODO: implement nextPatchNumber
-    throw UnimplementedError();
-  }
+  Future<int?> nextPatchNumber() async => null;
 }
