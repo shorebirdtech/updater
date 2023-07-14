@@ -18,7 +18,7 @@ jobs:
       pull-requests: read
 
     outputs:
-      needs_dart_build: ${{ steps.needs_dart_build.outputs.changes }}
+      needs_flutter_build: ${{ steps.needs_flutter_build.outputs.changes }}
       needs_rust_build: ${{ steps.needs_rust_build.outputs.changes }}
 
     name: 👀 Detect Changes
@@ -29,12 +29,12 @@ jobs:
 
       - uses: dorny/paths-filter@v2
         name: Build Detection
-        id: needs_dart_build
+        id: needs_flutter_build
         with:
           filters: |
             shorebird_code_push:
               - ./.github/workflows/main.yaml
-              - ./.github/actions/dart_package/action.yaml
+              - ./.github/actions/flutter_package/action.yaml
               - shorebird_code_push/**
 
       - uses: dorny/paths-filter@v2
@@ -71,13 +71,13 @@ jobs:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
           working_directory: ${{ matrix.crate }}
 
-  build_dart_packages:
+  build_flutter_packages:
     needs: changes
-    if: ${{ needs.changes.outputs.needs_dart_build != '[]' }}
+    if: ${{ needs.changes.outputs.needs_flutter_build != '[]' }}
 
     strategy:
       matrix:
-        package: ${{ fromJSON(needs.changes.outputs.needs_dart_build) }}
+        package: ${{ fromJSON(needs.changes.outputs.needs_flutter_build) }}
 
     runs-on: ubuntu-latest
 
@@ -89,15 +89,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 🎯 Build ${{ matrix.package }}
-        uses: subosito/flutter-action@v2.10.0
+      - name: 🐦 Build ${{ matrix.package }}
+        uses: ./.github/actions/flutter_package
         with:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
           coverage_excludes: "**/*.g.dart"
           working_directory: ${{ matrix.package }}
 
   ci:
-    needs: [semantic_pull_request, build_dart_packages, build_rust_crates]
+    needs: [semantic_pull_request, build_flutter_packages, build_rust_crates]
     if: ${{ always() }}
 
     runs-on: ubuntu-latest
