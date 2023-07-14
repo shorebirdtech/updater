@@ -8,9 +8,7 @@ import 'package:shorebird_code_push/shorebird_code_push.dart';
 // a single instance of ShorebirdCodePush in your app.
 final _shorebirdCodePush = ShorebirdCodePush();
 
-void main() {
-  runApp(const MyApp());
-}
+void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});

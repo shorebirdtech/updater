@@ -14,25 +14,22 @@ class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
 
   @override
   Future<bool> isNewPatchAvailableForDownload() {
-    return _runInIsolate((updater) {
-      final result = updater.checkForUpdate();
-      return result;
-    });
+    return Isolate.run(_updater.checkForUpdate);
   }
 
   @override
   Future<int?> currentPatchNumber() {
-    return _runInIsolate((updater) {
-      final currentPatchNumber = updater.currentPatchNumber();
+    return Isolate.run(() {
+      final currentPatchNumber = _updater.currentPatchNumber();
       return currentPatchNumber == 0 ? null : currentPatchNumber;
     });
   }
 
   @override
   Future<int?> nextPatchNumber() {
-    return _runInIsolate(
-      (updater) {
-        final patchNumber = updater.nextPatchNumber();
+    return Isolate.run(
+      () {
+        final patchNumber = _updater.nextPatchNumber();
         return patchNumber == 0 ? null : patchNumber;
       },
     );
@@ -40,13 +37,15 @@ class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
 
   @override
   Future<void> downloadUpdateIfAvailable() async {
-    await _runInIsolate((updater) => updater.downloadUpdate());
+    await Isolate.run(_updater.downloadUpdate);
   }
 
   @override
   Future<bool> isNewPatchReadyToInstall() async {
-    final patchNumbers =
-        await Future.wait([currentPatchNumber(), nextPatchNumber()]);
+    final patchNumbers = await Future.wait([
+      currentPatchNumber(),
+      nextPatchNumber(),
+    ]);
     final currentPatch = patchNumbers[0];
     final nextPatch = patchNumbers[1];
 
@@ -55,9 +54,4 @@ class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
 
   @override
   bool isShorebirdAvailable() => true;
-
-  /// Creates an [Updater] in a separate isolate and runs the given function.
-  Future<T> _runInIsolate<T>(T Function(Updater updater) f) async {
-    return Isolate.run(() => f(_updater));
-  }
 }
