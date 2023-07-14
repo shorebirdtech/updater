@@ -64,9 +64,9 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}
       run: |
-        mv ${{inputs.working_directory}}/coverage/lcov.info ${{inputs.working_directory}}/coverage/lcov.info.bak
+        mv coverage/lcov.info coverage/lcov.info.bak
         sudo apt-get -y install lcov
-        lcov --remove ${{inputs.working_directory}}/coverage/lcov.info.bak "${{inputs.coverage_excludes}}" -o ${{inputs.working_directory}}/coverage/lcov.info
+        lcov --remove coverage/lcov.info.bak "${{inputs.coverage_excludes}}" -o coverage/lcov.info
 
     - name: Upload Coverage
       uses: codecov/codecov-action@v3
