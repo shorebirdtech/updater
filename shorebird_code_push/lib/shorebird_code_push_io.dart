@@ -39,10 +39,6 @@ class ShorebirdCodePush implements ShorebirdCodePushBase {
     return _delegate.downloadUpdateIfAvailable();
   }
 
-  /// Whether a new patch has been downloaded and is ready to install.
-  ///
-  /// If true, the patch number returned by [nextPatchNumber] will be run on the
-  /// next app launch.
   @override
   Future<bool> isNewPatchReadyToInstall() {
     return _delegate.isNewPatchReadyToInstall();
