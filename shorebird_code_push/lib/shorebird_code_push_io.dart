@@ -11,8 +11,8 @@ class ShorebirdCodePush implements ShorebirdCodePushBase {
   ShorebirdCodePush() {
     try {
       // If the Shorebird Engine is not available, this will throw an exception.
-      Updater().currentPatchNumber();
-      _delegate = ShorebirdCodePushFfi();
+      final updater = Updater()..currentPatchNumber();
+      _delegate = ShorebirdCodePushFfi(updater: updater);
     } catch (error) {
       _delegate = ShorebirdCodePushNoop();
     }

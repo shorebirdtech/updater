@@ -38,6 +38,7 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  final _isShorebirdAvailable = _shorebirdCodePush.isShorebirdAvailable();
   int? _currentPatchVersion;
   bool _isCheckingForUpdate = false;
 
@@ -142,9 +143,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final heading = _currentPatchVersion != null
+        ? '$_currentPatchVersion'
+        : 'No patch installed';
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        backgroundColor: theme.colorScheme.inversePrimary,
         title: Text(widget.title),
       ),
       body: Center(
@@ -153,29 +158,40 @@ class _MyHomePageState extends State<MyHomePage> {
           children: <Widget>[
             const Text('Current patch version:'),
             Text(
-              _currentPatchVersion != null
-                  ? _currentPatchVersion.toString()
-                  : 'No patch installed',
-              style: Theme.of(context).textTheme.headlineMedium,
+              heading,
+              style: theme.textTheme.headlineMedium,
             ),
-            const SizedBox(
-              height: 20,
-            ),
-            ElevatedButton(
-              onPressed: _isCheckingForUpdate ? null : _checkForUpdate,
-              child: _isCheckingForUpdate
-                  ? const SizedBox(
-                      height: 14,
-                      width: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : const Text('Check for update'),
-            ),
+            const SizedBox(height: 20),
+            if (!_isShorebirdAvailable)
+              Text(
+                'Shorebird Engine not available.',
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            if (_isShorebirdAvailable)
+              ElevatedButton(
+                onPressed: _isCheckingForUpdate ? null : _checkForUpdate,
+                child: _isCheckingForUpdate
+                    ? const _LoadingIndicator()
+                    : const Text('Check for update'),
+              ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LoadingIndicator extends StatelessWidget {
+  const _LoadingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      height: 14,
+      width: 14,
+      child: CircularProgressIndicator(strokeWidth: 2),
     );
   }
 }

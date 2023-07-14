@@ -22,8 +22,8 @@ void main() {
 
     test('logs warning when instantiated', () {
       const expected = '''
-ShorebirdCodePush: Shorebird Engine not available.
-Using no-op implementation. All methods will return null or false.''';
+[ShorebirdCodePush]: Shorebird Engine not available, using no-op implementation.
+''';
       expect(printLogs, equals([expected]));
     });
 

@@ -10,8 +10,8 @@ class ShorebirdCodePushNoop implements ShorebirdCodePushBase {
   ShorebirdCodePushNoop() {
     // ignore: avoid_print
     print('''
-ShorebirdCodePush: Shorebird Engine not available.
-Using no-op implementation. All methods will return null or false.''');
+[ShorebirdCodePush]: Shorebird Engine not available, using no-op implementation.
+''');
   }
   @override
   Future<int?> currentPatchNumber() async => null;
