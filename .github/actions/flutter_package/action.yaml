@@ -48,7 +48,7 @@ runs:
     - name: Install Dependencies
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}
-      run: dart pub get
+      run: flutter pub get
 
     - name: Format
       working-directory: ${{ inputs.working_directory }}
