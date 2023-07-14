@@ -8,19 +8,24 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// {@endtemplate}
 class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
   /// {@macro shorebird_code_push}
-  ShorebirdCodePushFfi({Updater Function()? buildUpdater})
-      : _buildUpdater = buildUpdater ?? Updater.new;
+  ShorebirdCodePushFfi({Updater? updater}) : _updater = updater ?? Updater();
 
-  final Updater Function() _buildUpdater;
+  final Updater _updater;
 
   @override
   Future<bool> isNewPatchAvailableForDownload() {
-    return _runInIsolate((updater) => updater.checkForUpdate());
+    return _runInIsolate((updater) {
+      final result = updater.checkForUpdate();
+      return result;
+    });
   }
 
   @override
   Future<int?> currentPatchNumber() {
-    return _runInIsolate((updater) => updater.currentPatchNumber());
+    return _runInIsolate((updater) {
+      final currentPatchNumber = updater.currentPatchNumber();
+      return currentPatchNumber == 0 ? null : currentPatchNumber;
+    });
   }
 
   @override
@@ -53,6 +58,6 @@ class ShorebirdCodePushFfi implements ShorebirdCodePushBase {
 
   /// Creates an [Updater] in a separate isolate and runs the given function.
   Future<T> _runInIsolate<T>(T Function(Updater updater) f) async {
-    return Isolate.run(() => f(_buildUpdater()));
+    return Isolate.run(() => f(_updater));
   }
 }
