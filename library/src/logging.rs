@@ -6,7 +6,7 @@ pub fn init_logging() {
         android_logger::Config::default()
             // `flutter` tool ignores non-flutter tagged logs.
             .with_tag("flutter")
-            .with_max_level(log::LevelFilter::Debug),
+            .with_max_level(log::LevelFilter::Info),
     );
     debug!("Logging initialized");
 }
@@ -15,9 +15,7 @@ pub fn init_logging() {
 pub fn init_logging() {
     // I could not figure out how to get fancier logging set up on iOS
     // but logging to stderr seems to work.
-    use log::LevelFilter;
-    use std::io;
-    simple_logging::log_to(io::stderr(), LevelFilter::Info);
+    simple_logging::log_to(std::io::stderr(), log::LevelFilter::Info);
     debug!("Logging initialized");
 }
 
