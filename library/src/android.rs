@@ -220,6 +220,40 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
         assert!(error.to_string().contains("No such file or directory"));
+
+        // Write an empty file (invalid apk) to the base apk.
+        let base_apk_path = tmp_dir.path().join("base.apk");
+        std::fs::File::create(&base_apk_path).unwrap();
+        let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
+        assert_eq!(error.to_string(), "invalid Zip archive: Invalid zip header");
+
+        // Write an empty zip as the base.apk.
+        let libapp_path = tmp_dir.path().join("libapp.so");
+        std::fs::File::create(&libapp_path).unwrap();
+        let base_apk_path = tmp_dir.path().join("base.apk");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&base_apk_path).unwrap());
+        zip.finish().unwrap();
+        let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
+        assert_eq!(error.to_string(), "Library not found in APK");
+
+        // Create a valid apk (zip) with an empty libapp.so with the right path.
+        use std::io::Write;
+        let tmp_dir = TempDir::new("example").unwrap();
+        // Write an empty libapp.so and zip it into an apk.
+        let libapp_path = tmp_dir.path().join("libapp.so");
+        std::fs::File::create(&libapp_path).unwrap();
+        let base_apk_path = tmp_dir.path().join("base.apk");
+        let arch = super::android_arch_names();
+        let lib_path = format!("lib/{}/libapp.so", arch.lib_dir);
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&base_apk_path).unwrap());
+        zip.start_file(&lib_path, zip::write::FileOptions::default())
+            .unwrap();
+        zip.write_all(&std::fs::read(&libapp_path).unwrap())
+            .unwrap();
+        zip.finish().unwrap();
+        let zip_location = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap();
+        // Success!
+        assert_eq!(zip_location.internal_path, lib_path);
     }
 
     #[test]

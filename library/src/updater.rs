@@ -32,7 +32,6 @@ pub use crate::network::{
 
 pub enum UpdateStatus {
     NoUpdate,
-    UpdateAvailable,
     UpdateInstalled,
     UpdateHadError,
 }
@@ -41,7 +40,6 @@ impl Display for UpdateStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             UpdateStatus::NoUpdate => write!(f, "No update"),
-            UpdateStatus::UpdateAvailable => write!(f, "Update available"),
             UpdateStatus::UpdateInstalled => write!(f, "Update installed"),
             UpdateStatus::UpdateHadError => write!(f, "Update had error"),
         }

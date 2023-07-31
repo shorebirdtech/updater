@@ -472,6 +472,20 @@ mod tests {
         let mut state = test_state(&tmp_dir);
         let bad_patch = fake_patch(&tmp_dir, 1);
         state.mark_patch_as_bad(bad_patch.number);
+        let number = bad_patch.number;
         assert!(state.install_patch(bad_patch).is_err());
+
+        // Calling a second time should not error.
+        state.mark_patch_as_bad(number);
+    }
+    #[test]
+    fn is_file_not_found_test() {
+        use anyhow::Context;
+        assert!(!super::is_file_not_found(&anyhow::anyhow!("")));
+        let tmp_dir = TempDir::new("example").unwrap();
+        let path = tmp_dir.path().join("does_not_exist");
+        let result = std::fs::File::open(&path).context("foo");
+        assert!(result.is_err());
+        assert!(super::is_file_not_found(&result.unwrap_err()));
     }
 }

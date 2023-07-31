@@ -305,6 +305,9 @@ mod test {
         testing_reset_config();
         // Should log but not crash.
         assert_eq!(shorebird_init(std::ptr::null(), std::ptr::null()), false);
+
+        // free_string also doesn't crash with null.
+        shorebird_free_string(std::ptr::null_mut());
     }
 
     #[serial]
@@ -347,6 +350,7 @@ mod test {
 
         // Number is 0 and path is empty (but do not crash) when we have an
         // empty cache and update has not been called.
+        assert_eq!(shorebird_current_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_path(), null_mut());
 
@@ -410,13 +414,19 @@ mod test {
                 Ok(patch_bytes)
             },
         );
+        // There is an update available.
+        assert!(shorebird_check_for_update());
+
+        // Go ahead and do the update.
         shorebird_update();
 
-        let version = shorebird_next_boot_patch_number();
-        assert_eq!(version, 1);
+        assert_eq!(shorebird_current_boot_patch_number(), 0);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
 
         // Read path contents into memory and check against expected.
-        let path = to_rust(shorebird_next_boot_patch_path()).unwrap();
+        let c_path = shorebird_next_boot_patch_path();
+        let path = to_rust(c_path).unwrap();
+        shorebird_free_string(c_path);
         let new = std::fs::read_to_string(path).unwrap();
         assert_eq!(new, expected_new);
     }
