@@ -114,7 +114,7 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
-    info!("libapp_path: {:?}", libapp_path);
+    debug!("libapp_path: {:?}", libapp_path);
     set_config(app_config, libapp_path, config, NetworkHooks::default())
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
@@ -279,12 +279,12 @@ where
 {
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
-    info!("Patch is compressed, inflating...");
+    debug!("Patch is compressed, inflating...");
     use std::io::{BufReader, BufWriter};
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
-    info!("Reading patch file: {:?}", patch_path);
+    debug!("Reading patch file: {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path)
             .context(format!("Failed to open patch file: {:?}", patch_path))?,

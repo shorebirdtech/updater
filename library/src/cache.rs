@@ -16,7 +16,7 @@ use crate::updater::UpdateError;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as warn}; // Workaround to use println! for logs.
+use std::{println as info, println as warn, println as debug}; // Workaround to use println! for logs.
 
 /// The public interace for talking about patches to the Cache.
 #[derive(PartialEq, Debug)]
@@ -70,6 +70,15 @@ impl UpdaterState {
     }
 }
 
+fn is_file_not_found(error: &anyhow::Error) -> bool {
+    for cause in error.chain() {
+        if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
+            return io_error.kind() == std::io::ErrorKind::NotFound;
+        }
+    }
+    false
+}
+
 impl UpdaterState {
     pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
         self.successful_patches.iter().any(|v| v == &patch_number)
@@ -88,6 +97,7 @@ impl UpdaterState {
         if self.is_known_bad_patch(patch_number) {
             return;
         }
+        // This is at least info! since we're in a failure state and want to log.
         info!("Marking patch {} as bad", patch_number);
         self.failed_patches.push(patch_number);
     }
@@ -128,15 +138,15 @@ impl UpdaterState {
                 }
                 let validate_result = loaded.validate();
                 if let Err(e) = validate_result {
-                    info!("Error while validating state: {:#}, clearing state.", e);
+                    warn!("Error while validating state: {:#}, clearing state.", e);
                     return Self::new(cache_dir.to_owned(), release_version.to_owned());
                 }
                 loaded
             }
             Err(e) => {
-                // FIXME: Should match on errorKind and display a warning if it's
-                // not a file not found error.
-                info!("No cached state, making empty: {:#}", e);
+                if !is_file_not_found(&e) {
+                    warn!("Error loading state: {:#}, clearing state.", e);
+                }
                 Self::new(cache_dir.to_owned(), release_version.to_owned())
             }
         }
@@ -211,7 +221,7 @@ impl UpdaterState {
     fn validate_slot(&self, slot: &Slot) -> bool {
         // Check if the patch is known bad.
         if self.is_known_bad_patch(slot.patch_number) {
-            info!("Slot {:?} is known bad.", slot);
+            debug!("Slot {:?} is known bad.", slot);
             return false;
         }
         let index = self
@@ -220,7 +230,7 @@ impl UpdaterState {
             .position(|s| s.patch_number == slot.patch_number);
         let patch_path = self.patch_path_for_index(index.unwrap());
         if !patch_path.exists() {
-            info!("Slot {:?} {} does not exist.", slot, patch_path.display());
+            debug!("Slot {:?} {} does not exist.", slot, patch_path.display());
             return false;
         }
         // TODO: This should also check if the hash matches?
@@ -285,7 +295,7 @@ impl UpdaterState {
     }
 
     fn set_slot(&mut self, index: usize, slot: Slot) {
-        info!("Setting slot {} to {:?}", index, slot);
+        debug!("Setting slot {} to {:?}", index, slot);
         if self.slots.len() < index + 1 {
             // Make sure we're not filling with empty slots.
             assert!(self.slots.len() == index);
@@ -351,7 +361,7 @@ impl UpdaterState {
                 patch.number, path
             );
         } else {
-            info!("Patch {} installed to {:?}", patch.number, path);
+            debug!("Patch {} installed to {:?}", patch.number, path);
         }
 
         Ok(())
