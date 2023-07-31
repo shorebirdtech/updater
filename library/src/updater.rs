@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
+use anyhow::bail;
 use anyhow::Context;
 
 use crate::cache::{PatchInfo, UpdaterState};
@@ -19,7 +20,7 @@ use crate::yaml::YamlConfig;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as warn, println as error, println as debug}; // Workaround to use println! for logs.
+use std::{println as info, println as error, println as debug}; // Workaround to use println! for logs.
 
 #[cfg(test)]
 // Expose testing_reset_config for integration tests.
@@ -31,7 +32,6 @@ pub use crate::network::{
 
 pub enum UpdateStatus {
     NoUpdate,
-    UpdateAvailable,
     UpdateInstalled,
     UpdateHadError,
 }
@@ -40,7 +40,6 @@ impl Display for UpdateStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             UpdateStatus::NoUpdate => write!(f, "No update"),
-            UpdateStatus::UpdateAvailable => write!(f, "Update available"),
             UpdateStatus::UpdateInstalled => write!(f, "Update installed"),
             UpdateStatus::UpdateHadError => write!(f, "Update had error"),
         }
@@ -113,7 +112,7 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
-    info!("libapp_path: {:?}", libapp_path);
+    debug!("libapp_path: {:?}", libapp_path);
     set_config(app_config, libapp_path, config, NetworkHooks::default())
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
@@ -132,7 +131,7 @@ pub fn check_for_update() -> anyhow::Result<bool> {
     check_for_update_internal().map(|res| res.patch_available)
 }
 
-fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
+fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     let expected = hex::decode(expected_string).context("Invalid hash string from server.")?;
 
     use sha2::{Digest, Sha256}; // Digest is needed for Sha256::new();
@@ -146,17 +145,24 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<bool> {
     // Check that the length from copy is the same as the file size?
     let hash = hasher.finalize();
     let hash_matches = hash.as_slice() == expected;
+    // This is a common error for developers.  We could avoid it entirely
+    // by sending the hash of libapp.so to the server and having the
+    // server only send updates when the hash matches.
+    // https://github.com/shorebirdtech/updater/issues/56
     if !hash_matches {
-        warn!(
-            "Hash mismatch: {:?}, expected: {}, got: {:?}",
+        bail!(
+            "Update rejected: hash mismatch. Update was downloaded but \
+            contents did not match the expected hash. This is most often \
+            caused by using the same version number with a different app \
+            binary. Path: {:?}, expected: {}, got: {}",
             path,
             expected_string,
             hex::encode(hash)
         );
     } else {
-        info!("Hash match: {:?}", path);
+        debug!("Hash match: {:?}", path);
     }
-    return Ok(hash_matches);
+    return Ok(());
 }
 
 // This is just a place to put our terrible android hacks.
@@ -233,10 +239,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     prepare_for_install(&config, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
-    let hash_ok = check_hash(&output_path, &patch.hash)?;
-    if !hash_ok {
-        return Err(UpdateError::InvalidState("Hash mismatch.  This is most often caused by using the same version number with a different app binary.".to_string()).into());
-    }
+    check_hash(&output_path, &patch.hash).context(format!(
+        "This app reports version {}, but the binary is different from \
+        the version {} that was submitted to Shorebird.",
+        config.release_version, config.release_version
+    ))?;
 
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
@@ -270,12 +277,12 @@ where
 {
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
-    info!("Patch is compressed, inflating...");
+    debug!("Patch is compressed, inflating...");
     use std::io::{BufReader, BufWriter};
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
-    info!("Reading patch file: {:?}", patch_path);
+    debug!("Reading patch file: {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path)
             .context(format!("Failed to open patch file: {:?}", patch_path))?,
@@ -383,7 +390,14 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 /// and install it if available.
 pub fn start_update_thread() {
     std::thread::spawn(move || {
-        let status = update().unwrap_or(UpdateStatus::UpdateHadError);
+        let result = update();
+        let status = match result {
+            Ok(status) => status,
+            Err(err) => {
+                error!("Update failed: {:?}", err);
+                UpdateStatus::UpdateHadError
+            }
+        };
         info!("Update thread finished with status: {}", status);
     });
 }
@@ -458,11 +472,16 @@ mod tests {
         fs::write(&input_path, "hello world").unwrap();
 
         let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        assert!(super::check_hash(&input_path, expected).unwrap());
+        assert!(super::check_hash(&input_path, expected).is_ok());
 
         // modify hash to not match
         let expected = "a94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        assert_eq!(super::check_hash(&input_path, expected).unwrap(), false);
+        // We don't check the full error string because it contains a path
+        // which varies on each run.
+        assert!(super::check_hash(&input_path, expected)
+            .unwrap_err()
+            .to_string()
+            .contains("Update rejected: hash mismatch. Update was downloaded"));
 
         // invalid hashes should not match either
         let expected = "foo";

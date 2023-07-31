@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as info; // Workaround to use println! for logs.
+use std::println as debug; // Workaround to use println! for logs.
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -112,7 +112,7 @@ pub fn set_config(
                 .to_owned(),
             network_hooks,
         };
-        info!("Updater configured with: {:?}", config);
+        debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
 
         Ok(())

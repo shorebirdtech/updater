@@ -12,7 +12,7 @@ use crate::config::{current_arch, current_platform, UpdateConfig};
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as info; // Workaround to use println! for logs.
+use std::println as debug; // Workaround to use println! for logs.
 
 fn patches_check_url(base_url: &str) -> String {
     return format!("{}/api/v1/patches/check", base_url);
@@ -162,12 +162,12 @@ pub fn send_patch_check_request(
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     };
-    info!("Sending patch check request: {:?}", request);
+    debug!("Sending patch check request: {:?}", request);
     let url = &patches_check_url(&config.base_url);
     let patch_check_request_fn = config.network_hooks.patch_check_request_fn;
     let response = patch_check_request_fn(url, request)?;
 
-    info!("Patch check response: {:?}", response);
+    debug!("Patch check response: {:?}", response);
     return Ok(response);
 }
 
@@ -176,17 +176,17 @@ pub fn download_to_path(
     url: &str,
     path: &Path,
 ) -> anyhow::Result<()> {
-    info!("Downloading patch from: {}", url);
+    debug!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
     let download_file_hook = network_hooks.download_file_fn;
     let mut bytes = download_file_hook(url)?;
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
-        info!("Creating download directory: {:?}", parent);
+        debug!("Creating download directory: {:?}", parent);
         std::fs::create_dir_all(parent)?;
     }
 
-    info!("Writing download to: {:?}", path);
+    debug!("Writing download to: {:?}", path);
     let mut file = File::create(path)?;
     file.write_all(&mut bytes)?;
     Ok(())
