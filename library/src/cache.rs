@@ -478,6 +478,32 @@ mod tests {
         // Calling a second time should not error.
         state.mark_patch_as_bad(number);
     }
+
+    #[test]
+    fn do_not_mark_bad_patch_good() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut state = test_state(&tmp_dir);
+        let bad_patch = fake_patch(&tmp_dir, 1);
+        state.mark_patch_as_bad(bad_patch.number);
+        state.mark_patch_as_good(bad_patch.number);
+        assert!(state.is_known_bad_patch(bad_patch.number));
+        assert!(!state.is_known_good_patch(bad_patch.number));
+    }
+
+    #[test]
+    fn mark_patch_as_good() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut state = test_state(&tmp_dir);
+        let patch = fake_patch(&tmp_dir, 1);
+        state.mark_patch_as_good(patch.number);
+        assert!(state.is_known_good_patch(patch.number));
+        assert!(!state.is_known_bad_patch(patch.number));
+        // Marking it twice doesn't change anything.
+        state.mark_patch_as_good(patch.number);
+        assert!(state.is_known_good_patch(patch.number));
+        assert!(!state.is_known_bad_patch(patch.number));
+    }
+
     #[test]
     fn is_file_not_found_test() {
         use anyhow::Context;
