@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 use anyhow::Context;
 
+use crate::c_api::UpdateBehavior;
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
@@ -115,6 +116,10 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
     debug!("libapp_path: {:?}", libapp_path);
     set_config(app_config, libapp_path, config, NetworkHooks::default())
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
+}
+
+pub fn update_behavior() -> anyhow::Result<UpdateBehavior> {
+    with_config(|config| Ok(config.update_behavior))
 }
 
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
