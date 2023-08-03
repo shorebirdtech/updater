@@ -109,34 +109,13 @@ pub extern "C" fn shorebird_init(
     )
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum UpdateBehavior {
-    BackgroundOnLaunch,
-    Manual,
-    WaitOnLaunch,
-}
-
-impl UpdateBehavior {
-    pub fn from_string(s: Option<String>) -> anyhow::Result<Self> {
-        match s {
-            Some(s) => match s.as_str() {
-                "background" => Ok(UpdateBehavior::BackgroundOnLaunch),
-                "manual" => Ok(UpdateBehavior::Manual),
-                "wait" => Ok(UpdateBehavior::WaitOnLaunch),
-                _ => anyhow::bail!("Unknown update behavior: {}", s),
-            },
-            None => Ok(UpdateBehavior::BackgroundOnLaunch),
-        }
-    }
-}
-
+/// Returns if the app should run the updater automatically on launch.
 #[no_mangle]
-pub extern "C" fn shorebird_update_behavior() -> UpdateBehavior {
+pub extern "C" fn shorebird_should_auto_update() -> bool {
     log_on_error(
-        || updater::update_behavior(),
+        || updater::should_auto_update(),
         "fetching update behavior",
-        UpdateBehavior::BackgroundOnLaunch,
+        true,
     )
 }
 
@@ -378,38 +357,12 @@ mod test {
         app_id: foo
         channel: bar
         base_url: baz
-        update_behavior: manual",
+        auto_update: false",
         );
         assert_eq!(shorebird_init(&c_params, c_yaml), true);
         free_c_string(c_yaml);
         free_parameters(c_params);
-        assert_eq!(shorebird_update_behavior(), UpdateBehavior::Manual);
-    }
-
-    #[test]
-    fn update_behavior_from_string() {
-        assert_eq!(
-            UpdateBehavior::from_string(Some("background".to_owned())).unwrap(),
-            UpdateBehavior::BackgroundOnLaunch
-        );
-        assert_eq!(
-            UpdateBehavior::from_string(Some("manual".to_owned())).unwrap(),
-            UpdateBehavior::Manual
-        );
-        assert_eq!(
-            UpdateBehavior::from_string(Some("wait".to_owned())).unwrap(),
-            UpdateBehavior::WaitOnLaunch
-        );
-        assert_eq!(
-            UpdateBehavior::from_string(Some("foo".to_owned()))
-                .unwrap_err()
-                .to_string(),
-            "Unknown update behavior: foo"
-        );
-        assert_eq!(
-            UpdateBehavior::from_string(None).unwrap(),
-            UpdateBehavior::BackgroundOnLaunch
-        );
+        assert_eq!(shorebird_should_auto_update(), false);
     }
 
     #[serial]

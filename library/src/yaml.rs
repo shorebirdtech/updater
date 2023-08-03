@@ -10,8 +10,8 @@ pub struct YamlConfig {
     pub channel: Option<String>,
     /// Update URL.  Defaults to the default update URL if not set.
     pub base_url: Option<String>,
-    /// Update behavior.  Defaults to "background" if not set.
-    pub update_behavior: Option<String>,
+    /// Update behavior. Defaults to true if not set.
+    pub auto_update: Option<bool>,
 }
 
 impl YamlConfig {

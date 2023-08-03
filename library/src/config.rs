@@ -1,7 +1,6 @@
 // This file handles the global config for the updater library.
 use crate::network::NetworkHooks;
 
-use crate::c_api::UpdateBehavior;
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
 use crate::UpdateError;
@@ -74,7 +73,7 @@ where
 pub struct UpdateConfig {
     pub cache_dir: PathBuf,
     pub download_dir: PathBuf,
-    pub update_behavior: UpdateBehavior,
+    pub auto_update: bool,
     pub channel: String,
     pub app_id: String,
     pub release_version: String,
@@ -104,7 +103,7 @@ pub fn set_config(
                 .as_deref()
                 .unwrap_or(DEFAULT_CHANNEL)
                 .to_owned(),
-            update_behavior: UpdateBehavior::from_string(yaml.update_behavior)?,
+            auto_update: yaml.auto_update.unwrap_or(true),
             app_id: yaml.app_id.to_string(),
             release_version: app_config.release_version.to_string(),
             libapp_path,
