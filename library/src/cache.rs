@@ -88,6 +88,8 @@ impl UpdaterState {
         self.failed_patches.iter().any(|v| v == &patch_number)
     }
 
+    // TODO(eseidel): Should return Result instead of logging, the c_api
+    // layer can log if desired.
     pub fn mark_patch_as_bad(&mut self, patch_number: usize) {
         if self.is_known_good_patch(patch_number) {
             warn!("Tried to report failed launch for a known good patch.  Ignoring.");
@@ -102,6 +104,8 @@ impl UpdaterState {
         self.failed_patches.push(patch_number);
     }
 
+    // TODO(eseidel): Should return Result instead of logging, the c_api
+    // layer can log if desired.
     pub fn mark_patch_as_good(&mut self, patch_number: usize) {
         if self.is_known_bad_patch(patch_number) {
             warn!("Tried to report successful launch for a known bad patch.  Ignoring.");

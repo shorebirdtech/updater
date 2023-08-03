@@ -109,6 +109,16 @@ pub extern "C" fn shorebird_init(
     )
 }
 
+/// Returns if the app should run the updater automatically on launch.
+#[no_mangle]
+pub extern "C" fn shorebird_should_auto_update() -> bool {
+    log_on_error(
+        || updater::should_auto_update(),
+        "fetching update behavior",
+        true,
+    )
+}
+
 /// The currently running patch number, or 0 if the release has not been
 /// patched.
 #[no_mangle]
@@ -334,6 +344,25 @@ mod test {
         assert_eq!(shorebird_init(&c_params, c_yaml), false);
         free_c_string(c_yaml);
         free_parameters(c_params);
+    }
+
+    #[serial]
+    #[test]
+    fn yaml_parsing() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+        let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
+        let c_yaml = c_string(
+            "
+        app_id: foo
+        channel: bar
+        base_url: baz
+        auto_update: false",
+        );
+        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+        assert_eq!(shorebird_should_auto_update(), false);
     }
 
     #[serial]

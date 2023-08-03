@@ -56,6 +56,11 @@ bool shorebird_init(const struct AppParameters *c_params,
                     const char *c_yaml);
 
 /**
+ * Returns if the app should run the updater automatically on launch.
+ */
+SHOREBIRD_EXPORT bool shorebird_should_auto_update(void);
+
+/**
  * The currently running patch number, or 0 if the release has not been
  * patched.
  */

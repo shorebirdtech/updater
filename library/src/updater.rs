@@ -117,6 +117,10 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
+pub fn should_auto_update() -> anyhow::Result<bool> {
+    with_config(|config| Ok(config.auto_update))
+}
+
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     with_config(|config| {
         // Load UpdaterState from disk
