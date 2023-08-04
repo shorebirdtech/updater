@@ -364,7 +364,9 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
-        state.mark_patch_as_bad(patch.number);
+        // Ignore the error here, we'll try to activate the next best patch
+        // even if we fail to mark this one as bad (because it was already bad).
+        let _ = state.mark_patch_as_bad(patch.number);
         state
             .activate_latest_bootable_patch()
             .map_err(|err| anyhow::Error::from(err))
@@ -382,7 +384,9 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
-        state.mark_patch_as_good(patch.number);
+        // Ignore the error here, we'll try to activate the next best patch
+        // even if we fail to mark this one as good.
+        let _ = state.mark_patch_as_good(patch.number);
         state
             .save()
             .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))

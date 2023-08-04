@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::updater::UpdateError;
@@ -88,34 +88,30 @@ impl UpdaterState {
         self.failed_patches.iter().any(|v| v == &patch_number)
     }
 
-    // TODO(eseidel): Should return Result instead of logging, the c_api
-    // layer can log if desired.
-    pub fn mark_patch_as_bad(&mut self, patch_number: usize) {
+    pub fn mark_patch_as_bad(&mut self, patch_number: usize) -> Result<()> {
         if self.is_known_good_patch(patch_number) {
-            warn!("Tried to report failed launch for a known good patch.  Ignoring.");
-            return;
+            bail!("Tried to report failed launch for a known good patch.  Ignoring.");
         }
 
-        if self.is_known_bad_patch(patch_number) {
-            return;
+        if !self.is_known_bad_patch(patch_number) {
+            // This is at least info! since we're in a failure state and want to log.
+            info!("Marking patch {} as bad", patch_number);
+            self.failed_patches.push(patch_number);
         }
-        // This is at least info! since we're in a failure state and want to log.
-        info!("Marking patch {} as bad", patch_number);
-        self.failed_patches.push(patch_number);
+        Ok(())
     }
 
     // TODO(eseidel): Should return Result instead of logging, the c_api
     // layer can log if desired.
-    pub fn mark_patch_as_good(&mut self, patch_number: usize) {
+    pub fn mark_patch_as_good(&mut self, patch_number: usize) -> Result<()> {
         if self.is_known_bad_patch(patch_number) {
-            warn!("Tried to report successful launch for a known bad patch.  Ignoring.");
-            return;
+            bail!("Tried to report successful launch for a known bad patch.  Ignoring.");
         }
 
-        if self.is_known_good_patch(patch_number) {
-            return;
+        if !self.is_known_good_patch(patch_number) {
+            self.successful_patches.push(patch_number);
         }
-        self.successful_patches.push(patch_number);
+        Ok(())
     }
 
     fn load(cache_dir: &Path) -> anyhow::Result<Self> {
@@ -475,12 +471,12 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut state = test_state(&tmp_dir);
         let bad_patch = fake_patch(&tmp_dir, 1);
-        state.mark_patch_as_bad(bad_patch.number);
+        state.mark_patch_as_bad(bad_patch.number).unwrap();
         let number = bad_patch.number;
         assert!(state.install_patch(bad_patch).is_err());
 
         // Calling a second time should not error.
-        state.mark_patch_as_bad(number);
+        state.mark_patch_as_bad(number).unwrap();
     }
 
     #[test]
@@ -488,8 +484,8 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut state = test_state(&tmp_dir);
         let bad_patch = fake_patch(&tmp_dir, 1);
-        state.mark_patch_as_bad(bad_patch.number);
-        state.mark_patch_as_good(bad_patch.number);
+        assert!(state.mark_patch_as_bad(bad_patch.number).is_ok());
+        assert!(state.mark_patch_as_good(bad_patch.number).is_err());
         assert!(state.is_known_bad_patch(bad_patch.number));
         assert!(!state.is_known_good_patch(bad_patch.number));
     }
@@ -499,11 +495,11 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut state = test_state(&tmp_dir);
         let patch = fake_patch(&tmp_dir, 1);
-        state.mark_patch_as_good(patch.number);
+        state.mark_patch_as_good(patch.number).unwrap();
         assert!(state.is_known_good_patch(patch.number));
         assert!(!state.is_known_bad_patch(patch.number));
         // Marking it twice doesn't change anything.
-        state.mark_patch_as_good(patch.number);
+        state.mark_patch_as_good(patch.number).unwrap();
         assert!(state.is_known_good_patch(patch.number));
         assert!(!state.is_known_bad_patch(patch.number));
     }
