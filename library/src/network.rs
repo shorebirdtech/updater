@@ -76,9 +76,25 @@ pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
+    use std::error::Error;
+
     let client = reqwest::blocking::Client::new();
-    let response = client.post(url).json(&request).send()?.json()?;
-    Ok(response)
+    match client.post(url).json(&request).send() {
+        Ok(response) => {
+            let response = response.json()?;
+            Ok(response)
+        }
+        Err(e) => match e.source() {
+            Some(source)
+                if source
+                    .to_string()
+                    .contains("failed to lookup address information") =>
+            {
+                anyhow::bail!("Patch check request failed due to network error. Please check your internet connection.");
+            }
+            _ => Err(e.into()),
+        },
+    }
 }
 
 #[cfg(not(test))]
