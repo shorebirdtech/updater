@@ -21,7 +21,7 @@ fn patches_check_url(base_url: &str) -> String {
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
 
-/// A container for network clalbacks which can be mocked out for testing.
+/// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
 pub struct NetworkHooks {
     /// The function to call to send a patch check request.
