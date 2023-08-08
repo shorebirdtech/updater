@@ -9,6 +9,7 @@ pub mod c_api;
 mod cache;
 mod config;
 mod logging;
+mod models;
 mod network;
 mod updater;
 mod updater_lock;

@@ -12,9 +12,8 @@ use anyhow::Context;
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
-use crate::network::{
-    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
-};
+use crate::models::PatchCheckResponse;
+use crate::network::{download_to_path, send_patch_check_request, NetworkHooks};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -26,9 +25,7 @@ use std::{println as info, println as error, println as debug}; // Workaround to
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{
-    testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
-};
+pub use crate::network::{testing_set_network_hooks, DownloadFileFn, PatchCheckRequestFn};
 
 pub enum UpdateStatus {
     NoUpdate,

@@ -243,7 +243,9 @@ pub extern "C" fn shorebird_report_launch_success() {
 mod test {
     use super::*;
     use crate::{
-        network::PatchCheckResponse, testing_set_network_hooks, updater::testing_reset_config,
+        models::{Patch, PatchCheckResponse},
+        testing_set_network_hooks,
+        updater::testing_reset_config,
     };
     use serial_test::serial;
     use tempdir::TempDir;
@@ -427,7 +429,7 @@ mod test {
                 let hash = "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
+                    patch: Some(Patch {
                         number: 1,
                         hash: hash.to_owned(),
                         download_url: "ignored".to_owned(),
@@ -525,7 +527,7 @@ mod test {
                 let _lock = CALLBACK_MUTEX.lock().unwrap();
                 Ok(PatchCheckResponse {
                     patch_available: false,
-                    patch: Some(crate::Patch {
+                    patch: Some(Patch {
                         number: 1,
                         hash: "ignored".to_owned(),
                         download_url: "ignored".to_owned(),
