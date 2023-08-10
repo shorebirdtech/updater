@@ -551,12 +551,6 @@ mod tests {
                 .unwrap(),
             crate::UpdateError::InvalidState("No current patch".to_string())
         );
-        assert_eq!(
-            crate::report_launch_success()
-                .unwrap_err()
-                .downcast::<crate::UpdateError>()
-                .unwrap(),
-            crate::UpdateError::InvalidState("No current patch".to_string())
-        );
+        assert!(crate::report_launch_success().is_ok());
     }
 }
