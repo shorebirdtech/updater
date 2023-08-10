@@ -23,12 +23,6 @@ comde = { version = "0.2.3", default-features = false, features = [
     "zstandard",
 ] }
 libc = "0.2.98"
-# Used for networking.
-reqwest = { version = "0.11", default-features = false, features = [
-    "blocking",
-    "json",
-    "rustls-tls",
-] }
 # For decoding the hex-encoded hashes in Patch network responses.
 hex = "0.4.3"
 # For error!(), info!(), etc macros. `print` will not show up on Android.
@@ -38,6 +32,12 @@ once_cell = "1.17.1"
 # Json serialization/de-serialization.
 # Pipe is a simple in-memory pipe implementation, there might be a std way too?
 pipe = "0.4.0"
+# Used for networking.
+reqwest = { version = "0.11", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.93"
 # For reading shorebird.yaml
@@ -47,7 +47,6 @@ sha2 = "0.10.6"
 # For decompressing .apk files.
 zip = { version = "0.6.4", default-features = false, features = ["deflate"] }
 
-
 [target.'cfg(target_os = "android")'.dependencies]
 # For logging to Android logcat.
 android_logger = "0.13.0"
@@ -55,10 +54,10 @@ android_logger = "0.13.0"
 log-panics = { version = "2", features = ["with-backtrace"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-# Use stderr for logging on iOS.
-simple-logging = "2.0.2"
 # Send panics to syslog (instead of stderr).
 log-panics = { version = "2", features = ["with-backtrace"] }
+# Use stderr for logging on iOS.
+simple-logging = "2.0.2"
 
 [dev-dependencies]
 # Gives #[serial] attribute for locking all of our shorebird_init
