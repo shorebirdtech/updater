@@ -53,6 +53,8 @@ pub struct UpdaterState {
     next_boot_slot_index: Option<usize>,
     /// List of slots.
     slots: Vec<Slot>,
+    /// The client ID for this device.
+    client_id: Option<String>,
     // Add file path or FD so modifying functions can save it to disk?
 }
 
@@ -61,6 +63,7 @@ impl UpdaterState {
         Self {
             cache_dir,
             release_version,
+            client_id: Some(generate_client_id()),
             current_boot_slot_index: None,
             next_boot_slot_index: None,
             failed_patches: Vec::new(),
@@ -77,6 +80,10 @@ fn is_file_not_found(error: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+fn generate_client_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 impl UpdaterState {
@@ -121,7 +128,11 @@ impl UpdaterState {
         let reader = BufReader::new(file);
         // TODO: Now that we depend on serde_yaml for shorebird.yaml
         // we could use yaml here instead of json.
-        let state = serde_json::from_reader(reader)?;
+        let mut state: UpdaterState = serde_json::from_reader(reader)?;
+        if state.client_id.is_none() {
+            // Generate a client id if we don't already have one.
+            state.client_id = Some(generate_client_id());
+        }
         Ok(state)
     }
 
@@ -152,8 +163,8 @@ impl UpdaterState {
         }
     }
 
+    /// Saves the updater state to disk.
     pub fn save(&self) -> anyhow::Result<()> {
-        // Save UpdaterState to disk
         std::fs::create_dir_all(&self.cache_dir).context("create_dir_all")?;
         let path = Path::new(&self.cache_dir).join("state.json");
         let file = File::create(path).context("File::create for state.json")?;
@@ -513,5 +524,33 @@ mod tests {
         let result = std::fs::File::open(&path).context("foo");
         assert!(result.is_err());
         assert!(super::is_file_not_found(&result.unwrap_err()));
+    }
+
+    #[test]
+    fn creates_updater_state_with_client_id() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let state = UpdaterState::load_or_new_on_error(&tmp_dir.path().to_path_buf(), "1.0.0+1");
+        assert!(state.client_id.is_some());
+    }
+
+    #[test]
+    fn adds_client_id_to_saved_state() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let state: UpdaterState = UpdaterState {
+            cache_dir: tmp_dir.path().to_path_buf(),
+            release_version: "1.0.0+1".to_string(),
+            client_id: None,
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
+            failed_patches: Vec::new(),
+            successful_patches: Vec::new(),
+            slots: Vec::new(),
+        };
+
+        state.save().unwrap();
+
+        let loaded_state =
+            UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
+        assert!(loaded_state.client_id.is_some());
     }
 }
