@@ -34,7 +34,7 @@ struct Slot {
 
 // This struct is public, as callers can have a handle to it, but modifying
 // anything inside should be done via the functions below.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpdaterState {
     /// Where this writes to disk.
     cache_dir: PathBuf,
@@ -132,6 +132,7 @@ impl UpdaterState {
         if state.client_id.is_none() {
             // Generate a client id if we don't already have one.
             state.client_id = Some(generate_client_id());
+            let _ = state.save();
         }
         Ok(state)
     }
