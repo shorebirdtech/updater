@@ -137,7 +137,7 @@ impl UpdaterState {
         Ok(state)
     }
 
-    fn create_and_save_new(cache_dir: &Path, release_version: &str) -> Self {
+    fn create_new_and_save(cache_dir: &Path, release_version: &str) -> Self {
         let state = Self::new(cache_dir.to_owned(), release_version.to_owned());
         let _ = state.save();
         state
@@ -152,12 +152,12 @@ impl UpdaterState {
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.release_version, release_version
                     );
-                    return Self::create_and_save_new(cache_dir, release_version);
+                    return Self::create_new_and_save(cache_dir, release_version);
                 }
                 let validate_result = loaded.validate();
                 if let Err(e) = validate_result {
                     warn!("Error while validating state: {:#}, clearing state.", e);
-                    return Self::create_and_save_new(cache_dir, release_version);
+                    return Self::create_new_and_save(cache_dir, release_version);
                 }
                 loaded
             }
@@ -165,7 +165,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                return Self::create_and_save_new(cache_dir, release_version);
+                return Self::create_new_and_save(cache_dir, release_version);
             }
         }
     }
