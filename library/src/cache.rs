@@ -136,6 +136,12 @@ impl UpdaterState {
         Ok(state)
     }
 
+    fn create_and_save_new(cache_dir: &Path, release_version: &str) -> Self {
+        let state = Self::new(cache_dir.to_owned(), release_version.to_owned());
+        let _ = state.save();
+        state
+    }
+
     pub fn load_or_new_on_error(cache_dir: &Path, release_version: &str) -> Self {
         let load_result = Self::load(cache_dir);
         match load_result {
@@ -145,12 +151,12 @@ impl UpdaterState {
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.release_version, release_version
                     );
-                    return Self::new(cache_dir.to_owned(), release_version.to_owned());
+                    return Self::create_and_save_new(cache_dir, release_version);
                 }
                 let validate_result = loaded.validate();
                 if let Err(e) = validate_result {
                     warn!("Error while validating state: {:#}, clearing state.", e);
-                    return Self::new(cache_dir.to_owned(), release_version.to_owned());
+                    return Self::create_and_save_new(cache_dir, release_version);
                 }
                 loaded
             }
@@ -158,7 +164,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                Self::new(cache_dir.to_owned(), release_version.to_owned())
+                return Self::create_and_save_new(cache_dir, release_version);
             }
         }
     }
@@ -531,6 +537,9 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let state = UpdaterState::load_or_new_on_error(&tmp_dir.path().to_path_buf(), "1.0.0+1");
         assert!(state.client_id.is_some());
+        let saved_state =
+            UpdaterState::load_or_new_on_error(&tmp_dir.path().to_path_buf(), "1.0.0+1");
+        assert_eq!(state.client_id, saved_state.client_id);
     }
 
     #[test]
