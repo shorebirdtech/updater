@@ -108,8 +108,6 @@ impl UpdaterState {
         Ok(())
     }
 
-    // TODO(eseidel): Should return Result instead of logging, the c_api
-    // layer can log if desired.
     pub fn mark_patch_as_good(&mut self, patch_number: usize) -> Result<()> {
         if self.is_known_bad_patch(patch_number) {
             bail!("Tried to report successful launch for a known bad patch.  Ignoring.");

@@ -345,7 +345,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
         // Validate that we have an installed patch.
-        // Make that patch the "booted" patch.
+        // Make that patch is the "booted" patch.
         state.activate_current_patch()?;
         state.save()
     })
@@ -379,24 +379,25 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-        let patch =
+        if let Some(patch) = state.current_boot_patch() {
+            if !state.is_known_good_patch(patch.number) {
+                // Ignore the error here, we'll try to activate the next best patch
+                // even if we fail to mark this one as good.
+                if state.mark_patch_as_good(patch.number).is_ok() {
+                    let report_result =
+                        report_successful_patch_install(&config, &state, patch.number);
+                    if let Err(err) = report_result {
+                        error!("Failed to report successful patch install: {:?}", err);
+                    }
+                }
+            }
+
             state
-                .current_boot_patch()
-                .ok_or(anyhow::Error::from(UpdateError::InvalidState(
-                    "No current patch".to_string(),
-                )))?;
-
-        let report_result = report_successful_patch_install(&config, &state, patch.number);
-        if let Err(err) = report_result {
-            error!("Failed to report successful patch install: {:?}", err);
+                .save()
+                .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
+        } else {
+            Ok(())
         }
-
-        // Ignore the error here, we'll try to activate the next best patch
-        // even if we fail to mark this one as good.
-        let _ = state.mark_patch_as_good(patch.number);
-        state
-            .save()
-            .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
     })
 }
 
