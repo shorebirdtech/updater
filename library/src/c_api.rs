@@ -245,6 +245,7 @@ mod test {
     use crate::{
         network::PatchCheckResponse, testing_set_network_hooks, updater::testing_reset_config,
     };
+    use anyhow::Ok;
     use serial_test::serial;
     use tempdir::TempDir;
 
@@ -442,6 +443,7 @@ mod test {
                 ];
                 Ok(patch_bytes)
             },
+            |_url, _event| Ok(()),
         );
         // There is an update available.
         assert!(shorebird_check_for_update());
@@ -536,6 +538,7 @@ mod test {
                 // Never called.
                 Ok(Vec::new())
             },
+            |_url, _event| Ok(()),
         );
         {
             // Lock the mutex before starting the thread.

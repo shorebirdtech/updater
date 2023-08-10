@@ -54,7 +54,7 @@ pub struct UpdaterState {
     /// List of slots.
     slots: Vec<Slot>,
     /// The client ID for this device.
-    client_id: Option<String>,
+    pub client_id: Option<String>,
     // Add file path or FD so modifying functions can save it to disk?
 }
 

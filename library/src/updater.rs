@@ -13,7 +13,8 @@ use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
+    download_to_path, report_successful_patch_install, send_patch_check_request, NetworkHooks,
+    PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
@@ -384,6 +385,12 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
+
+        let report_result = report_successful_patch_install(&config, &state, patch.number);
+        if let Err(err) = report_result {
+            error!("Failed to report successful patch install: {:?}", err);
+        }
+
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as good.
         let _ = state.mark_patch_as_good(patch.number);
