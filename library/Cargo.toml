@@ -12,53 +12,58 @@ edition = "2021"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-# Used for exposing C API
-libc = "0.2.98"
-# Used for networking.
-reqwest = { version = "0.11",  default-features = false, features = ["blocking", "json", "rustls-tls"] }
-# Json serialization/de-serialization.
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.93"
 # Used for error handling for now.
-anyhow = {version = "1.0.69", features = ["backtrace"]}
+anyhow = { version = "1.0.69", features = ["backtrace"] }
+# For inflating compressed patch files.
+bipatch = "1.0.0"
+# Used for exposing C API
+# comde is a wrapper around several compression libraries.
+# We only use zstd and could depend on it directly instead.
+comde = { version = "0.2.3", default-features = false, features = [
+    "zstandard",
+] }
+# For decoding the hex-encoded hashes in Patch network responses.
+hex = "0.4.3"
+libc = "0.2.98"
 # For error!(), info!(), etc macros. `print` will not show up on Android.
 log = "0.4.14"
 # For implementing thread-local-storage of ResolvedConfig object.
 once_cell = "1.17.1"
-# For reading shorebird.yaml
-serde_yaml = "0.9.19"
-# For inflating compressed patch files.
-bipatch = "1.0.0"
-# comde is a wrapper around several compression libraries.
-# We only use zstd and could depend on it directly instead.
-comde = {version = "0.2.3", default-features = false, features = ["zstandard"]}
+# Json serialization/de-serialization.
 # Pipe is a simple in-memory pipe implementation, there might be a std way too?
 pipe = "0.4.0"
+# Used for networking.
+reqwest = { version = "0.11", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.93"
+# For reading shorebird.yaml
+serde_yaml = "0.9.19"
 # For computing hashes of patch files for validation.
 sha2 = "0.10.6"
-# For decoding the hex-encoded hashes in Patch network responses.
-hex = "0.4.3"
 # For decompressing .apk files.
 zip = { version = "0.6.4", default-features = false, features = ["deflate"] }
-
 
 [target.'cfg(target_os = "android")'.dependencies]
 # For logging to Android logcat.
 android_logger = "0.13.0"
 # Send panics to log (instead of stderr), thus logcat on Android.
-log-panics = { version = "2", features = ["with-backtrace"]}
+log-panics = { version = "2", features = ["with-backtrace"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
+# Send panics to syslog (instead of stderr).
+log-panics = { version = "2", features = ["with-backtrace"] }
 # Use stderr for logging on iOS.
 simple-logging = "2.0.2"
-# Send panics to syslog (instead of stderr).
-log-panics = { version = "2", features = ["with-backtrace"]}
 
 [dev-dependencies]
-tempdir = "0.3.7"
 # Gives #[serial] attribute for locking all of our shorebird_init
 # tests to a single thread so they don't conflict with each other.
 serial_test = "2.0.0"
+tempdir = "0.3.7"
 
 # https://github.com/eqrion/cbindgen/blob/master/docs.md#buildrs
 [build-dependencies]
