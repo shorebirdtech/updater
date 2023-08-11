@@ -554,6 +554,7 @@ mod tests {
         assert!(crate::report_launch_success().is_ok());
     }
 
+    #[serial]
     #[test]
     fn report_launch_success_with_patch() {
         use crate::cache::{PatchInfo, UpdaterState};
