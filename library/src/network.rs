@@ -329,6 +329,25 @@ mod tests {
         assert_eq!(patch.hash, "#");
     }
 
+    #[test]
+    fn create_patch_install_event_request_serializes() {
+        let request = super::CreatePatchInstallEventRequest {
+            event: super::PatchInstallEvent::new(
+                "app_id".to_string(),
+                "arch".to_string(),
+                "client_id".to_string(),
+                1,
+                "platform".to_string(),
+                "release_version".to_string(),
+            ),
+        };
+        let json_string = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            json_string,
+            r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version"}}"#
+        )
+    }
+
     // This confirms that the default network hooks throw an error in cfg(test).
     // In cfg(not(test)) they should be set to the default implementation
     // which makes real network calls.
