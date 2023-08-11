@@ -54,7 +54,7 @@ pub struct UpdaterState {
     /// List of slots.
     slots: Vec<Slot>,
     /// The client ID for this device.
-    client_id: Option<String>,
+    pub client_id: Option<String>,
     // Add file path or FD so modifying functions can save it to disk?
 }
 
@@ -108,8 +108,6 @@ impl UpdaterState {
         Ok(())
     }
 
-    // TODO(eseidel): Should return Result instead of logging, the c_api
-    // layer can log if desired.
     pub fn mark_patch_as_good(&mut self, patch_number: usize) -> Result<()> {
         if self.is_known_bad_patch(patch_number) {
             bail!("Tried to report successful launch for a known bad patch.  Ignoring.");

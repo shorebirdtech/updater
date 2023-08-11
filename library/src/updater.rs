@@ -13,7 +13,8 @@ use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
+    download_to_path, report_successful_patch_install, send_patch_check_request, NetworkHooks,
+    PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
@@ -378,18 +379,25 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-        let patch =
+        if let Some(patch) = state.current_boot_patch() {
+            if !state.is_known_good_patch(patch.number) {
+                // Ignore the error here, we'll try to activate the next best patch
+                // even if we fail to mark this one as good.
+                if state.mark_patch_as_good(patch.number).is_ok() {
+                    let report_result =
+                        report_successful_patch_install(&config, &state, patch.number);
+                    if let Err(err) = report_result {
+                        error!("Failed to report successful patch install: {:?}", err);
+                    }
+                }
+            }
+
             state
-                .current_boot_patch()
-                .ok_or(anyhow::Error::from(UpdateError::InvalidState(
-                    "No current patch".to_string(),
-                )))?;
-        // Ignore the error here, we'll try to activate the next best patch
-        // even if we fail to mark this one as good.
-        let _ = state.mark_patch_as_good(patch.number);
-        state
-            .save()
-            .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
+                .save()
+                .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
+        } else {
+            Ok(())
+        }
     })
 }
 
@@ -543,12 +551,57 @@ mod tests {
                 .unwrap(),
             crate::UpdateError::InvalidState("No current patch".to_string())
         );
-        assert_eq!(
-            crate::report_launch_success()
-                .unwrap_err()
-                .downcast::<crate::UpdateError>()
-                .unwrap(),
-            crate::UpdateError::InvalidState("No current patch".to_string())
-        );
+        assert!(crate::report_launch_success().is_ok());
+    }
+
+    #[serial]
+    #[test]
+    fn report_launch_success_with_patch() {
+        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::config::with_config;
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+
+        // Install a fake patch.
+        with_config(|config| {
+            let download_dir = std::path::PathBuf::from(&config.download_dir);
+            let artifact_path = download_dir.join("1");
+            fs::create_dir_all(&download_dir).unwrap();
+            fs::write(&artifact_path, "hello").unwrap();
+
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            state
+                .install_patch(PatchInfo {
+                    path: artifact_path,
+                    number: 1,
+                })
+                .expect("move failed");
+            state.save().expect("save failed");
+            Ok(())
+        })
+        .unwrap();
+
+        // Pretend we booted from it.
+        crate::report_launch_start().unwrap();
+
+        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            assert!(!state.is_known_good_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+
+        super::report_launch_success().unwrap();
+
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            assert!(state.is_known_good_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
     }
 }
