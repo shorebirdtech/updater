@@ -248,10 +248,12 @@ pub fn send_patch_check_request(
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     };
+    debug!("Sending patch check request: {:?}", request);
     let url = &patches_check_url(&config.base_url);
     let patch_check_request_fn = config.network_hooks.patch_check_request_fn;
     let response = patch_check_request_fn(url, request)?;
 
+    debug!("Patch check response: {:?}", response);
     return Ok(response);
 }
 
