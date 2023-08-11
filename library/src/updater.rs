@@ -553,4 +553,54 @@ mod tests {
         );
         assert!(crate::report_launch_success().is_ok());
     }
+
+    #[test]
+    fn report_launch_success_with_patch() {
+        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::config::with_config;
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+
+        // Install a fake patch.
+        with_config(|config| {
+            let download_dir = std::path::PathBuf::from(&config.download_dir);
+            let artifact_path = download_dir.join("1");
+            fs::create_dir_all(&download_dir).unwrap();
+            fs::write(&artifact_path, "hello").unwrap();
+
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            state
+                .install_patch(PatchInfo {
+                    path: artifact_path,
+                    number: 1,
+                })
+                .expect("move failed");
+            state.save().expect("save failed");
+            Ok(())
+        })
+        .unwrap();
+
+        // Pretend we booted from it.
+        crate::report_launch_start().unwrap();
+
+        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            assert!(!state.is_known_good_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+
+        super::report_launch_success().unwrap();
+
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            assert!(state.is_known_good_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+    }
 }
