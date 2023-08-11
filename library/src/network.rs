@@ -24,7 +24,7 @@ fn patches_events_url(base_url: &str) -> String {
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
-pub type PatchInstallSuccessFn = fn(&str, PatchInstallEvent) -> anyhow::Result<()>;
+pub type PatchInstallSuccessFn = fn(&str, CreatePatchInstallEventRequest) -> anyhow::Result<()>;
 
 /// A container for network clalbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -43,6 +43,7 @@ impl core::fmt::Debug for NetworkHooks {
         f.debug_struct("NetworkHooks")
             .field("patch_check_request_fn", &"<fn>")
             .field("download_file_fn", &"<fn>")
+            .field("patch_install_success_fn", &"<fn>")
             .finish()
     }
 }
@@ -61,8 +62,11 @@ fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-pub fn patch_install_success_throws(_url: &str, _event: PatchInstallEvent) -> anyhow::Result<()> {
-    anyhow::bail!("please set a patch_install_success_throws");
+pub fn patch_install_success_throws(
+    _url: &str,
+    _request: CreatePatchInstallEventRequest,
+) -> anyhow::Result<()> {
+    anyhow::bail!("please set a patch_install_success_fn");
 }
 
 impl Default for NetworkHooks {
@@ -105,13 +109,12 @@ pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 #[cfg(not(test))]
-pub fn patch_install_success_default(url: &str, event: PatchInstallEvent) -> anyhow::Result<()> {
-    use std::collections::HashMap;
-
+pub fn patch_install_success_default(
+    url: &str,
+    request: CreatePatchInstallEventRequest,
+) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::new();
-    let mut payload = HashMap::new();
-    payload.insert("event", serde_json::to_value(event)?);
-    let _ = client.post(url).json(&payload).send()?;
+    let _ = client.post(url).json(&request).send()?;
     Ok(())
 }
 
@@ -214,6 +217,15 @@ impl PatchInstallEvent {
     }
 }
 
+/// The request body for the create patch install event endpoint.
+///
+/// We may want to consider making this more generic if/when we add more events
+/// using something like https://github.com/dtolnay/typetag.
+#[derive(Debug, Serialize)]
+pub struct CreatePatchInstallEventRequest {
+    event: PatchInstallEvent,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PatchCheckResponse {
     pub patch_available: bool,
@@ -262,10 +274,11 @@ pub fn report_successful_patch_install(
         current_platform().to_string(),
         config.release_version.clone(),
     );
+    let request = CreatePatchInstallEventRequest { event };
 
     let patch_install_success_fn = config.network_hooks.patch_install_success_fn;
     let url = &patches_events_url(&config.base_url);
-    patch_install_success_fn(url, event)
+    patch_install_success_fn(url, request)
 }
 
 pub fn download_to_path(
@@ -344,5 +357,6 @@ mod tests {
         let debug = format!("{:?}", network_hooks);
         assert!(debug.contains("patch_check_request_fn"));
         assert!(debug.contains("download_file_fn"));
+        assert!(debug.contains("patch_install_success_fn"));
     }
 }
