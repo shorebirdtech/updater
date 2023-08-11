@@ -345,7 +345,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
         // Validate that we have an installed patch.
-        // Make that patch is the "booted" patch.
+        // Make that patch the "booted" patch.
         state.activate_current_patch()?;
         state.save()
     })
