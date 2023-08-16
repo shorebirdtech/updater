@@ -18,8 +18,13 @@ fn patches_check_url(base_url: &str) -> String {
     return format!("{}/api/v1/patches/check", base_url);
 }
 
+fn patches_events_url(base_url: &str) -> String {
+    return format!("{}/api/v1/patches/events", base_url);
+}
+
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
+pub type PatchInstallSuccessFn = fn(&str, CreatePatchInstallEventRequest) -> anyhow::Result<()>;
 
 /// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -28,6 +33,8 @@ pub struct NetworkHooks {
     pub patch_check_request_fn: PatchCheckRequestFn,
     /// The function to call to download a file.
     pub download_file_fn: DownloadFileFn,
+    /// The function to call to report patch install success.
+    pub patch_install_success_fn: PatchInstallSuccessFn,
 }
 
 // We have to implement Debug by hand since fn types don't implement it.
@@ -36,6 +43,7 @@ impl core::fmt::Debug for NetworkHooks {
         f.debug_struct("NetworkHooks")
             .field("patch_check_request_fn", &"<fn>")
             .field("download_file_fn", &"<fn>")
+            .field("patch_install_success_fn", &"<fn>")
             .finish()
     }
 }
@@ -53,12 +61,21 @@ fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
     anyhow::bail!("please set a download_file_fn");
 }
 
+#[cfg(test)]
+pub fn patch_install_success_throws(
+    _url: &str,
+    _request: CreatePatchInstallEventRequest,
+) -> anyhow::Result<()> {
+    anyhow::bail!("please set a patch_install_success_fn");
+}
+
 impl Default for NetworkHooks {
     #[cfg(not(test))]
     fn default() -> Self {
         Self {
             patch_check_request_fn: patch_check_request_default,
             download_file_fn: download_file_default,
+            patch_install_success_fn: patch_install_success_default,
         }
     }
 
@@ -67,6 +84,7 @@ impl Default for NetworkHooks {
         Self {
             patch_check_request_fn: patch_check_request_throws,
             download_file_fn: download_file_throws,
+            patch_install_success_fn: patch_install_success_throws,
         }
     }
 }
@@ -106,17 +124,29 @@ pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
+#[cfg(not(test))]
+pub fn patch_install_success_default(
+    url: &str,
+    request: CreatePatchInstallEventRequest,
+) -> anyhow::Result<()> {
+    let client = reqwest::blocking::Client::new();
+    let _ = client.post(url).json(&request).send()?;
+    Ok(())
+}
+
 #[cfg(test)]
 /// Unit tests can call this to mock out the network calls.
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_file_fn: DownloadFileFn,
+    patch_install_success_fn: PatchInstallSuccessFn,
 ) {
     crate::config::with_config_mut(|maybe_config| match maybe_config {
         Some(config) => {
             config.network_hooks = NetworkHooks {
                 patch_check_request_fn,
                 download_file_fn,
+                patch_install_success_fn,
             };
         }
         None => {
@@ -156,6 +186,62 @@ pub struct PatchCheckRequest {
     pub arch: String,
 }
 
+/// An event that is sent to the server when a patch is successfully installed.
+#[derive(Debug, Serialize)]
+pub struct PatchInstallEvent {
+    /// The Shorebird app_id built into the shorebird.yaml in the app.
+    pub app_id: String,
+
+    /// The architecture we're running (e.g. "aarch64", "x86", "x86_64").
+    pub arch: String,
+
+    /// The unique ID of this device.
+    pub client_id: String,
+
+    /// The identifier of this event.
+    #[serde(rename = "type")]
+    pub identifier: String,
+
+    /// The patch number that was installed.
+    pub patch_number: usize,
+
+    /// The platform we're running on (e.g. "android", "ios", "windows", "macos", "linux").
+    pub platform: String,
+
+    /// The release version from AndroidManifest.xml, Info.plist in the app.
+    pub release_version: String,
+}
+
+impl PatchInstallEvent {
+    pub fn new(
+        app_id: String,
+        arch: String,
+        client_id: String,
+        patch_number: usize,
+        platform: String,
+        release_version: String,
+    ) -> Self {
+        Self {
+            app_id,
+            arch,
+            client_id,
+            identifier: "__patch_install__".to_string(),
+            patch_number,
+            platform,
+            release_version,
+        }
+    }
+}
+
+/// The request body for the create patch install event endpoint.
+///
+/// We may want to consider making this more generic if/when we add more events
+/// using something like https://github.com/dtolnay/typetag.
+#[derive(Debug, Serialize)]
+pub struct CreatePatchInstallEventRequest {
+    event: PatchInstallEvent,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PatchCheckResponse {
     pub patch_available: bool,
@@ -185,6 +271,32 @@ pub fn send_patch_check_request(
 
     debug!("Patch check response: {:?}", response);
     return Ok(response);
+}
+
+pub fn report_successful_patch_install(
+    config: &UpdateConfig,
+    state: &UpdaterState,
+    patch_number: usize,
+) -> anyhow::Result<()> {
+    let client_id = state
+        .client_id
+        .clone()
+        .unwrap_or("".to_string())
+        .to_string();
+
+    let event = PatchInstallEvent::new(
+        config.app_id.clone(),
+        current_arch().to_string(),
+        client_id.to_string(),
+        patch_number,
+        current_platform().to_string(),
+        config.release_version.clone(),
+    );
+    let request = CreatePatchInstallEventRequest { event };
+
+    let patch_install_success_fn = config.network_hooks.patch_install_success_fn;
+    let url = &patches_events_url(&config.base_url);
+    patch_install_success_fn(url, request)
 }
 
 pub fn download_to_path(
@@ -235,6 +347,25 @@ mod tests {
         assert_eq!(patch.hash, "#");
     }
 
+    #[test]
+    fn create_patch_install_event_request_serializes() {
+        let request = super::CreatePatchInstallEventRequest {
+            event: super::PatchInstallEvent::new(
+                "app_id".to_string(),
+                "arch".to_string(),
+                "client_id".to_string(),
+                1,
+                "platform".to_string(),
+                "release_version".to_string(),
+            ),
+        };
+        let json_string = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            json_string,
+            r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version"}}"#
+        )
+    }
+
     // This confirms that the default network hooks throw an error in cfg(test).
     // In cfg(not(test)) they should be set to the default implementation
     // which makes real network calls.
@@ -263,5 +394,6 @@ mod tests {
         let debug = format!("{:?}", network_hooks);
         assert!(debug.contains("patch_check_request_fn"));
         assert!(debug.contains("download_file_fn"));
+        assert!(debug.contains("patch_install_success_fn"));
     }
 }
