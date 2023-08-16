@@ -1,6 +1,7 @@
 // This file's job is to deal with the update_server and network side
 // of the updater library.
 
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
@@ -53,12 +54,12 @@ fn patch_check_request_throws(
     _url: &str,
     _request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
-    anyhow::bail!("please set a patch_check_request_fn");
+    bail!("please set a patch_check_request_fn");
 }
 
 #[cfg(test)]
 fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
-    anyhow::bail!("please set a download_file_fn");
+    bail!("please set a download_file_fn");
 }
 
 #[cfg(test)]
@@ -66,7 +67,7 @@ pub fn patch_install_success_throws(
     _url: &str,
     _request: CreatePatchInstallEventRequest,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("please set a patch_install_success_fn");
+    bail!("please set a patch_install_success_fn");
 }
 
 impl Default for NetworkHooks {
@@ -94,13 +95,47 @@ pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
+    let client = reqwest::blocking::Client::new();
+    let result = client.post(url).json(&request).send();
+    let response = handle_network_result(result)?.json()?;
+    Ok(response)
+}
+
+#[cfg(not(test))]
+pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
+    let client = reqwest::blocking::Client::new();
+    let result = client.get(url).send();
+    let response = handle_network_result(result)?;
+    let bytes = response.bytes()?;
+    // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
+    Ok(bytes.to_vec())
+}
+
+pub fn patch_install_success_default(
+    url: &str,
+    request: CreatePatchInstallEventRequest,
+) -> anyhow::Result<()> {
+    let client = reqwest::blocking::Client::new();
+    let result = client.post(url).json(&request).send();
+    handle_network_result(result)?;
+    Ok(())
+}
+
+/// Handles the result of a network request, returning the response if it was
+/// successful, an error if it was not, or a special error if the network
+/// request failed due to a lack of internet connection.
+fn handle_network_result(
+    result: Result<reqwest::blocking::Response, reqwest::Error>,
+) -> anyhow::Result<reqwest::blocking::Response> {
     use std::error::Error;
 
-    let client = reqwest::blocking::Client::new();
-    match client.post(url).json(&request).send() {
+    match result {
         Ok(response) => {
-            let response = response.json()?;
-            Ok(response)
+            if response.status().is_success() {
+                return Ok(response);
+            } else {
+                bail!("Request failed with status: {}", response.status())
+            }
         }
         Err(e) => match e.source() {
             Some(source)
@@ -108,30 +143,11 @@ pub fn patch_check_request_default(
                     .to_string()
                     .contains("failed to lookup address information") =>
             {
-                anyhow::bail!("Patch check request failed due to network error. Please check your internet connection.");
+                bail!("Patch check request failed due to network error. Please check your internet connection.");
             }
-            _ => Err(e.into()),
+            _ => bail!(e),
         },
     }
-}
-
-#[cfg(not(test))]
-pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
-    let client = reqwest::blocking::Client::new();
-    let response = client.get(url).send()?;
-    let bytes = response.bytes()?;
-    // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
-    Ok(bytes.to_vec())
-}
-
-#[cfg(not(test))]
-pub fn patch_install_success_default(
-    url: &str,
-    request: CreatePatchInstallEventRequest,
-) -> anyhow::Result<()> {
-    let client = reqwest::blocking::Client::new();
-    let _ = client.post(url).json(&request).send()?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -324,6 +340,8 @@ pub fn download_to_path(
 mod tests {
     use crate::network::PatchCheckResponse;
 
+    use super::{patches_events_url, PatchInstallEvent};
+
     #[test]
     fn check_patch_request_response_deserialization() {
         let data = r###"
@@ -395,5 +413,85 @@ mod tests {
         assert!(debug.contains("patch_check_request_fn"));
         assert!(debug.contains("download_file_fn"));
         assert!(debug.contains("patch_install_success_fn"));
+    }
+
+    #[test]
+    fn handle_network_result_ok() {
+        let http_response = http::response::Builder::new()
+            .status(200)
+            .body("".to_string())
+            .unwrap();
+        let response = reqwest::blocking::Response::from(http_response);
+
+        let result = super::handle_network_result(Ok(response));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_network_result_http_status_not_ok() {
+        let http_response = http::response::Builder::new()
+            .status(500)
+            .body("".to_string())
+            .unwrap();
+        let response = reqwest::blocking::Response::from(http_response);
+
+        let result = super::handle_network_result(Ok(response));
+
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "Request failed with status: 500 Internal Server Error"
+        );
+    }
+
+    #[test]
+    fn handle_network_result_no_internet() {
+        let result = super::patch_install_success_default(
+            // Make the request to a non-existent URL, which will trigger the
+            // same error as a lack of internet connection.
+            &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
+            super::CreatePatchInstallEventRequest {
+                event: PatchInstallEvent::new(
+                    "app_id".to_string(),
+                    "arch".to_string(),
+                    "client_id".to_string(),
+                    2,
+                    "platform".to_string(),
+                    "release_version".to_string(),
+                ),
+            },
+        );
+
+        assert!(result.is_err());
+        let error = result.err().unwrap();
+        assert_eq!(error.to_string(), "Patch check request failed due to network error. Please check your internet connection.")
+    }
+
+    #[test]
+    fn handle_network_result_unknown_error() {
+        let result = super::patch_install_success_default(
+            // Make the request to an incorrectly formatted URL, which will
+            // trigger the same error as a lack of internet connection.
+            &patches_events_url("asdfasdf"),
+            super::CreatePatchInstallEventRequest {
+                event: PatchInstallEvent::new(
+                    "app_id".to_string(),
+                    "arch".to_string(),
+                    "client_id".to_string(),
+                    2,
+                    "platform".to_string(),
+                    "release_version".to_string(),
+                ),
+            },
+        );
+
+        assert!(result.is_err());
+        let error = result.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "builder error: relative URL without a base"
+        )
     }
 }
