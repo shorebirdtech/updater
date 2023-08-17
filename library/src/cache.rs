@@ -71,6 +71,10 @@ impl UpdaterState {
             slots: Vec::new(),
         }
     }
+
+    pub fn client_id_or_default(&self) -> String {
+        self.client_id.clone().unwrap_or("".to_string())
+    }
 }
 
 fn is_file_not_found(error: &anyhow::Error) -> bool {
