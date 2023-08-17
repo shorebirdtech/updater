@@ -115,9 +115,9 @@ pub fn patch_install_success_default(
     url: &str,
     request: CreatePatchInstallEventRequest,
 ) -> anyhow::Result<()> {
-    let client = reqwest::blocking::Client::new();
-    let result = client.post(url).json(&request).send();
-    handle_network_result(result)?;
+    let client = reqwest::Client::new();
+    // We don't care about the result of this request.
+    let _ = client.post(url).json(&request).send();
     Ok(())
 }
 
