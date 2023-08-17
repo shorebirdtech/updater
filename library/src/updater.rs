@@ -388,7 +388,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                     let client_id = state.client_id_or_default();
                     std::thread::spawn(move || {
                         let report_result =
-                            report_successful_patch_install(&config_copy, &client_id, patch.number);
+                            report_successful_patch_install(&config_copy, client_id, patch.number);
                         if let Err(err) = report_result {
                             error!("Failed to report successful patch install: {:?}", err);
                         }
