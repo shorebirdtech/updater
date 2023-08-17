@@ -385,13 +385,10 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                 // even if we fail to mark this one as good.
                 if state.mark_patch_as_good(patch.number).is_ok() {
                     let config_copy = config.clone();
-                    let state_copy = state.clone();
+                    let client_id = state.client_id_or_default();
                     std::thread::spawn(move || {
-                        let report_result = report_successful_patch_install(
-                            &config_copy,
-                            &state_copy,
-                            patch.number,
-                        );
+                        let report_result =
+                            report_successful_patch_install(&config_copy, &client_id, patch.number);
                         if let Err(err) = report_result {
                             error!("Failed to report successful patch install: {:?}", err);
                         }

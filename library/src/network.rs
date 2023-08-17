@@ -291,15 +291,9 @@ pub fn send_patch_check_request(
 
 pub fn report_successful_patch_install(
     config: &UpdateConfig,
-    state: &UpdaterState,
+    client_id: &str,
     patch_number: usize,
 ) -> anyhow::Result<()> {
-    let client_id = state
-        .client_id
-        .clone()
-        .unwrap_or("".to_string())
-        .to_string();
-
     let event = PatchInstallEvent::new(
         config.app_id.clone(),
         current_arch().to_string(),

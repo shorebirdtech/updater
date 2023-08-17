@@ -34,7 +34,7 @@ struct Slot {
 
 // This struct is public, as callers can have a handle to it, but modifying
 // anything inside should be done via the functions below.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpdaterState {
     /// Where this writes to disk.
     cache_dir: PathBuf,
@@ -70,6 +70,10 @@ impl UpdaterState {
             successful_patches: Vec::new(),
             slots: Vec::new(),
         }
+    }
+
+    pub fn client_id_or_default(&self) -> String {
+        self.client_id.clone().unwrap_or("".to_string())
     }
 }
 
