@@ -34,7 +34,7 @@ struct Slot {
 
 // This struct is public, as callers can have a handle to it, but modifying
 // anything inside should be done via the functions below.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdaterState {
     /// Where this writes to disk.
     cache_dir: PathBuf,
