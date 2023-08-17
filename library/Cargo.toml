@@ -24,6 +24,8 @@ comde = { version = "0.2.3", default-features = false, features = [
 ] }
 # For decoding the hex-encoded hashes in Patch network responses.
 hex = "0.4.3"
+# Used to construct mock responses.
+http = "0.2.9"
 libc = "0.2.98"
 # For error!(), info!(), etc macros. `print` will not show up on Android.
 log = "0.4.14"
