@@ -13,7 +13,7 @@ use crate::config::{current_arch, current_platform, UpdateConfig};
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
+use std::{println as info, println as debug}; // Workaround to use println! for logs.
 
 fn patches_check_url(base_url: &str) -> String {
     return format!("{}/api/v1/patches/check", base_url);
@@ -280,7 +280,11 @@ pub fn send_patch_check_request(
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     };
-    debug!("Sending patch check request: {:?}", request);
+    // Dumping the request should be info! since we direct users to look for it
+    // in the logs: https://docs.shorebird.dev/troubleshooting#how-to-fix-it-1
+    // Another option would be to make verbosity configurable via a key
+    // in shorebird.yaml.
+    info!("Sending patch check request: {:?}", request);
     let url = &patches_check_url(&config.base_url);
     let patch_check_request_fn = config.network_hooks.patch_check_request_fn;
     let response = patch_check_request_fn(url, request)?;
