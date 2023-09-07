@@ -58,25 +58,6 @@ pub struct UpdaterState {
     // Add file path or FD so modifying functions can save it to disk?
 }
 
-impl UpdaterState {
-    fn new(cache_dir: PathBuf, release_version: String) -> Self {
-        Self {
-            cache_dir,
-            release_version,
-            client_id: Some(generate_client_id()),
-            current_boot_slot_index: None,
-            next_boot_slot_index: None,
-            failed_patches: Vec::new(),
-            successful_patches: Vec::new(),
-            slots: Vec::new(),
-        }
-    }
-
-    pub fn client_id_or_default(&self) -> String {
-        self.client_id.clone().unwrap_or("".to_string())
-    }
-}
-
 fn is_file_not_found(error: &anyhow::Error) -> bool {
     for cause in error.chain() {
         if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
@@ -91,6 +72,24 @@ fn generate_client_id() -> String {
 }
 
 impl UpdaterState {
+    /// Creates a new UpdaterState. If client_id is None, a new one will be generated.
+    fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
+        Self {
+            cache_dir,
+            release_version,
+            client_id: client_id.or(Some(generate_client_id())),
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
+            failed_patches: Vec::new(),
+            successful_patches: Vec::new(),
+            slots: Vec::new(),
+        }
+    }
+
+    pub fn client_id_or_default(&self) -> String {
+        self.client_id.clone().unwrap_or("".to_string())
+    }
+
     pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
         self.successful_patches.iter().any(|v| v == &patch_number)
     }
@@ -139,8 +138,12 @@ impl UpdaterState {
         Ok(state)
     }
 
-    fn create_new_and_save(cache_dir: &Path, release_version: &str) -> Self {
-        let state = Self::new(cache_dir.to_owned(), release_version.to_owned());
+    fn create_new_and_save(
+        cache_dir: &Path,
+        release_version: &str,
+        client_id: Option<String>,
+    ) -> Self {
+        let state = Self::new(cache_dir.to_owned(), release_version.to_owned(), client_id);
         let _ = state.save();
         state
     }
@@ -149,17 +152,18 @@ impl UpdaterState {
         let load_result = Self::load(cache_dir);
         match load_result {
             Ok(mut loaded) => {
+                let maybe_client_id = loaded.client_id.clone();
                 if loaded.release_version != release_version {
                     info!(
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.release_version, release_version
                     );
-                    return Self::create_new_and_save(cache_dir, release_version);
+                    return Self::create_new_and_save(cache_dir, release_version, maybe_client_id);
                 }
                 let validate_result = loaded.validate();
                 if let Err(e) = validate_result {
                     warn!("Error while validating state: {:#}, clearing state.", e);
-                    return Self::create_new_and_save(cache_dir, release_version);
+                    return Self::create_new_and_save(cache_dir, release_version, maybe_client_id);
                 }
                 loaded
             }
@@ -167,7 +171,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                return Self::create_new_and_save(cache_dir, release_version);
+                return Self::create_new_and_save(cache_dir, release_version, None);
             }
         }
     }
@@ -434,7 +438,7 @@ mod tests {
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
         let cache_dir = tmp_dir.path();
-        UpdaterState::new(cache_dir.to_owned(), "1.0.0+1".to_string())
+        UpdaterState::new(cache_dir.to_owned(), "1.0.0+1".to_string(), None)
     }
 
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
@@ -548,7 +552,7 @@ mod tests {
     #[test]
     fn adds_client_id_to_saved_state() {
         let tmp_dir = TempDir::new("example").unwrap();
-        let state: UpdaterState = UpdaterState {
+        let state = UpdaterState {
             cache_dir: tmp_dir.path().to_path_buf(),
             release_version: "1.0.0+1".to_string(),
             client_id: None,
@@ -564,5 +568,33 @@ mod tests {
         let loaded_state =
             UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
         assert!(loaded_state.client_id.is_some());
+    }
+
+    // A new UpdaterState is created when the release version is changed, but
+    // the client_id should remain the same.
+    #[test]
+    fn client_id_does_not_change_if_release_version_changes() {
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let original_state = UpdaterState {
+            cache_dir: tmp_dir.path().to_path_buf(),
+            release_version: "1.0.0+1".to_string(),
+            client_id: None,
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
+            failed_patches: Vec::new(),
+            successful_patches: Vec::new(),
+            slots: Vec::new(),
+        };
+        let original_loaded = UpdaterState::load_or_new_on_error(
+            &original_state.cache_dir,
+            &original_state.release_version,
+        );
+
+        let new_loaded = UpdaterState::load_or_new_on_error(&original_state.cache_dir, "1.0.0+2");
+
+        assert!(original_loaded.client_id.is_some());
+        assert!(new_loaded.client_id.is_some());
+        assert_eq!(original_loaded.client_id, new_loaded.client_id);
     }
 }
