@@ -4,6 +4,12 @@
 // name collisions with other libraries.
 // cbindgen:prefix-with-name could do this for us.
 
+/// This file contains the C API for the updater library.
+/// It is intended to be used by language bindings, and is not intended to be
+/// used directly by Rust code.
+/// The C API is not stable and may change at any time.
+/// You can see usage of this API in Shorebird's Flutter engine:
+/// https://github.com/shorebirdtech/engine/blob/shorebird/dev/shell/common/shorebird.cc
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;

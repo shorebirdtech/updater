@@ -10,6 +10,7 @@ use std::string::ToString;
 
 use crate::cache::UpdaterState;
 use crate::config::{current_arch, current_platform, UpdateConfig};
+use crate::events::{EventType, PatchEvent};
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
@@ -25,7 +26,7 @@ fn patches_events_url(base_url: &str) -> String {
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
-pub type PatchInstallSuccessFn = fn(&str, CreatePatchInstallEventRequest) -> anyhow::Result<()>;
+pub type PatchInstallSuccessFn = fn(&str, CreatePatchEventRequest) -> anyhow::Result<()>;
 
 /// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -65,7 +66,7 @@ fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
 #[cfg(test)]
 pub fn patch_install_success_throws(
     _url: &str,
-    _request: CreatePatchInstallEventRequest,
+    _request: CreatePatchEventRequest,
 ) -> anyhow::Result<()> {
     bail!("please set a patch_install_success_fn");
 }
@@ -113,7 +114,7 @@ pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
 
 pub fn patch_install_success_default(
     url: &str,
-    request: CreatePatchInstallEventRequest,
+    request: CreatePatchEventRequest,
 ) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::new();
     let result = client.post(url).json(&request).send();
@@ -183,17 +184,29 @@ pub struct Patch {
     pub download_url: String,
 }
 
+/// Any edits to this struct should be made carefully and in accordance
+/// with our privacy policy:
+/// https://docs.shorebird.dev/privacy
+/// The request body for the patch check endpoint.
 #[derive(Debug, Serialize)]
 pub struct PatchCheckRequest {
     /// The Shorebird app_id built into the shorebird.yaml in the app.
+    /// app_ids are unique to each app and are used to identify the app
+    /// within Shorebird's system (similar to a bundle identifier).  They
+    /// are not secret and are safe to share publicly.
+    /// https://docs.shorebird.dev/concepts
     pub app_id: String,
     /// The Shorebird channel built into the shorebird.yaml in the app.
+    /// This is not currently used, but intended for future use to allow
+    /// staged rollouts of patches.
     pub channel: String,
     /// The release version from AndroidManifest.xml, Info.plist in the app.
+    /// This is used to identify the version of the app that the client is
+    /// running.  Patches are keyed to release versions and will only be
+    /// offered to clients running the same release version.
     pub release_version: String,
     /// The latest patch number that the client has downloaded.
     /// Not necessarily the one it's running (if some have been marked bad).
-    /// We could rename this to be more clear.    
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch_number: Option<usize>,
     /// Platform (e.g. "android", "ios", "windows", "macos", "linux").
@@ -202,60 +215,13 @@ pub struct PatchCheckRequest {
     pub arch: String,
 }
 
-/// An event that is sent to the server when a patch is successfully installed.
-#[derive(Debug, Serialize)]
-pub struct PatchInstallEvent {
-    /// The Shorebird app_id built into the shorebird.yaml in the app.
-    pub app_id: String,
-
-    /// The architecture we're running (e.g. "aarch64", "x86", "x86_64").
-    pub arch: String,
-
-    /// The unique ID of this device.
-    pub client_id: String,
-
-    /// The identifier of this event.
-    #[serde(rename = "type")]
-    pub identifier: String,
-
-    /// The patch number that was installed.
-    pub patch_number: usize,
-
-    /// The platform we're running on (e.g. "android", "ios", "windows", "macos", "linux").
-    pub platform: String,
-
-    /// The release version from AndroidManifest.xml, Info.plist in the app.
-    pub release_version: String,
-}
-
-impl PatchInstallEvent {
-    pub fn new(
-        app_id: String,
-        arch: String,
-        client_id: String,
-        patch_number: usize,
-        platform: String,
-        release_version: String,
-    ) -> Self {
-        Self {
-            app_id,
-            arch,
-            client_id,
-            identifier: "__patch_install__".to_string(),
-            patch_number,
-            platform,
-            release_version,
-        }
-    }
-}
-
 /// The request body for the create patch install event endpoint.
 ///
 /// We may want to consider making this more generic if/when we add more events
 /// using something like https://github.com/dtolnay/typetag.
 #[derive(Debug, Serialize)]
-pub struct CreatePatchInstallEventRequest {
-    event: PatchInstallEvent,
+pub struct CreatePatchEventRequest {
+    event: PatchEvent,
 }
 
 #[derive(Debug, Deserialize)]
@@ -298,15 +264,16 @@ pub fn report_successful_patch_install(
     client_id: String,
     patch_number: usize,
 ) -> anyhow::Result<()> {
-    let event = PatchInstallEvent::new(
-        config.app_id.clone(),
-        current_arch().to_string(),
+    let event = PatchEvent {
+        app_id: config.app_id.clone(),
+        arch: current_arch().to_string(),
         client_id,
         patch_number,
-        current_platform().to_string(),
-        config.release_version.clone(),
-    );
-    let request = CreatePatchInstallEventRequest { event };
+        platform: current_platform().to_string(),
+        release_version: config.release_version.clone(),
+        identifier: EventType::PatchInstallSuccess,
+    };
+    let request = CreatePatchEventRequest { event };
 
     let patch_install_success_fn = config.network_hooks.patch_install_success_fn;
     let url = &patches_events_url(&config.base_url);
@@ -338,7 +305,7 @@ pub fn download_to_path(
 mod tests {
     use crate::network::PatchCheckResponse;
 
-    use super::{patches_events_url, PatchInstallEvent};
+    use super::{patches_events_url, PatchEvent};
 
     #[test]
     fn check_patch_request_response_deserialization() {
@@ -365,16 +332,16 @@ mod tests {
 
     #[test]
     fn create_patch_install_event_request_serializes() {
-        let request = super::CreatePatchInstallEventRequest {
-            event: super::PatchInstallEvent::new(
-                "app_id".to_string(),
-                "arch".to_string(),
-                "client_id".to_string(),
-                1,
-                "platform".to_string(),
-                "release_version".to_string(),
-            ),
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            arch: "arch".to_string(),
+            client_id: "client_id".to_string(),
+            patch_number: 1,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: super::EventType::PatchInstallSuccess,
         };
+        let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
@@ -446,20 +413,20 @@ mod tests {
 
     #[test]
     fn handle_network_result_no_internet() {
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            arch: "arch".to_string(),
+            client_id: "client_id".to_string(),
+            patch_number: 2,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: super::EventType::PatchInstallSuccess,
+        };
         let result = super::patch_install_success_default(
             // Make the request to a non-existent URL, which will trigger the
             // same error as a lack of internet connection.
             &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
-            super::CreatePatchInstallEventRequest {
-                event: PatchInstallEvent::new(
-                    "app_id".to_string(),
-                    "arch".to_string(),
-                    "client_id".to_string(),
-                    2,
-                    "platform".to_string(),
-                    "release_version".to_string(),
-                ),
-            },
+            super::CreatePatchEventRequest { event },
         );
 
         assert!(result.is_err());
@@ -473,15 +440,16 @@ mod tests {
             // Make the request to an incorrectly formatted URL, which will
             // trigger the same error as a lack of internet connection.
             &patches_events_url("asdfasdf"),
-            super::CreatePatchInstallEventRequest {
-                event: PatchInstallEvent::new(
-                    "app_id".to_string(),
-                    "arch".to_string(),
-                    "client_id".to_string(),
-                    2,
-                    "platform".to_string(),
-                    "release_version".to_string(),
-                ),
+            super::CreatePatchEventRequest {
+                event: PatchEvent {
+                    app_id: "app_id".to_string(),
+                    arch: "arch".to_string(),
+                    client_id: "client_id".to_string(),
+                    patch_number: 2,
+                    platform: "platform".to_string(),
+                    release_version: "release_version".to_string(),
+                    identifier: super::EventType::PatchInstallSuccess,
+                },
             },
         );
 

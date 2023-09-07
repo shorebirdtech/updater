@@ -8,6 +8,7 @@ pub mod c_api;
 // Declare other .rs file/module exists, but make them private.
 mod cache;
 mod config;
+mod events;
 mod logging;
 mod network;
 mod updater;
