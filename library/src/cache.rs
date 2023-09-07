@@ -72,6 +72,7 @@ fn generate_client_id() -> String {
 }
 
 impl UpdaterState {
+    /// Creates a new UpdaterState. If client_id is None, a new one will be generated.
     fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
         Self {
             cache_dir,
