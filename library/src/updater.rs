@@ -13,8 +13,7 @@ use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, report_successful_patch_install, send_patch_check_request, NetworkHooks,
-    PatchCheckResponse,
+    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
@@ -223,11 +222,37 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Saves state to disk (holds Config lock while writing).
 
     let config = copy_update_config()?;
+    // We should never try to write this state as some other writer may be
+    // racing with us, we should get a new state inside a lock if we want
+    // to write.
+    let read_only_state =
+        UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-    // Load the state from disk.
-    let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+    // We discard any events if we have more than 3 queued to make sure
+    // we don't stall the client.
+    let events = read_only_state.copy_events(3);
+    for event in events {
+        let result = crate::network::send_patch_event(event, &config);
+        if let Err(err) = result {
+            error!("Failed to report event: {:?}", err);
+        }
+    }
+    // We're abusing the config lock as a UpdateState lock for now.
+    let read_only_state = with_config(|_| {
+        let mut state =
+            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+        // This will clear any events which got queued between the time we
+        // loaded the state now, but that's OK for now.
+        let result = state.clear_events();
+        if let Err(err) = result {
+            error!("Failed to clear events: {:?}", err);
+        }
+        // Update our outer state with the new state.
+        Ok(state)
+    })?;
+
     // Check for update.
-    let response = send_patch_check_request(&config, &state)?;
+    let response = send_patch_check_request(&config, &read_only_state)?;
     if !response.patch_available {
         return Ok(UpdateStatus::NoUpdate);
     }
@@ -258,6 +283,8 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             path: output_path,
             number: patch.number,
         };
+        let mut state =
+            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
         // Move/state update should be "atomic" (it isn't today).
         state.install_patch(patch_info)?;
         info!("Patch {} successfully installed.", patch.number);
@@ -367,7 +394,22 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
                 )))?;
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
-        let _ = state.mark_patch_as_bad(patch.number);
+        let mark_result = state.mark_patch_as_bad(patch.number);
+        if mark_result.is_err() {
+            error!("Failed to mark patch as bad: {:?}", mark_result);
+        }
+        let event = crate::events::PatchEvent {
+            app_id: config.app_id.clone(),
+            arch: crate::config::current_arch().to_string(),
+            client_id: state.client_id_or_default(),
+            identifier: crate::events::EventType::PatchInstallFailure,
+            patch_number: patch.number,
+            platform: crate::config::current_platform().to_string(),
+            release_version: config.release_version.clone(),
+        };
+        // Queue the failure event for later sending since right after this
+        // function returns the Flutter engine is likely to abort().
+        state.queue_event(event);
         state
             .activate_latest_bootable_patch()
             .map_err(|err| anyhow::Error::from(err))
@@ -387,8 +429,16 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                     let config_copy = config.clone();
                     let client_id = state.client_id_or_default();
                     std::thread::spawn(move || {
-                        let report_result =
-                            report_successful_patch_install(&config_copy, client_id, patch.number);
+                        let event = crate::events::PatchEvent {
+                            app_id: config_copy.app_id.clone(),
+                            arch: crate::config::current_arch().to_string(),
+                            client_id,
+                            patch_number: patch.number,
+                            platform: crate::config::current_platform().to_string(),
+                            release_version: config_copy.release_version.clone(),
+                            identifier: crate::events::EventType::PatchInstallSuccess,
+                        };
+                        let report_result = crate::network::send_patch_event(event, &config_copy);
                         if let Err(err) = report_result {
                             error!("Failed to report successful patch install: {:?}", err);
                         }

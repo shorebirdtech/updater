@@ -12,13 +12,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::events::PatchEvent;
 use crate::updater::UpdateError;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
 use std::{println as info, println as warn, println as debug}; // Workaround to use println! for logs.
 
-/// The public interace for talking about patches to the Cache.
+/// The public interface for talking about patches to the Cache.
 #[derive(PartialEq, Debug)]
 pub struct PatchInfo {
     pub path: PathBuf,
@@ -34,10 +35,19 @@ struct Slot {
 
 // This struct is public, as callers can have a handle to it, but modifying
 // anything inside should be done via the functions below.
+// TODO(eseidel): Split the per-release state from the per-device state.
+// That way per-release state is reset when the release version changes.
+// but per-device state is not.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdaterState {
+    // Per-device state:
     /// Where this writes to disk.
     cache_dir: PathBuf,
+    /// The client ID for this device.
+    pub client_id: Option<String>,
+    // Add file path or FD so modifying functions can save it to disk?
+
+    // Per-release state:
     /// The release version this cache corresponds to.
     /// If this does not match the release version we're booting from we will
     /// clear the cache.
@@ -53,9 +63,9 @@ pub struct UpdaterState {
     next_boot_slot_index: Option<usize>,
     /// List of slots.
     slots: Vec<Slot>,
-    /// The client ID for this device.
-    pub client_id: Option<String>,
-    // Add file path or FD so modifying functions can save it to disk?
+    /// Events that have not yet been sent to the server.
+    /// Format could change between releases, so this is per-release state.
+    queued_events: Vec<PatchEvent>,
 }
 
 fn is_file_not_found(error: &anyhow::Error) -> bool {
@@ -80,6 +90,7 @@ impl UpdaterState {
             client_id: client_id.or(Some(generate_client_id())),
             current_boot_slot_index: None,
             next_boot_slot_index: None,
+            queued_events: Vec::new(),
             failed_patches: Vec::new(),
             successful_patches: Vec::new(),
             slots: Vec::new(),
@@ -96,6 +107,23 @@ impl UpdaterState {
 
     pub fn is_known_bad_patch(&self, patch_number: usize) -> bool {
         self.failed_patches.iter().any(|v| v == &patch_number)
+    }
+
+    pub fn queue_event(&mut self, event: PatchEvent) {
+        self.queued_events.push(event);
+    }
+
+    pub fn copy_events(&self, limit: usize) -> Vec<PatchEvent> {
+        self.queued_events
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    pub fn clear_events(&mut self) -> Result<()> {
+        self.queued_events.clear();
+        self.save()
     }
 
     pub fn mark_patch_as_bad(&mut self, patch_number: usize) -> Result<()> {
@@ -556,6 +584,7 @@ mod tests {
             cache_dir: tmp_dir.path().to_path_buf(),
             release_version: "1.0.0+1".to_string(),
             client_id: None,
+            queued_events: Vec::new(),
             current_boot_slot_index: None,
             next_boot_slot_index: None,
             failed_patches: Vec::new(),
@@ -580,6 +609,7 @@ mod tests {
             cache_dir: tmp_dir.path().to_path_buf(),
             release_version: "1.0.0+1".to_string(),
             client_id: None,
+            queued_events: Vec::new(),
             current_boot_slot_index: None,
             next_boot_slot_index: None,
             failed_patches: Vec::new(),
