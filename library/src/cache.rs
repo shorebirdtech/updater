@@ -58,6 +58,19 @@ pub struct UpdaterState {
     // Add file path or FD so modifying functions can save it to disk?
 }
 
+fn is_file_not_found(error: &anyhow::Error) -> bool {
+    for cause in error.chain() {
+        if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
+            return io_error.kind() == std::io::ErrorKind::NotFound;
+        }
+    }
+    false
+}
+
+fn generate_client_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 impl UpdaterState {
     fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
         Self {
@@ -75,22 +88,7 @@ impl UpdaterState {
     pub fn client_id_or_default(&self) -> String {
         self.client_id.clone().unwrap_or("".to_string())
     }
-}
 
-fn is_file_not_found(error: &anyhow::Error) -> bool {
-    for cause in error.chain() {
-        if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
-            return io_error.kind() == std::io::ErrorKind::NotFound;
-        }
-    }
-    false
-}
-
-fn generate_client_id() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-impl UpdaterState {
     pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
         self.successful_patches.iter().any(|v| v == &patch_number)
     }
@@ -553,7 +551,7 @@ mod tests {
     #[test]
     fn adds_client_id_to_saved_state() {
         let tmp_dir = TempDir::new("example").unwrap();
-        let state: UpdaterState = UpdaterState {
+        let state = UpdaterState {
             cache_dir: tmp_dir.path().to_path_buf(),
             release_version: "1.0.0+1".to_string(),
             client_id: None,
@@ -569,5 +567,33 @@ mod tests {
         let loaded_state =
             UpdaterState::load_or_new_on_error(&state.cache_dir, &state.release_version);
         assert!(loaded_state.client_id.is_some());
+    }
+
+    // A new UpdaterState is created when the release version is changed, but
+    // the client_id should remain the same.
+    #[test]
+    fn client_id_does_not_change_if_release_version_changes() {
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let original_state = UpdaterState {
+            cache_dir: tmp_dir.path().to_path_buf(),
+            release_version: "1.0.0+1".to_string(),
+            client_id: None,
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
+            failed_patches: Vec::new(),
+            successful_patches: Vec::new(),
+            slots: Vec::new(),
+        };
+        let original_loaded = UpdaterState::load_or_new_on_error(
+            &original_state.cache_dir,
+            &original_state.release_version,
+        );
+
+        let new_loaded = UpdaterState::load_or_new_on_error(&original_state.cache_dir, "1.0.0+2");
+
+        assert!(original_loaded.client_id.is_some());
+        assert!(new_loaded.client_id.is_some());
+        assert_eq!(original_loaded.client_id, new_loaded.client_id);
     }
 }
