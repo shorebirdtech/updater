@@ -45,7 +45,6 @@ pub struct UpdaterState {
     cache_dir: PathBuf,
     /// The client ID for this device.
     pub client_id: Option<String>,
-    // Add file path or FD so modifying functions can save it to disk?
 
     // Per-release state:
     /// The release version this cache corresponds to.
@@ -114,11 +113,7 @@ impl UpdaterState {
     }
 
     pub fn copy_events(&self, limit: usize) -> Vec<PatchEvent> {
-        self.queued_events
-            .iter()
-            .take(limit)
-            .cloned()
-            .collect::<Vec<_>>()
+        self.queued_events.iter().take(limit).cloned().collect()
     }
 
     pub fn clear_events(&mut self) -> Result<()> {
