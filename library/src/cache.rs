@@ -59,11 +59,11 @@ pub struct UpdaterState {
 }
 
 impl UpdaterState {
-    fn new(cache_dir: PathBuf, release_version: String) -> Self {
+    fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
         Self {
             cache_dir,
             release_version,
-            client_id: Some(generate_client_id()),
+            client_id: client_id.or(Some(generate_client_id())),
             current_boot_slot_index: None,
             next_boot_slot_index: None,
             failed_patches: Vec::new(),
@@ -139,8 +139,12 @@ impl UpdaterState {
         Ok(state)
     }
 
-    fn create_new_and_save(cache_dir: &Path, release_version: &str) -> Self {
-        let state = Self::new(cache_dir.to_owned(), release_version.to_owned());
+    fn create_new_and_save(
+        cache_dir: &Path,
+        release_version: &str,
+        client_id: Option<String>,
+    ) -> Self {
+        let state = Self::new(cache_dir.to_owned(), release_version.to_owned(), client_id);
         let _ = state.save();
         state
     }
@@ -149,17 +153,18 @@ impl UpdaterState {
         let load_result = Self::load(cache_dir);
         match load_result {
             Ok(mut loaded) => {
+                let maybe_client_id = loaded.client_id.clone();
                 if loaded.release_version != release_version {
                     info!(
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.release_version, release_version
                     );
-                    return Self::create_new_and_save(cache_dir, release_version);
+                    return Self::create_new_and_save(cache_dir, release_version, maybe_client_id);
                 }
                 let validate_result = loaded.validate();
                 if let Err(e) = validate_result {
                     warn!("Error while validating state: {:#}, clearing state.", e);
-                    return Self::create_new_and_save(cache_dir, release_version);
+                    return Self::create_new_and_save(cache_dir, release_version, maybe_client_id);
                 }
                 loaded
             }
@@ -167,7 +172,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                return Self::create_new_and_save(cache_dir, release_version);
+                return Self::create_new_and_save(cache_dir, release_version, None);
             }
         }
     }
@@ -434,7 +439,7 @@ mod tests {
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
         let cache_dir = tmp_dir.path();
-        UpdaterState::new(cache_dir.to_owned(), "1.0.0+1".to_string())
+        UpdaterState::new(cache_dir.to_owned(), "1.0.0+1".to_string(), None)
     }
 
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
