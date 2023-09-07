@@ -10,7 +10,8 @@ use anyhow::bail;
 use anyhow::Context;
 
 use crate::cache::{PatchInfo, UpdaterState};
-use crate::config::{set_config, with_config, UpdateConfig};
+use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
+use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
     download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
@@ -398,13 +399,13 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
-        let event = crate::events::PatchEvent {
+        let event = PatchEvent {
             app_id: config.app_id.clone(),
-            arch: crate::config::current_arch().to_string(),
+            arch: current_arch().to_string(),
             client_id: state.client_id_or_default(),
-            identifier: crate::events::EventType::PatchInstallFailure,
+            identifier: EventType::PatchInstallFailure,
             patch_number: patch.number,
-            platform: crate::config::current_platform().to_string(),
+            platform: current_platform().to_string(),
             release_version: config.release_version.clone(),
         };
         // Queue the failure event for later sending since right after this
@@ -429,14 +430,14 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                     let config_copy = config.clone();
                     let client_id = state.client_id_or_default();
                     std::thread::spawn(move || {
-                        let event = crate::events::PatchEvent {
+                        let event = PatchEvent {
                             app_id: config_copy.app_id.clone(),
-                            arch: crate::config::current_arch().to_string(),
+                            arch: current_arch().to_string(),
                             client_id,
                             patch_number: patch.number,
-                            platform: crate::config::current_platform().to_string(),
+                            platform: current_platform().to_string(),
                             release_version: config_copy.release_version.clone(),
-                            identifier: crate::events::EventType::PatchInstallSuccess,
+                            identifier: EventType::PatchInstallSuccess,
                         };
                         let report_result = crate::network::send_patch_event(event, &config_copy);
                         if let Err(err) = report_result {
