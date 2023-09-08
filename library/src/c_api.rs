@@ -326,7 +326,7 @@ mod test {
         assert!(!shorebird_init(std::ptr::null(), std::ptr::null()));
 
         // free_string also doesn't crash with null.
-        shorebird_free_string(std::ptr::null_mut());
+        unsafe { shorebird_free_string(std::ptr::null_mut()) }
     }
 
     #[serial]
@@ -465,7 +465,7 @@ mod test {
         // Read path contents into memory and check against expected.
         let c_path = shorebird_next_boot_patch_path();
         let path = to_rust(c_path).unwrap();
-        shorebird_free_string(c_path);
+        unsafe { shorebird_free_string(c_path) };
         let new = std::fs::read_to_string(path).unwrap();
         assert_eq!(new, expected_new);
     }
