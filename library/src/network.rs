@@ -17,11 +17,11 @@ use crate::events::PatchEvent;
 use std::{println as info, println as debug}; // Workaround to use println! for logs.
 
 fn patches_check_url(base_url: &str) -> String {
-    format!("{}/api/v1/patches/check", base_url)
+    format!("{base_url}/api/v1/patches/check")
 }
 
 fn patches_events_url(base_url: &str) -> String {
-    format!("{}/api/v1/patches/events", base_url)
+    format!("{base_url}/api/v1/patches/events")
 }
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
@@ -186,7 +186,7 @@ pub struct Patch {
 
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy:
-/// https://docs.shorebird.dev/privacy
+/// <https://docs.shorebird.dev/privacy>
 /// The request body for the patch check endpoint.
 #[derive(Debug, Serialize)]
 pub struct PatchCheckRequest {
@@ -194,7 +194,7 @@ pub struct PatchCheckRequest {
     /// app_ids are unique to each app and are used to identify the app
     /// within Shorebird's system (similar to a bundle identifier).  They
     /// are not secret and are safe to share publicly.
-    /// https://docs.shorebird.dev/concepts
+    /// <https://docs.shorebird.dev/concepts>
     pub app_id: String,
     /// The Shorebird channel built into the shorebird.yaml in the app.
     /// This is not currently used, but intended for future use to allow
@@ -218,7 +218,7 @@ pub struct PatchCheckRequest {
 /// The request body for the create patch install event endpoint.
 ///
 /// We may want to consider making this more generic if/when we add more events
-/// using something like https://github.com/dtolnay/typetag.
+/// using something like <https://github.com/dtolnay/typetag>.
 #[derive(Debug, Serialize)]
 pub struct CreatePatchEventRequest {
     event: PatchEvent,

@@ -81,7 +81,7 @@ fn generate_client_id() -> String {
 }
 
 impl UpdaterState {
-    /// Creates a new UpdaterState. If client_id is None, a new one will be generated.
+    /// Creates a new `UpdaterState`. If `client_id` is None, a new one will be generated.
     fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
         Self {
             cache_dir,
@@ -97,7 +97,7 @@ impl UpdaterState {
     }
 
     pub fn client_id_or_default(&self) -> String {
-        self.client_id.clone().unwrap_or("".to_string())
+        self.client_id.clone().unwrap_or(String::new())
     }
 
     pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
@@ -349,7 +349,7 @@ impl UpdaterState {
             self.slots.resize(index + 1, Slot::default());
         }
         // Set the given slot to the given version.
-        self.slots[index] = slot
+        self.slots[index] = slot;
     }
 
     fn patch_path_for_index(&self, index: usize) -> PathBuf {
@@ -357,10 +357,10 @@ impl UpdaterState {
     }
 
     fn slot_dir_for_index(&self, index: usize) -> PathBuf {
-        Path::new(&self.cache_dir).join(format!("slot_{}", index))
+        Path::new(&self.cache_dir).join(format!("slot_{index}"))
     }
 
-    pub fn install_patch(&mut self, patch: PatchInfo) -> anyhow::Result<()> {
+    pub fn install_patch(&mut self, patch: &PatchInfo) -> anyhow::Result<()> {
         let slot_index = self.available_slot();
         let slot_dir_string = self.slot_dir_for_index(slot_index);
         let slot_dir = PathBuf::from(&slot_dir_string);
@@ -373,7 +373,7 @@ impl UpdaterState {
         if self.is_known_bad_patch(patch.number) {
             return Err(UpdateError::InvalidArgument(
                 "patch".to_owned(),
-                format!("Refusing to install known bad patch: {:?}", patch),
+                format!("Refusing to install known bad patch: {patch:?}"),
             )
             .into());
         }
@@ -394,27 +394,27 @@ impl UpdaterState {
         if let Some(latest) = self.latest_patch_number() {
             if patch.number < latest {
                 warn!(
-                    "Installed patch {} but latest downloaded patch is {:?}",
-                    patch.number, latest
+                    "Installed patch {} but latest downloaded patch is {latest:?}",
+                    patch.number
                 );
             }
         }
         self.save()?;
 
         let path = self.patch_path_for_index(slot_index);
-        if !path.exists() {
+        if path.exists() {
+            debug!("Patch {} installed to {:?}", patch.number, path);
+        } else {
             warn!(
                 "Patch {} installed but does not exist {:?}",
                 patch.number, path
             );
-        } else {
-            debug!("Patch {} installed to {:?}", patch.number, path);
         }
 
         Ok(())
     }
 
-    /// Sets the current_boot slot to the next_boot slot.
+    /// Sets the `current_boot` slot to the `next_boot` slot.
     pub fn activate_current_patch(&mut self) -> Result<(), UpdateError> {
         if self.next_boot_slot_index.is_none() {
             return Err(UpdateError::InvalidState(
@@ -501,11 +501,11 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut state = test_state(&tmp_dir);
         assert_eq!(state.latest_patch_number(), None);
-        state.install_patch(fake_patch(&tmp_dir, 1)).unwrap();
+        state.install_patch(&fake_patch(&tmp_dir, 1)).unwrap();
         assert_eq!(state.latest_patch_number(), Some(1));
-        state.install_patch(fake_patch(&tmp_dir, 2)).unwrap();
+        state.install_patch(&fake_patch(&tmp_dir, 2)).unwrap();
         assert_eq!(state.latest_patch_number(), Some(2));
-        state.install_patch(fake_patch(&tmp_dir, 1)).unwrap();
+        state.install_patch(&fake_patch(&tmp_dir, 1)).unwrap();
         // This probably should be Some(2) assuming we didn't write
         // over the top of patch 2 when re-installing patch 1.
         // I expect if we support rollbacks we might be more explicit
@@ -520,7 +520,7 @@ mod tests {
         let bad_patch = fake_patch(&tmp_dir, 1);
         state.mark_patch_as_bad(bad_patch.number).unwrap();
         let number = bad_patch.number;
-        assert!(state.install_patch(bad_patch).is_err());
+        assert!(state.install_patch(&bad_patch).is_err());
 
         // Calling a second time should not error.
         state.mark_patch_as_bad(number).unwrap();
@@ -567,8 +567,7 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
         assert!(state.client_id.is_some());
-        let saved_state =
-            UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
+        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
         assert_eq!(state.client_id, saved_state.client_id);
     }
 

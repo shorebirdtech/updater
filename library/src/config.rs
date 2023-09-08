@@ -85,7 +85,7 @@ pub struct UpdateConfig {
 pub fn set_config(
     app_config: AppConfig,
     libapp_path: PathBuf,
-    yaml: YamlConfig,
+    yaml: &YamlConfig,
     network_hooks: NetworkHooks,
 ) -> anyhow::Result<()> {
     with_config_mut(|config| {

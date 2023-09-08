@@ -39,7 +39,9 @@ where
         // This should never happen. Poisoning only happens if a thread panics
         // while holding the lock, and we never allow the updater thread to
         // panic.
-        Err(std::sync::TryLockError::Poisoned(e)) => panic!("Updater lock poisoned: {:?}", e),
+        Err(std::sync::TryLockError::Poisoned(e)) => {
+            panic!("Updater lock poisoned: {e:?}")
+        }
     }
 }
 
