@@ -79,6 +79,11 @@ runs:
     - name: Upload Coverage
       uses: codecov/codecov-action@v3
       with:
+        # We use Codecov's carryforward flags to allow our PR testing to only
+        # run affected packages, but also allow our coverage information from
+        # past runs to "carry forward" on a "per flag" basis.  We tag coverage
+        # information with "flags" explaining what directory the coverage is from.
+        # https://docs.codecov.com/docs/carryforward-flags
         flags: ${{ steps.split.outputs.package_name }}
         token: ${{ inputs.codecov_token }}
 
