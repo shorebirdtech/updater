@@ -173,8 +173,12 @@ pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
 }
 
 /// Free a string returned by the updater library.
+/// # Safety
+///
+/// If this function is called with a non-null pointer, it must be a pointer
+/// returned by the updater library.
 #[no_mangle]
-pub extern "C" fn shorebird_free_string(c_string: *mut c_char) {
+pub unsafe extern "C" fn shorebird_free_string(c_string: *mut c_char) {
     if c_string.is_null() {
         return;
     }
@@ -257,7 +261,6 @@ mod test {
     use std::{ffi::CString, ptr::null_mut};
 
     fn c_string(string: &str) -> *mut libc::c_char {
-        
         CString::new(string).unwrap().into_raw()
     }
 
