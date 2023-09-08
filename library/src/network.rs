@@ -43,28 +43,29 @@ pub type PatchInstallSuccessFn = fn(&str, CreatePatchEventRequest) -> anyhow::Re
 pub trait NetworkClient: Clone + Debug + Send + Sync {
     /// The function to call to send a patch check request.
     fn make_patch_check_request(
-        &self,
         url: &str,
         request: PatchCheckRequest,
     ) -> anyhow::Result<PatchCheckResponse>;
 
     /// The function to call to download a file.
-    fn download_file(&self, url: &str) -> anyhow::Result<Vec<u8>>;
+    fn download_file(url: &str) -> anyhow::Result<Vec<u8>>;
 
     /// The function to call to report patch install success.
     fn report_patch_install_success(
-        &self,
         url: &str,
         request: CreatePatchEventRequest,
     ) -> anyhow::Result<()>;
 }
 
-#[derive(Debug, Clone)]
-pub struct LiveNetworkClient {}
+#[derive(Clone, Debug)]
+struct NetworkClientImpl {}
 
-impl NetworkClient for LiveNetworkClient {
+#[cfg(not(test))]
+impl NetworkClient for NetworkClientImpl {}
+
+#[cfg(test)]
+impl NetworkClient for NetworkClientImpl {
     fn make_patch_check_request(
-        &self,
         url: &str,
         request: PatchCheckRequest,
     ) -> anyhow::Result<PatchCheckResponse> {
@@ -74,7 +75,7 @@ impl NetworkClient for LiveNetworkClient {
         Ok(response)
     }
 
-    fn download_file(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+    fn download_file(url: &str) -> anyhow::Result<Vec<u8>> {
         let client = reqwest::blocking::Client::new();
         let result = client.get(url).send();
         let response = handle_network_result(result)?;
@@ -84,7 +85,6 @@ impl NetworkClient for LiveNetworkClient {
     }
 
     fn report_patch_install_success(
-        &self,
         url: &str,
         request: CreatePatchEventRequest,
     ) -> anyhow::Result<()> {

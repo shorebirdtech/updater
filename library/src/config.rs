@@ -79,14 +79,14 @@ pub struct UpdateConfig {
     pub release_version: String,
     pub libapp_path: PathBuf,
     pub base_url: String,
-    pub network_hooks: Box<dyn NetworkClient + Send + Sync>,
+    pub network_hooks: Box<dyn NetworkClient>,
 }
 
 pub fn set_config(
     app_config: AppConfig,
     libapp_path: PathBuf,
     yaml: YamlConfig,
-    network_hooks: Box<dyn NetworkClient + Send + Sync>,
+    network_hooks: Box<dyn NetworkClient>,
 ) -> anyhow::Result<()> {
     with_config_mut(|config| {
         anyhow::ensure!(config.is_none(), "shorebird_init has already been called.");
