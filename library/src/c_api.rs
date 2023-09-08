@@ -119,7 +119,7 @@ pub extern "C" fn shorebird_init(
 #[no_mangle]
 pub extern "C" fn shorebird_should_auto_update() -> bool {
     log_on_error(
-        || updater::should_auto_update(),
+        updater::should_auto_update,
         "fetching update behavior",
         true,
     )
@@ -193,7 +193,7 @@ pub extern "C" fn shorebird_check_for_update() -> bool {
 #[no_mangle]
 pub extern "C" fn shorebird_update() {
     log_on_error(
-        || updater::update().and_then(|result| Ok(info!("Update result: {}", result))),
+        || updater::update().map(|result| info!("Update result: {}", result)),
         "downloading update",
         (),
     );
@@ -257,8 +257,8 @@ mod test {
     use std::{ffi::CString, ptr::null_mut};
 
     fn c_string(string: &str) -> *mut libc::c_char {
-        let c_string = CString::new(string).unwrap().into_raw();
-        c_string
+        
+        CString::new(string).unwrap().into_raw()
     }
 
     fn free_c_string(string: *mut libc::c_char) {
@@ -320,7 +320,7 @@ mod test {
     fn init_with_nulls() {
         testing_reset_config();
         // Should log but not crash.
-        assert_eq!(shorebird_init(std::ptr::null(), std::ptr::null()), false);
+        assert!(!shorebird_init(std::ptr::null(), std::ptr::null()));
 
         // free_string also doesn't crash with null.
         shorebird_free_string(std::ptr::null_mut());
@@ -337,7 +337,7 @@ mod test {
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
         };
-        assert_eq!(shorebird_init(&c_params, std::ptr::null()), false);
+        assert!(!shorebird_init(&c_params, std::ptr::null()));
     }
 
     #[serial]
@@ -347,7 +347,7 @@ mod test {
         let tmp_dir = TempDir::new("example").unwrap();
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         let c_yaml = c_string("bad yaml");
-        assert_eq!(shorebird_init(&c_params, c_yaml), false);
+        assert!(!shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
@@ -365,10 +365,10 @@ mod test {
         base_url: baz
         auto_update: false",
         );
-        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        assert!(shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
-        assert_eq!(shorebird_should_auto_update(), false);
+        assert!(!shorebird_should_auto_update());
     }
 
     #[serial]
@@ -379,7 +379,7 @@ mod test {
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        assert!(shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -422,7 +422,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        assert!(shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -490,7 +490,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        assert!(shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -498,7 +498,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: bar");
-        assert_eq!(shorebird_init(&c_params, c_yaml), false);
+        assert!(!shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
@@ -517,7 +517,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert_eq!(shorebird_init(&c_params, c_yaml), true);
+        assert!(shorebird_init(&c_params, c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 

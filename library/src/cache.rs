@@ -194,7 +194,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                return Self::create_new_and_save(cache_dir, release_version, None);
+                Self::create_new_and_save(cache_dir, release_version, None)
             }
         }
     }
@@ -324,7 +324,7 @@ impl UpdaterState {
                 return 1;
             }
         }
-        return 0;
+        0
     }
 
     fn clear_slot(&mut self, index: usize) -> anyhow::Result<()> {
@@ -380,7 +380,7 @@ impl UpdaterState {
 
         // Move the artifact into the slot.
         let artifact_path = slot_dir.join("dlc.vmcode");
-        std::fs::rename(&patch.path, &artifact_path)?;
+        std::fs::rename(&patch.path, artifact_path)?;
 
         // Update the state to include the new slot.
         self.set_slot(
@@ -421,7 +421,7 @@ impl UpdaterState {
                 "No patch to activate.".to_owned(),
             ));
         }
-        self.current_boot_slot_index = self.next_boot_slot_index.clone();
+        self.current_boot_slot_index = self.next_boot_slot_index;
         assert!(self.current_boot_slot_index.is_some());
         Ok(())
     }
@@ -446,7 +446,7 @@ impl UpdaterState {
         match installed_max {
             None => failed_max,
             Some(installed) => match failed_max {
-                None => return installed_max,
+                None => installed_max,
                 Some(failed) => Some(std::cmp::max(installed, failed)),
             },
         }
@@ -557,7 +557,7 @@ mod tests {
         assert!(!super::is_file_not_found(&anyhow::anyhow!("")));
         let tmp_dir = TempDir::new("example").unwrap();
         let path = tmp_dir.path().join("does_not_exist");
-        let result = std::fs::File::open(&path).context("foo");
+        let result = std::fs::File::open(path).context("foo");
         assert!(result.is_err());
         assert!(super::is_file_not_found(&result.unwrap_err()));
     }
@@ -565,10 +565,10 @@ mod tests {
     #[test]
     fn creates_updater_state_with_client_id() {
         let tmp_dir = TempDir::new("example").unwrap();
-        let state = UpdaterState::load_or_new_on_error(&tmp_dir.path().to_path_buf(), "1.0.0+1");
+        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
         assert!(state.client_id.is_some());
         let saved_state =
-            UpdaterState::load_or_new_on_error(&tmp_dir.path().to_path_buf(), "1.0.0+1");
+            UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
         assert_eq!(state.client_id, saved_state.client_id);
     }
 
