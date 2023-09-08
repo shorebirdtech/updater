@@ -248,12 +248,11 @@ pub extern "C" fn shorebird_report_launch_success() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        network::PatchCheckResponse, testing_set_network_hooks, updater::testing_reset_config,
-    };
+    use crate::network::{testing_set_network_hooks, PatchCheckResponse};
     use anyhow::Ok;
     use serial_test::serial;
     use tempdir::TempDir;
+    use updater::testing_reset_config;
 
     use std::{ffi::CString, ptr::null_mut};
 

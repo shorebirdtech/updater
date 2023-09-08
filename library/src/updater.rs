@@ -27,9 +27,7 @@ use std::{println as info, println as error, println as debug}; // Workaround to
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{
-    testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
-};
+pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -655,6 +653,134 @@ mod tests {
             let state =
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             assert!(state.is_known_good_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn report_launch_failure_with_patch() {
+        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::config::with_config;
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+
+        // Install a fake patch.
+        with_config(|config| {
+            let download_dir = std::path::PathBuf::from(&config.download_dir);
+            let artifact_path = download_dir.join("1");
+            fs::create_dir_all(&download_dir).unwrap();
+            fs::write(&artifact_path, "hello").unwrap();
+
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            state
+                .install_patch(PatchInfo {
+                    path: artifact_path,
+                    number: 1,
+                })
+                .expect("move failed");
+            state.save().expect("save failed");
+            Ok(())
+        })
+        .unwrap();
+
+        // Pretend we booted from it.
+        crate::report_launch_start().unwrap();
+
+        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            // It's not bad yet.
+            assert!(!state.is_known_bad_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+
+        super::report_launch_failure().unwrap();
+
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            // It's now bad.
+            assert!(state.is_known_bad_patch(next_boot_patch.number));
+            // And we've queued an event.
+            let events = state.copy_events(1);
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchInstallFailure
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn events_sent_during_update() {
+        use crate::cache::UpdaterState;
+        use crate::config::{current_arch, current_platform, with_config};
+        use crate::events::{EventType, PatchEvent};
+        use crate::network::{testing_set_network_hooks, PatchCheckResponse};
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+
+        with_config(|config| {
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            let fail_event = PatchEvent {
+                app_id: config.app_id.clone(),
+                arch: current_arch().to_string(),
+                client_id: state.client_id_or_default(),
+                identifier: EventType::PatchInstallFailure,
+                patch_number: 1,
+                platform: current_platform().to_string(),
+                release_version: config.release_version.clone(),
+            };
+            // Queue 5 events.
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            Ok(())
+        })
+        .unwrap();
+
+        // TODO(eseidel): Count the number of events sent.
+        // let mut event_call_count = 0;
+        // set up the network hooks to return a patch.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                })
+            },
+            |_url| {
+                // Never called.
+                Ok(Vec::new())
+            },
+            // I can't actually count the number of times this is called
+            // without making this a closure, or refactoring NetworkHooks
+            // to be a trait.
+            |_url, _event| {
+                // event_call_count += 1;
+                Ok(())
+            },
+        );
+        super::update().unwrap();
+        // Only 3 events should have been sent.
+        // assert_eq!(event_call_count, 3);
+
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            // All 5 events should be cleared, even though only 3 were sent.
+            assert_eq!(state.copy_events(10).len(), 0);
             Ok(())
         })
         .unwrap();
