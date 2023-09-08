@@ -1,5 +1,5 @@
 // This file handles the global config for the updater library.
-use crate::network::NetworkHooks;
+use crate::network::NetworkClient;
 
 use crate::updater::AppConfig;
 use crate::yaml::YamlConfig;
@@ -79,14 +79,14 @@ pub struct UpdateConfig {
     pub release_version: String,
     pub libapp_path: PathBuf,
     pub base_url: String,
-    pub network_hooks: NetworkHooks,
+    pub network_hooks: Box<dyn NetworkClient + Send + Sync>,
 }
 
 pub fn set_config(
     app_config: AppConfig,
     libapp_path: PathBuf,
     yaml: YamlConfig,
-    network_hooks: NetworkHooks,
+    network_hooks: Box<dyn NetworkClient + Send + Sync>,
 ) -> anyhow::Result<()> {
     with_config_mut(|config| {
         anyhow::ensure!(config.is_none(), "shorebird_init has already been called.");
@@ -114,7 +114,7 @@ pub fn set_config(
                 .to_owned(),
             network_hooks,
         };
-        debug!("Updater configured with: {:?}", new_config);
+        // debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
 
         Ok(())

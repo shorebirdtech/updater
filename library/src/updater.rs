@@ -13,7 +13,7 @@ use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, report_successful_patch_install, send_patch_check_request, NetworkHooks,
+    download_to_path, report_successful_patch_install, send_patch_check_request, LiveNetworkClient,
     PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
@@ -27,9 +27,7 @@ use std::{println as info, println as error, println as debug}; // Workaround to
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{
-    testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
-};
+pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -114,8 +112,13 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     debug!("libapp_path: {:?}", libapp_path);
-    set_config(app_config, libapp_path, config, NetworkHooks::default())
-        .map_err(|err| UpdateError::InvalidState(err.to_string()))
+    set_config(
+        app_config,
+        libapp_path,
+        config,
+        Box::new(LiveNetworkClient {}),
+    )
+    .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
 pub fn should_auto_update() -> anyhow::Result<bool> {
@@ -204,7 +207,7 @@ fn copy_update_config() -> anyhow::Result<UpdateConfig> {
 
 // Callers must possess the Updater lock, but we don't care about the contents
 // since they're empty.
-fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
+fn update_internal(lock_state: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Only one copy of Update can be running at a time.
     // Update will take the global Updater lock.
     // Update will need to take the Config lock at times, but will only
@@ -237,7 +240,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
     // Consider supporting allowing the system to download for us (e.g. iOS).
-    download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
+    download_to_path(config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
     // Should not pass config, rather should read necessary information earlier.
