@@ -16,9 +16,9 @@ use std::println as debug; // Workaround to use println! for logs.
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
 /// cbindgen:ignore
-const DEFAULT_BASE_URL: &'static str = "https://api.shorebird.dev";
+const DEFAULT_BASE_URL: &str = "https://api.shorebird.dev";
 /// cbindgen:ignore
-const DEFAULT_CHANNEL: &'static str = "stable";
+const DEFAULT_CHANNEL: &str = "stable";
 
 fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
     static INSTANCE: OnceCell<Mutex<Option<UpdateConfig>>> = OnceCell::new();
@@ -41,7 +41,7 @@ where
     F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
 {
     match maybe_config {
-        Some(config) => f(&config),
+        Some(config) => f(config),
         None => anyhow::bail!(UpdateError::ConfigNotInitialized),
     }
 }
@@ -97,7 +97,7 @@ pub fn set_config(
 
         let new_config = UpdateConfig {
             cache_dir: std::path::PathBuf::from(app_config.cache_dir),
-            download_dir: download_dir,
+            download_dir,
             channel: yaml
                 .channel
                 .as_deref()
@@ -131,7 +131,7 @@ pub fn current_arch() -> &'static str {
     static ARCH: &str = "aarch64";
     #[cfg(target_arch = "arm")]
     static ARCH: &str = "arm";
-    return ARCH;
+    ARCH
 }
 
 pub fn current_platform() -> &'static str {
@@ -145,5 +145,5 @@ pub fn current_platform() -> &'static str {
     static PLATFORM: &str = "android";
     #[cfg(target_os = "ios")]
     static PLATFORM: &str = "ios";
-    return PLATFORM;
+    PLATFORM
 }

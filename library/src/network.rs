@@ -17,11 +17,11 @@ use crate::events::PatchEvent;
 use std::{println as info, println as debug}; // Workaround to use println! for logs.
 
 fn patches_check_url(base_url: &str) -> String {
-    return format!("{}/api/v1/patches/check", base_url);
+    format!("{}/api/v1/patches/check", base_url)
 }
 
 fn patches_events_url(base_url: &str) -> String {
-    return format!("{}/api/v1/patches/events", base_url);
+    format!("{}/api/v1/patches/events", base_url)
 }
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
@@ -133,7 +133,7 @@ fn handle_network_result(
     match result {
         Ok(response) => {
             if response.status().is_success() {
-                return Ok(response);
+                Ok(response)
             } else {
                 bail!("Request failed with status: {}", response.status())
             }
@@ -256,7 +256,7 @@ pub fn send_patch_check_request(
     let response = patch_check_request_fn(url, request)?;
 
     debug!("Patch check response: {:?}", response);
-    return Ok(response);
+    Ok(response)
 }
 
 pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {
@@ -275,7 +275,7 @@ pub fn download_to_path(
     debug!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
     let download_file_hook = network_hooks.download_file_fn;
-    let mut bytes = download_file_hook(url)?;
+    let bytes = download_file_hook(url)?;
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
         debug!("Creating download directory: {:?}", parent);
@@ -284,7 +284,7 @@ pub fn download_to_path(
 
     debug!("Writing download to: {:?}", path);
     let mut file = File::create(path)?;
-    file.write_all(&mut bytes)?;
+    file.write_all(&bytes)?;
     Ok(())
 }
 
@@ -309,7 +309,7 @@ mod tests {
 
         let response: PatchCheckResponse = serde_json::from_str(data).unwrap();
 
-        assert!(response.patch_available == true);
+        assert!(response.patch_available);
         assert!(response.patch.is_some());
 
         let patch = response.patch.unwrap();

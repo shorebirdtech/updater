@@ -87,14 +87,14 @@ pub struct AppConfig {
 // and a hard-coded name for the libapp file which we look up in the
 // split APKs in that datadir. On other platforms we just use a path.
 #[cfg(not(any(target_os = "android", test)))]
-fn libapp_path_from_settings(original_libapp_paths: &Vec<String>) -> Result<PathBuf, UpdateError> {
+fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
     let first = original_libapp_paths
         .first()
         .ok_or(UpdateError::InvalidArgument(
             "original_libapp_paths".to_string(),
             "empty".to_string(),
         ));
-    first.map(|path| PathBuf::from(path))
+    first.map(PathBuf::from)
 }
 
 /// Initialize the updater library.
@@ -107,7 +107,7 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
     use crate::android::libapp_path_from_settings;
 
     init_logging();
-    let config = YamlConfig::from_yaml(&yaml)
+    let config = YamlConfig::from_yaml(yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
@@ -125,7 +125,7 @@ fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        send_patch_check_request(&config, &state)
+        send_patch_check_request(config, &state)
     })
 }
 
@@ -142,7 +142,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // https://github.com/RustCrypto/hashes#hashing-readable-objects
 
-    let mut file = fs::File::open(&path)?;
+    let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher)?;
     // Check that the length from copy is the same as the file size?
@@ -165,7 +165,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     } else {
         debug!("Hash match: {:?}", path);
     }
-    return Ok(());
+    Ok(())
 }
 
 // This is just a place to put our terrible android hacks.
@@ -181,8 +181,8 @@ fn prepare_for_install(
     // we're making it point to a the app_data directory instead.
     let app_dir = &config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
-    let base_r = crate::android::open_base_lib(&app_dir, "libapp.so")?;
-    inflate(&download_path, base_r, &output_path)
+    let base_r = crate::android::open_base_lib(app_dir, "libapp.so")?;
+    inflate(download_path, base_r, output_path)
 }
 
 #[cfg(not(any(target_os = "android", test)))]
@@ -263,7 +263,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Consider supporting allowing the system to download for us (e.g. iOS).
     download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
-    let output_path = download_dir.join(format!("{}.full", patch.number.to_string()));
+    let output_path = download_dir.join(format!("{}.full", patch.number));
     // Should not pass config, rather should read necessary information earlier.
     prepare_for_install(&config, &download_path, &output_path)?;
 
@@ -290,7 +290,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         // Should set some state to say the status is "update required" and that
         // we now have a different "next" version of the app from the current
         // booted version (patched or not).
-        return Ok(UpdateStatus::UpdateInstalled);
+        Ok(UpdateStatus::UpdateInstalled)
     })
 }
 
@@ -318,7 +318,7 @@ where
         fs::File::open(patch_path)
             .context(format!("Failed to open patch file: {:?}", patch_path))?,
     );
-    let output_file_w = fs::File::create(&output_path)?;
+    let output_file_w = fs::File::create(output_path)?;
 
     // Set up a pipe to connect the writing from the decompression thread
     // to the reading of the decompressed patch data on this thread.
@@ -352,7 +352,7 @@ where
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return Ok(state.next_boot_patch());
+        Ok(state.next_boot_patch())
     })
 }
 
@@ -362,7 +362,7 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
-        return Ok(state.current_boot_patch());
+        Ok(state.current_boot_patch())
     })
 }
 
@@ -413,7 +413,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         // which is confusing.
         state
             .activate_latest_bootable_patch()
-            .map_err(|err| anyhow::Error::from(err))
+            .map_err(anyhow::Error::from)
     })
 }
 
