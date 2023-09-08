@@ -68,9 +68,18 @@ runs:
         sudo apt-get -y install lcov
         lcov --remove coverage/lcov.info.bak "${{inputs.coverage_excludes}}" -o coverage/lcov.info
 
+    # Per https://stackoverflow.com/questions/73402042/github-action-expressions-split-string
+    - name: Split package name
+      env:
+        PACKAGE_PATH: ${{ inputs.working_directory}}
+      id: split
+      shell: ${{ inputs.shell }}
+      run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
+
     - name: Upload Coverage
       uses: codecov/codecov-action@v3
       with:
+        flags: ${{ steps.split.outputs.package_name }}
         token: ${{ inputs.codecov_token }}
 
     - uses: VeryGoodOpenSource/very_good_coverage@v2

@@ -65,7 +65,7 @@ jobs:
       - name: 📚 Git Checkout
         uses: actions/checkout@v3
 
-      - name: 🦀 Build ${{ matrix.package }}
+      - name: 🦀 Build ${{ matrix.crate }}
         uses: ./.github/actions/rust_crate
         with:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
