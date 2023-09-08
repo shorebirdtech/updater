@@ -409,6 +409,8 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
         state.queue_event(event);
+        // TODO(eseidel): This does the actual save for the above mutations
+        // which is confusing.
         state
             .activate_latest_bootable_patch()
             .map_err(|err| anyhow::Error::from(err))
