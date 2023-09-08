@@ -10,11 +10,11 @@ use anyhow::bail;
 use anyhow::Context;
 
 use crate::cache::{PatchInfo, UpdaterState};
-use crate::config::{set_config, with_config, UpdateConfig};
+use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
+use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, report_successful_patch_install, send_patch_check_request, NetworkHooks,
-    PatchCheckResponse,
+    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
@@ -27,9 +27,7 @@ use std::{println as info, println as error, println as debug}; // Workaround to
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{
-    testing_set_network_hooks, DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn,
-};
+pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -223,11 +221,37 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Saves state to disk (holds Config lock while writing).
 
     let config = copy_update_config()?;
+    // We should never try to write this state as some other writer may be
+    // racing with us, we should get a new state inside a lock if we want
+    // to write.
+    let read_only_state =
+        UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
 
-    // Load the state from disk.
-    let mut state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+    // We discard any events if we have more than 3 queued to make sure
+    // we don't stall the client.
+    let events = read_only_state.copy_events(3);
+    for event in events {
+        let result = crate::network::send_patch_event(event, &config);
+        if let Err(err) = result {
+            error!("Failed to report event: {:?}", err);
+        }
+    }
+    // We're abusing the config lock as a UpdateState lock for now.
+    let read_only_state = with_config(|_| {
+        let mut state =
+            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+        // This will clear any events which got queued between the time we
+        // loaded the state now, but that's OK for now.
+        let result = state.clear_events();
+        if let Err(err) = result {
+            error!("Failed to clear events: {:?}", err);
+        }
+        // Update our outer state with the new state.
+        Ok(state)
+    })?;
+
     // Check for update.
-    let response = send_patch_check_request(&config, &state)?;
+    let response = send_patch_check_request(&config, &read_only_state)?;
     if !response.patch_available {
         return Ok(UpdateStatus::NoUpdate);
     }
@@ -258,6 +282,8 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             path: output_path,
             number: patch.number,
         };
+        let mut state =
+            UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
         // Move/state update should be "atomic" (it isn't today).
         state.install_patch(patch_info)?;
         info!("Patch {} successfully installed.", patch.number);
@@ -367,7 +393,24 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
                 )))?;
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
-        let _ = state.mark_patch_as_bad(patch.number);
+        let mark_result = state.mark_patch_as_bad(patch.number);
+        if mark_result.is_err() {
+            error!("Failed to mark patch as bad: {:?}", mark_result);
+        }
+        let event = PatchEvent {
+            app_id: config.app_id.clone(),
+            arch: current_arch().to_string(),
+            client_id: state.client_id_or_default(),
+            identifier: EventType::PatchInstallFailure,
+            patch_number: patch.number,
+            platform: current_platform().to_string(),
+            release_version: config.release_version.clone(),
+        };
+        // Queue the failure event for later sending since right after this
+        // function returns the Flutter engine is likely to abort().
+        state.queue_event(event);
+        // TODO(eseidel): This does the actual save for the above mutations
+        // which is confusing.
         state
             .activate_latest_bootable_patch()
             .map_err(|err| anyhow::Error::from(err))
@@ -387,8 +430,16 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                     let config_copy = config.clone();
                     let client_id = state.client_id_or_default();
                     std::thread::spawn(move || {
-                        let report_result =
-                            report_successful_patch_install(&config_copy, client_id, patch.number);
+                        let event = PatchEvent {
+                            app_id: config_copy.app_id.clone(),
+                            arch: current_arch().to_string(),
+                            client_id,
+                            patch_number: patch.number,
+                            platform: current_platform().to_string(),
+                            release_version: config_copy.release_version.clone(),
+                            identifier: EventType::PatchInstallSuccess,
+                        };
+                        let report_result = crate::network::send_patch_event(event, &config_copy);
                         if let Err(err) = report_result {
                             error!("Failed to report successful patch install: {:?}", err);
                         }
@@ -604,6 +655,134 @@ mod tests {
             let state =
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             assert!(state.is_known_good_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn report_launch_failure_with_patch() {
+        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::config::with_config;
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+
+        // Install a fake patch.
+        with_config(|config| {
+            let download_dir = std::path::PathBuf::from(&config.download_dir);
+            let artifact_path = download_dir.join("1");
+            fs::create_dir_all(&download_dir).unwrap();
+            fs::write(&artifact_path, "hello").unwrap();
+
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            state
+                .install_patch(PatchInfo {
+                    path: artifact_path,
+                    number: 1,
+                })
+                .expect("move failed");
+            state.save().expect("save failed");
+            Ok(())
+        })
+        .unwrap();
+
+        // Pretend we booted from it.
+        crate::report_launch_start().unwrap();
+
+        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            // It's not bad yet.
+            assert!(!state.is_known_bad_patch(next_boot_patch.number));
+            Ok(())
+        })
+        .unwrap();
+
+        super::report_launch_failure().unwrap();
+
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            // It's now bad.
+            assert!(state.is_known_bad_patch(next_boot_patch.number));
+            // And we've queued an event.
+            let events = state.copy_events(1);
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchInstallFailure
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn events_sent_during_update() {
+        use crate::cache::UpdaterState;
+        use crate::config::{current_arch, current_platform, with_config};
+        use crate::events::{EventType, PatchEvent};
+        use crate::network::{testing_set_network_hooks, PatchCheckResponse};
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir);
+
+        with_config(|config| {
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            let fail_event = PatchEvent {
+                app_id: config.app_id.clone(),
+                arch: current_arch().to_string(),
+                client_id: state.client_id_or_default(),
+                identifier: EventType::PatchInstallFailure,
+                patch_number: 1,
+                platform: current_platform().to_string(),
+                release_version: config.release_version.clone(),
+            };
+            // Queue 5 events.
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            state.queue_event(fail_event.clone());
+            Ok(())
+        })
+        .unwrap();
+
+        // TODO(eseidel): Count the number of events sent.
+        // let mut event_call_count = 0;
+        // set up the network hooks to return a patch.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                })
+            },
+            |_url| {
+                // Never called.
+                Ok(Vec::new())
+            },
+            // I can't actually count the number of times this is called
+            // without making this a closure, or refactoring NetworkHooks
+            // to be a trait.
+            |_url, _event| {
+                // event_call_count += 1;
+                Ok(())
+            },
+        );
+        super::update().unwrap();
+        // Only 3 events should have been sent.
+        // assert_eq!(event_call_count, 3);
+
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
+            // All 5 events should be cleared, even though only 3 were sent.
+            assert_eq!(state.copy_events(10).len(), 0);
             Ok(())
         })
         .unwrap();

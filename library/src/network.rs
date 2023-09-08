@@ -10,7 +10,7 @@ use std::string::ToString;
 
 use crate::cache::UpdaterState;
 use crate::config::{current_arch, current_platform, UpdateConfig};
-use crate::events::{EventType, PatchEvent};
+use crate::events::PatchEvent;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
@@ -259,20 +259,7 @@ pub fn send_patch_check_request(
     return Ok(response);
 }
 
-pub fn report_successful_patch_install(
-    config: &UpdateConfig,
-    client_id: String,
-    patch_number: usize,
-) -> anyhow::Result<()> {
-    let event = PatchEvent {
-        app_id: config.app_id.clone(),
-        arch: current_arch().to_string(),
-        client_id,
-        patch_number,
-        platform: current_platform().to_string(),
-        release_version: config.release_version.clone(),
-        identifier: EventType::PatchInstallSuccess,
-    };
+pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {
     let request = CreatePatchEventRequest { event };
 
     let patch_install_success_fn = config.network_hooks.patch_install_success_fn;
@@ -306,6 +293,7 @@ mod tests {
     use crate::network::PatchCheckResponse;
 
     use super::{patches_events_url, PatchEvent};
+    use crate::events::EventType;
 
     #[test]
     fn check_patch_request_response_deserialization() {
@@ -339,7 +327,7 @@ mod tests {
             patch_number: 1,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
-            identifier: super::EventType::PatchInstallSuccess,
+            identifier: EventType::PatchInstallSuccess,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -420,7 +408,7 @@ mod tests {
             patch_number: 2,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
-            identifier: super::EventType::PatchInstallSuccess,
+            identifier: EventType::PatchInstallSuccess,
         };
         let result = super::patch_install_success_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -448,7 +436,7 @@ mod tests {
                     patch_number: 2,
                     platform: "platform".to_string(),
                     release_version: "release_version".to_string(),
-                    identifier: super::EventType::PatchInstallSuccess,
+                    identifier: EventType::PatchInstallSuccess,
                 },
             },
         );

@@ -1,12 +1,12 @@
 // This file's job is to deal with the update_server and network side
 // of the updater library.
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EventType {
     PatchInstallSuccess,
-    // PatchInstallFailure,
+    PatchInstallFailure,
 }
 
 impl Serialize for EventType {
@@ -16,16 +16,32 @@ impl Serialize for EventType {
     {
         serializer.serialize_str(match self {
             EventType::PatchInstallSuccess => "__patch_install__",
-            // EventType::PatchInstallFailure => "__patch_install_failure__",
+            EventType::PatchInstallFailure => "__patch_install_failure__",
         })
     }
 }
 
+impl<'de> Deserialize<'de> for EventType {
+    fn deserialize<D>(deserializer: D) -> Result<EventType, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "__patch_install__" => Ok(EventType::PatchInstallSuccess),
+            "__patch_install_failure__" => Ok(EventType::PatchInstallFailure),
+            _ => Err(serde::de::Error::custom(format!(
+                "Unknown event type: {}",
+                s
+            ))),
+        }
+    }
+}
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy:
 /// https://docs.shorebird.dev/privacy
 /// An event that is sent to the server when a patch is successfully installed.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PatchEvent {
     /// The Shorebird app_id built into the shorebird.yaml in the app.
     pub app_id: String,
