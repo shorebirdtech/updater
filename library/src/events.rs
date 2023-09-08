@@ -30,16 +30,13 @@ impl<'de> Deserialize<'de> for EventType {
         match s.as_str() {
             "__patch_install__" => Ok(EventType::PatchInstallSuccess),
             "__patch_install_failure__" => Ok(EventType::PatchInstallFailure),
-            _ => Err(serde::de::Error::custom(format!(
-                "Unknown event type: {}",
-                s
-            ))),
+            _ => Err(serde::de::Error::custom(format!("Unknown event type: {s}"))),
         }
     }
 }
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy:
-/// https://docs.shorebird.dev/privacy
+/// <https://docs.shorebird.dev/privacy>
 /// An event that is sent to the server when a patch is successfully installed.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PatchEvent {

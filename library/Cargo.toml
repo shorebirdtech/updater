@@ -70,6 +70,6 @@ simple-logging = "2.0.2"
 serial_test = "2.0.0"
 tempdir = "0.3.7"
 
-# https://github.com/eqrion/cbindgen/blob/master/docs.md#buildrs
+# <https://github.com/eqrion/cbindgen/blob/master/docs.md#buildrs>
 [build-dependencies]
 cbindgen = "0.24.0"

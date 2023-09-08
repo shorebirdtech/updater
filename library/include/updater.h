@@ -104,11 +104,11 @@ SHOREBIRD_EXPORT void shorebird_start_update_thread(void);
 
 /**
  * Tell the updater that we're launching from what it told us was the
- * next patch to boot from. This will copy the next_boot patch to be the
- * current_boot patch.
+ * next patch to boot from. This will copy the next boot patch to be the
+ * `current_boot` patch.
  *
  * It is required to call this function before calling
- * shorebird_report_launch_success or shorebird_report_launch_failure.
+ * `shorebird_report_launch_success` or `shorebird_report_launch_failure`.
  */
 SHOREBIRD_EXPORT void shorebird_report_launch_start(void);
 

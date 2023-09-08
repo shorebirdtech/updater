@@ -2,21 +2,21 @@
 
 // Currently manually prefixing all functions with "shorebird_" to avoid
 // name collisions with other libraries.
-// cbindgen:prefix-with-name could do this for us.
+// `cbindgen:prefix-with-name` could do this for us.
 
 /// This file contains the C API for the updater library.
 /// It is intended to be used by language bindings, and is not intended to be
 /// used directly by Rust code.
 /// The C API is not stable and may change at any time.
 /// You can see usage of this API in Shorebird's Flutter engine:
-/// https://github.com/shorebirdtech/engine/blob/shorebird/dev/shell/common/shorebird.cc
+/// <https://github.com/shorebirdtech/engine/blob/shorebird/dev/shell/common/shorebird.cc>
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
 use crate::updater;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+// <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
 use std::{println as info, println as error}; // Workaround to use println! for logs.
 
@@ -130,11 +130,7 @@ pub extern "C" fn shorebird_should_auto_update() -> bool {
 #[no_mangle]
 pub extern "C" fn shorebird_current_boot_patch_number() -> usize {
     log_on_error(
-        || {
-            Ok(updater::current_boot_patch()?
-                .map(|p| p.number)
-                .unwrap_or(0))
-        },
+        || Ok(updater::current_boot_patch()?.map_or(0, |p| p.number)),
         "fetching next_boot_patch_number",
         0,
     )
@@ -145,7 +141,7 @@ pub extern "C" fn shorebird_current_boot_patch_number() -> usize {
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
     log_on_error(
-        || Ok(updater::next_boot_patch()?.map(|p| p.number).unwrap_or(0)),
+        || Ok(updater::next_boot_patch()?.map_or(0, |p| p.number)),
         "fetching next_boot_patch_number",
         0,
     )
@@ -210,11 +206,11 @@ pub extern "C" fn shorebird_start_update_thread() {
 }
 
 /// Tell the updater that we're launching from what it told us was the
-/// next patch to boot from. This will copy the next_boot patch to be the
-/// current_boot patch.
+/// next patch to boot from. This will copy the next boot patch to be the
+/// `current_boot` patch.
 ///
 /// It is required to call this function before calling
-/// shorebird_report_launch_success or shorebird_report_launch_failure.
+/// `shorebird_report_launch_success` or `shorebird_report_launch_failure`.
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_start() {
     log_on_error(updater::report_launch_start, "reporting launch start", ());

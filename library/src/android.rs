@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+// <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
 use std::println as debug; // Workaround to use println! for logs.
 

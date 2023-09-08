@@ -61,9 +61,9 @@ impl Display for UpdateError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             UpdateError::InvalidArgument(name, value) => {
-                write!(f, "Invalid Argument: {} -> {}", name, value)
+                write!(f, "Invalid Argument: {name} -> {value}")
             }
-            UpdateError::InvalidState(msg) => write!(f, "Invalid State: {}", msg),
+            UpdateError::InvalidState(msg) => write!(f, "Invalid State: {msg}"),
             UpdateError::FailedToSaveState => write!(f, "Failed to save state"),
             UpdateError::BadServerResponse => write!(f, "Bad server response"),
             UpdateError::ConfigNotInitialized => write!(f, "Config not initialized"),
@@ -74,9 +74,9 @@ impl Display for UpdateError {
     }
 }
 
-// AppConfig is the rust API.  ResolvedConfig is the internal storage.
-// However rusty api would probably used &str instead of String,
-// but making &str from CStr* is a bit of a pain.
+// `AppConfig` is the rust API.  `ResolvedConfig` is the internal storage.
+// However rusty api would probably used `&str` instead of `String`,
+// but making `&str` from `CStr*` is a bit of a pain.
 pub struct AppConfig {
     pub cache_dir: String,
     pub release_version: String,
@@ -98,9 +98,9 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
 }
 
 /// Initialize the updater library.
-/// Takes a AppConfig struct and a yaml string.
-/// The yaml string is the contents of the shorebird.yaml file.
-/// The AppConfig struct is information about the running app and where
+/// Takes a `AppConfig` struct and a yaml string.
+/// The yaml string is the contents of the `shorebird.yaml` file.
+/// The `AppConfig` struct is information about the running app and where
 /// the updater should keep its cache.
 pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
     #[cfg(any(target_os = "android", test))]
@@ -112,7 +112,7 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     debug!("libapp_path: {:?}", libapp_path);
-    set_config(app_config, libapp_path, config, NetworkHooks::default())
+    set_config(app_config, libapp_path, &config, NetworkHooks::default())
         .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
@@ -135,12 +135,12 @@ pub fn check_for_update() -> anyhow::Result<bool> {
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
+
     let expected = hex::decode(expected_string).context("Invalid hash string from server.")?;
 
-    use sha2::{Digest, Sha256}; // Digest is needed for Sha256::new();
-
     // Based on guidance from:
-    // https://github.com/RustCrypto/hashes#hashing-readable-objects
+    // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -149,7 +149,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     let hash = hasher.finalize();
     let hash_matches = hash.as_slice() == expected;
     // This is a common error for developers.  We could avoid it entirely
-    // by sending the hash of libapp.so to the server and having the
+    // by sending the hash of `libapp.so` to the server and having the
     // server only send updates when the hash matches.
     // https://github.com/shorebirdtech/updater/issues/56
     if !hash_matches {
@@ -162,9 +162,8 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
             expected_string,
             hex::encode(hash)
         );
-    } else {
-        debug!("Hash match: {:?}", path);
     }
+    debug!("Hash match: {:?}", path);
     Ok(())
 }
 
@@ -176,9 +175,9 @@ fn prepare_for_install(
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    // We abuse libapp_path to actually be the path to the data dir for now.
-    // This is an abuse because the variable name is libapp_path, but
-    // we're making it point to a the app_data directory instead.
+    // We abuse `libapp_path` to actually be the path to the data dir for now.
+    // This is an abuse because the variable name is `libapp_path`, but
+    // we're making it point to a the `app_data` directory instead.
     let app_dir = &config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
     let base_r = crate::android::open_base_lib(app_dir, "libapp.so")?;
@@ -285,7 +284,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
         // Move/state update should be "atomic" (it isn't today).
-        state.install_patch(patch_info)?;
+        state.install_patch(&patch_info)?;
         info!("Patch {} successfully installed.", patch.number);
         // Should set some state to say the status is "update required" and that
         // we now have a different "next" version of the app from the current
@@ -348,7 +347,7 @@ where
 
 /// The patch which will be run on next boot (which may still be the same
 /// as the current boot).
-/// This may be changed any time update() or start_update_thread() are called.
+/// This may be changed any time `update()` or `start_update_thread()` are called.
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
@@ -356,9 +355,9 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     })
 }
 
-/// The patch which is currently booted.  This is None until
-/// report_launch_start() is called at which point it is copied from
-/// next_boot_patch.
+/// The patch which is currently booted.  This is `None` until
+/// `report_launch_start()` is called at which point it is copied from
+/// `next_boot_patch`.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
@@ -514,7 +513,7 @@ mod tests {
             let mut state =
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             state
-                .install_patch(PatchInfo {
+                .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: 1,
                 })
@@ -627,7 +626,7 @@ mod tests {
             let mut state =
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             state
-                .install_patch(PatchInfo {
+                .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: 1,
                 })
@@ -678,7 +677,7 @@ mod tests {
             let mut state =
                 UpdaterState::load_or_new_on_error(&config.cache_dir, &config.release_version);
             state
-                .install_patch(PatchInfo {
+                .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: 1,
                 })
