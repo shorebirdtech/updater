@@ -162,17 +162,21 @@ impl UpdaterState {
     }
 
     fn create_new_and_save(
-        cache_dir: &Path,
+        storage_dir: &Path,
         release_version: &str,
         client_id: Option<String>,
     ) -> Self {
-        let state = Self::new(cache_dir.to_owned(), release_version.to_owned(), client_id);
+        let state = Self::new(
+            storage_dir.to_owned(),
+            release_version.to_owned(),
+            client_id,
+        );
         let _ = state.save();
         state
     }
 
-    pub fn load_or_new_on_error(cache_dir: &Path, release_version: &str) -> Self {
-        let load_result = Self::load(cache_dir);
+    pub fn load_or_new_on_error(storage_dir: &Path, release_version: &str) -> Self {
+        let load_result = Self::load(storage_dir);
         match load_result {
             Ok(mut loaded) => {
                 let maybe_client_id = loaded.client_id.clone();
@@ -181,12 +185,20 @@ impl UpdaterState {
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.release_version, release_version
                     );
-                    return Self::create_new_and_save(cache_dir, release_version, maybe_client_id);
+                    return Self::create_new_and_save(
+                        storage_dir,
+                        release_version,
+                        maybe_client_id,
+                    );
                 }
                 let validate_result = loaded.validate();
                 if let Err(e) = validate_result {
                     warn!("Error while validating state: {:#}, clearing state.", e);
-                    return Self::create_new_and_save(cache_dir, release_version, maybe_client_id);
+                    return Self::create_new_and_save(
+                        storage_dir,
+                        release_version,
+                        maybe_client_id,
+                    );
                 }
                 loaded
             }
@@ -194,7 +206,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                Self::create_new_and_save(cache_dir, release_version, None)
+                Self::create_new_and_save(storage_dir, release_version, None)
             }
         }
     }

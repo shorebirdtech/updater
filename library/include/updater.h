@@ -36,9 +36,15 @@ typedef struct AppParameters {
    */
   int original_libapp_paths_size;
   /**
-   * Path to cache_dir where the updater will store downloaded artifacts.
+   * Path to app storage directory where the updater will store serialized
+   * state and other data that persists between releases.
    */
-  const char *cache_dir;
+  const char *app_storage_dir;
+  /**
+   * Path to cache directory where the updater will store downloaded
+   * artifacts and data that can be deleted when a new release is detected.
+   */
+  const char *code_cache_dir;
 } AppParameters;
 
 #ifdef __cplusplus
