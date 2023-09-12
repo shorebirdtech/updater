@@ -71,7 +71,7 @@ where
 // The config passed into init.  This is immutable once set and copyable.
 #[derive(Debug, Clone)]
 pub struct UpdateConfig {
-    pub cache_dir: PathBuf,
+    pub storage_dir: PathBuf,
     pub download_dir: PathBuf,
     pub auto_update: bool,
     pub channel: String,
@@ -91,12 +91,12 @@ pub fn set_config(
     with_config_mut(|config| {
         anyhow::ensure!(config.is_none(), "shorebird_init has already been called.");
 
-        let mut cache_path = std::path::PathBuf::from(&app_config.cache_dir);
-        cache_path.push("downloads");
-        let download_dir = cache_path;
+        let mut code_cache_path = std::path::PathBuf::from(&app_config.code_cache_dir);
+        code_cache_path.push("downloads");
+        let download_dir = code_cache_path;
 
         let new_config = UpdateConfig {
-            cache_dir: std::path::PathBuf::from(app_config.cache_dir),
+            storage_dir: std::path::PathBuf::from(app_config.app_storage_dir),
             download_dir,
             channel: yaml
                 .channel

@@ -37,8 +37,13 @@ pub struct AppParameters {
     /// Length of the original_libapp_paths array.
     pub original_libapp_paths_size: libc::c_int,
 
-    /// Path to cache_dir where the updater will store downloaded artifacts.
-    pub cache_dir: *const libc::c_char,
+    /// Path to app storage directory where the updater will store serialized
+    /// state and other data that persists between releases.
+    pub app_storage_dir: *const libc::c_char,
+
+    /// Path to cache directory where the updater will store downloaded
+    /// artifacts and data that can be deleted when a new release is detected.
+    pub code_cache_dir: *const libc::c_char,
 }
 
 /// Converts a C string to a Rust string, does not free the C string.
@@ -74,7 +79,8 @@ fn app_config_from_c(c_params: *const AppParameters) -> anyhow::Result<updater::
     let c_params_ref = unsafe { &*c_params };
 
     Ok(updater::AppConfig {
-        cache_dir: to_rust(c_params_ref.cache_dir)?,
+        app_storage_dir: to_rust(c_params_ref.app_storage_dir)?,
+        code_cache_dir: to_rust(c_params_ref.code_cache_dir)?,
         release_version: to_rust(c_params_ref.release_version)?,
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
@@ -298,7 +304,8 @@ mod test {
         let app_paths = c_array(app_paths_vec);
 
         super::AppParameters {
-            cache_dir: c_string(&cache_dir),
+            app_storage_dir: c_string(&cache_dir),
+            code_cache_dir: c_string(&cache_dir),
             release_version: c_string("1.0.0"),
             original_libapp_paths: app_paths as *const *const libc::c_char,
             original_libapp_paths_size: app_paths_size,
@@ -306,7 +313,8 @@ mod test {
     }
 
     fn free_parameters(params: super::AppParameters) {
-        free_c_string(params.cache_dir as *mut libc::c_char);
+        free_c_string(params.app_storage_dir as *mut libc::c_char);
+        free_c_string(params.code_cache_dir as *mut libc::c_char);
         free_c_string(params.release_version as *mut libc::c_char);
         free_c_array(
             params.original_libapp_paths as *mut *mut libc::c_char,
@@ -331,7 +339,8 @@ mod test {
         testing_reset_config();
         // Should log but not crash.
         let c_params = AppParameters {
-            cache_dir: std::ptr::null(),
+            app_storage_dir: std::ptr::null(),
+            code_cache_dir: std::ptr::null(),
             release_version: std::ptr::null(),
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
