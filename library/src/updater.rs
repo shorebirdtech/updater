@@ -1,9 +1,8 @@
 // This file's job is to be the Rust API for the updater.
 
 use std::fmt::{Display, Formatter};
-use std::fs;
-#[cfg(any(target_os = "android", test))]
-use std::io::{Read, Seek};
+use std::fs::{self, File};
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
@@ -77,6 +76,7 @@ impl Display for UpdateError {
 // `AppConfig` is the rust API.  `ResolvedConfig` is the internal storage.
 // However rusty api would probably used `&str` instead of `String`,
 // but making `&str` from `CStr*` is a bit of a pain.
+#[derive(Debug)]
 pub struct AppConfig {
     pub app_storage_dir: String,
     pub code_cache_dir: String,
@@ -169,10 +169,23 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn prepare_for_install(
+    config: &UpdateConfig,
+    download_path: &Path,
+    output_path: &Path,
+) -> anyhow::Result<()> {
+    if (cfg!(target_os = "android")) {
+        prepare_for_install_android(config, download_path, output_path)
+    } else if cfg!(target_os = "ios") {
+        prepare_for_install_ios(config, download_path, output_path)
+    } else {
+        panic!("Unrecognized platform")
+    }
+}
+
 // This is just a place to put our terrible android hacks.
 // And also avoid (for now) dealing with inflating patches on iOS.
-#[cfg(any(target_os = "android", test))]
-fn prepare_for_install(
+fn prepare_for_install_android(
     config: &UpdateConfig,
     download_path: &Path,
     output_path: &Path,
@@ -186,15 +199,17 @@ fn prepare_for_install(
     inflate(download_path, base_r, output_path)
 }
 
-#[cfg(not(any(target_os = "android", test)))]
-fn prepare_for_install(
-    _config: &UpdateConfig,
+// TODO(bryanoltman): consolidate this with prepare_for_install_android
+fn prepare_for_install_ios(
+    config: &UpdateConfig,
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    // On iOS we don't yet support compressed patches, just copy the file.
-    fs::copy(download_path, output_path)?;
-    Ok(())
+    // Path to App.framework/App
+    let app_dir = &config.libapp_path;
+    debug!("app_dir: {:?}", app_dir);
+    let base_r = File::open(app_dir).with_context(|| format!("Failed to open {:?}", app_dir))?;
+    inflate(download_path, base_r, output_path)
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
@@ -302,7 +317,6 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
-#[cfg(any(target_os = "android", test))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
