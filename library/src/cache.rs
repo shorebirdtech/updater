@@ -213,7 +213,8 @@ impl UpdaterState {
 
     /// Saves the updater state to disk.
     pub fn save(&self) -> anyhow::Result<()> {
-        std::fs::create_dir_all(&self.cache_dir).context("create_dir_all")?;
+        std::fs::create_dir_all(&self.cache_dir)
+            .with_context(|| format!("create_dir_all failed for {}", self.cache_dir.display()))?;
         let path = Path::new(&self.cache_dir).join("state.json");
         let file = File::create(path).context("File::create for state.json")?;
         let writer = BufWriter::new(file);
@@ -380,7 +381,8 @@ impl UpdaterState {
         // Clear the slot.
         self.clear_slot(slot_index)?; // Invalidate the slot.
         self.save()?;
-        std::fs::create_dir_all(&slot_dir)?;
+        std::fs::create_dir_all(&slot_dir)
+            .with_context(|| format!("create_dir_all failed for {}", slot_dir.display()))?;
 
         if self.is_known_bad_patch(patch.number) {
             return Err(UpdateError::InvalidArgument(
