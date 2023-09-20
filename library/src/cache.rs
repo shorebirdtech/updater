@@ -41,7 +41,9 @@ struct Slot {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdaterState {
     // Per-device state:
-    /// Where this writes to disk.
+    /// Where this writes to disk. Don't serialize this field, as it can change
+    /// between runs of the app.
+    #[serde(skip)]
     cache_dir: PathBuf,
     /// The client ID for this device.
     pub client_id: Option<String>,
@@ -153,6 +155,7 @@ impl UpdaterState {
         // TODO: Now that we depend on serde_yaml for shorebird.yaml
         // we could use yaml here instead of json.
         let mut state: UpdaterState = serde_json::from_reader(reader)?;
+        state.cache_dir = cache_dir.to_path_buf();
         if state.client_id.is_none() {
             // Generate a client id if we don't already have one.
             state.client_id = Some(generate_client_id());
