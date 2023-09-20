@@ -638,4 +638,29 @@ mod tests {
         assert!(new_loaded.client_id.is_some());
         assert_eq!(original_loaded.client_id, new_loaded.client_id);
     }
+
+    #[test]
+    fn does_not_save_cache_dir() {
+        let original_tmp_dir = TempDir::new("example").unwrap();
+        let original_state = UpdaterState {
+            cache_dir: original_tmp_dir.path().to_path_buf(),
+            release_version: "1.0.0+1".to_string(),
+            client_id: None,
+            queued_events: Vec::new(),
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
+            failed_patches: Vec::new(),
+            successful_patches: Vec::new(),
+            slots: Vec::new(),
+        };
+        original_state.save().unwrap();
+
+        let new_tmp_dir = TempDir::new("example_2").unwrap();
+        let original_state_path = original_tmp_dir.path().join("state.json");
+        let new_state_path = new_tmp_dir.path().join("state.json");
+        std::fs::rename(original_state_path, new_state_path).unwrap();
+
+        let new_state = UpdaterState::load(new_tmp_dir.path()).unwrap();
+        assert_eq!(new_state.cache_dir, new_tmp_dir.path());
+    }
 }
