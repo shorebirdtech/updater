@@ -1,7 +1,7 @@
 // This file's job is to deal with the update_server and network side
 // of the updater library.
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
@@ -279,7 +279,8 @@ pub fn download_to_path(
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
         debug!("Creating download directory: {:?}", parent);
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all failed for {}", parent.display()))?;
     }
 
     debug!("Writing download to: {:?}", path);
