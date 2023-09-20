@@ -19,6 +19,8 @@ use crate::updater::UpdateError;
 #[cfg(test)]
 use std::{println as info, println as warn, println as debug}; // Workaround to use println! for logs.
 
+const STATE_FILE_NAME: &str = "state.json";
+
 /// The public interface for talking about patches to the Cache.
 #[derive(PartialEq, Debug)]
 pub struct PatchInfo {
@@ -41,7 +43,9 @@ struct Slot {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdaterState {
     // Per-device state:
-    /// Where this writes to disk.
+    /// Where this writes to disk. Don't serialize this field, as it can change
+    /// between runs of the app.
+    #[serde(skip)]
     cache_dir: PathBuf,
     /// The client ID for this device.
     pub client_id: Option<String>,
@@ -147,12 +151,13 @@ impl UpdaterState {
 
     fn load(cache_dir: &Path) -> anyhow::Result<Self> {
         // Load UpdaterState from disk
-        let path = cache_dir.join("state.json");
+        let path = cache_dir.join(STATE_FILE_NAME);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         // TODO: Now that we depend on serde_yaml for shorebird.yaml
         // we could use yaml here instead of json.
         let mut state: UpdaterState = serde_json::from_reader(reader)?;
+        state.cache_dir = cache_dir.to_path_buf();
         if state.client_id.is_none() {
             // Generate a client id if we don't already have one.
             state.client_id = Some(generate_client_id());
@@ -471,7 +476,7 @@ impl UpdaterState {
 mod tests {
     use tempdir::TempDir;
 
-    use crate::cache::{PatchInfo, UpdaterState};
+    use crate::cache::{PatchInfo, UpdaterState, STATE_FILE_NAME};
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
         let cache_dir = tmp_dir.path();
@@ -634,5 +639,34 @@ mod tests {
         assert!(original_loaded.client_id.is_some());
         assert!(new_loaded.client_id.is_some());
         assert_eq!(original_loaded.client_id, new_loaded.client_id);
+    }
+
+    #[test]
+    fn does_not_save_cache_dir() {
+        let original_tmp_dir = TempDir::new("example").unwrap();
+        let original_state = UpdaterState {
+            cache_dir: original_tmp_dir.path().to_path_buf(),
+            release_version: "1.0.0+1".to_string(),
+            client_id: None,
+            queued_events: Vec::new(),
+            current_boot_slot_index: None,
+            next_boot_slot_index: None,
+            failed_patches: Vec::new(),
+            successful_patches: Vec::new(),
+            slots: Vec::new(),
+        };
+        original_state.save().unwrap();
+
+        let new_tmp_dir = TempDir::new("example_2").unwrap();
+        let original_state_path = original_tmp_dir.path().join(STATE_FILE_NAME);
+        let new_state_path = new_tmp_dir.path().join(STATE_FILE_NAME);
+        std::fs::rename(original_state_path, new_state_path).unwrap();
+
+        let new_state = UpdaterState::load(new_tmp_dir.path()).unwrap();
+        assert_eq!(new_state.cache_dir, new_tmp_dir.path());
+        assert_eq!(
+            new_state.slot_dir_for_index(1),
+            new_tmp_dir.path().join("slot_1").to_path_buf()
+        );
     }
 }
