@@ -19,6 +19,8 @@ use crate::updater::UpdateError;
 #[cfg(test)]
 use std::{println as info, println as warn, println as debug}; // Workaround to use println! for logs.
 
+const STATE_FILE_NAME: &str = "state.json";
+
 /// The public interface for talking about patches to the Cache.
 #[derive(PartialEq, Debug)]
 pub struct PatchInfo {
@@ -149,7 +151,7 @@ impl UpdaterState {
 
     fn load(cache_dir: &Path) -> anyhow::Result<Self> {
         // Load UpdaterState from disk
-        let path = cache_dir.join("state.json");
+        let path = cache_dir.join(STATE_FILE_NAME);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         // TODO: Now that we depend on serde_yaml for shorebird.yaml
@@ -474,7 +476,7 @@ impl UpdaterState {
 mod tests {
     use tempdir::TempDir;
 
-    use crate::cache::{PatchInfo, UpdaterState};
+    use crate::cache::{PatchInfo, UpdaterState, STATE_FILE_NAME};
 
     fn test_state(tmp_dir: &TempDir) -> UpdaterState {
         let cache_dir = tmp_dir.path();
@@ -656,11 +658,15 @@ mod tests {
         original_state.save().unwrap();
 
         let new_tmp_dir = TempDir::new("example_2").unwrap();
-        let original_state_path = original_tmp_dir.path().join("state.json");
-        let new_state_path = new_tmp_dir.path().join("state.json");
+        let original_state_path = original_tmp_dir.path().join(STATE_FILE_NAME);
+        let new_state_path = new_tmp_dir.path().join(STATE_FILE_NAME);
         std::fs::rename(original_state_path, new_state_path).unwrap();
 
         let new_state = UpdaterState::load(new_tmp_dir.path()).unwrap();
         assert_eq!(new_state.cache_dir, new_tmp_dir.path());
+        assert_eq!(
+            new_state.slot_dir_for_index(1),
+            new_tmp_dir.path().join("slot_1").to_path_buf()
+        );
     }
 }
