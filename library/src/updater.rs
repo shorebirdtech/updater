@@ -1,8 +1,8 @@
 // This file's job is to be the Rust API for the updater.
 
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File};
-use std::io::{Cursor, Read, Seek};
+use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
@@ -144,7 +144,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
-    let mut file = fs::File::open(path)?;
+    let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher)?;
     // Check that the length from copy is the same as the file size?
@@ -330,10 +330,9 @@ where
     // PipeReader/Writer errors instead of file open errors.
     debug!("Reading patch file: {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
-        fs::File::open(patch_path)
-            .context(format!("Failed to open patch file: {:?}", patch_path))?,
+        File::open(patch_path).context(format!("Failed to open patch file: {:?}", patch_path))?,
     );
-    let output_file_w = fs::File::create(output_path)?;
+    let output_file_w = File::create(output_path)?;
 
     // Set up a pipe to connect the writing from the decompression thread
     // to the reading of the decompressed patch data on this thread.
