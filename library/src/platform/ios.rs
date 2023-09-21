@@ -1,18 +1,32 @@
 use std::{
     fs::File,
     io::{Cursor, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::Context;
 
-pub(crate) fn open_base_lib(app_dir: &PathBuf) -> anyhow::Result<Cursor<Vec<u8>>> {
+use crate::UpdateError;
+
+/// lib name is unused on iOS, it exists as a parameter here to match the signature of the
+/// function on Android.
+pub(crate) fn open_base_lib(app_dir: &Path, _lib_name: &str) -> anyhow::Result<Cursor<Vec<u8>>> {
     let mut file =
         File::open(app_dir).with_context(|| format!("Failed to open iOS app_dir {:?}", app_dir))?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)
         .with_context(|| format!("Failed to read iOS app_dir {:?}", app_dir))?;
     Ok(Cursor::new(buffer))
+}
+
+pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
+    let first = original_libapp_paths
+        .first()
+        .ok_or(UpdateError::InvalidArgument(
+            "original_libapp_paths".to_string(),
+            "empty".to_string(),
+        ));
+    first.map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -28,7 +42,7 @@ mod tests {
         let tmp_dir = TempDir::new("test").unwrap();
         let path = tmp_dir.path().join("foo.txt");
         File::create(&path).unwrap();
-        let result = open_base_lib(&path.to_path_buf());
+        let result = open_base_lib(&path.to_path_buf(), "");
         assert!(result.is_ok());
     }
 
@@ -36,7 +50,7 @@ mod tests {
     fn returns_error_if_app_fails_to_open() {
         let tmp_dir = TempDir::new("test").unwrap();
         let path = tmp_dir.path().join("foo.txt");
-        let result = open_base_lib(&path.to_path_buf());
+        let result = open_base_lib(&path.to_path_buf(), "");
         assert!(result.is_err());
         assert_eq!(
             format!("{}", result.unwrap_err()),

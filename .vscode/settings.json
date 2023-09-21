@@ -16,7 +16,4 @@
         "tempdir",
         "vmcode"
     ],
-    "rust-analyzer.linkedProjects": [
-        "./library/Cargo.toml"
-    ]
 }

@@ -15,6 +15,7 @@ use crate::logging::init_logging;
 use crate::network::{
     download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
 };
+use crate::platform::{libapp_path_from_settings, open_base_lib};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -84,29 +85,12 @@ pub struct AppConfig {
     pub original_libapp_paths: Vec<String>,
 }
 
-// On Android we don't use a direct path to libapp.so, but rather a data dir
-// and a hard-coded name for the libapp file which we look up in the
-// split APKs in that datadir. On other platforms we just use a path.
-#[cfg(not(any(target_os = "android", test)))]
-fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
-    let first = original_libapp_paths
-        .first()
-        .ok_or(UpdateError::InvalidArgument(
-            "original_libapp_paths".to_string(),
-            "empty".to_string(),
-        ));
-    first.map(PathBuf::from)
-}
-
 /// Initialize the updater library.
 /// Takes a `AppConfig` struct and a yaml string.
 /// The yaml string is the contents of the `shorebird.yaml` file.
 /// The `AppConfig` struct is information about the running app and where
 /// the updater should keep its cache.
 pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
-    #[cfg(any(target_os = "android", test))]
-    use crate::android::libapp_path_from_settings;
-
     init_logging();
     let config = YamlConfig::from_yaml(yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
@@ -178,14 +162,7 @@ fn prepare_for_install(
     // This is an abuse because the variable name is `libapp_path`, but
     // we're making it point to a the `app_data` directory instead.
     debug!("app_dir: {:?}", app_dir);
-    let base_release_artifact;
-    if cfg!(target_os = "android") {
-        base_release_artifact = crate::android::open_base_lib(app_dir, "libapp.so")?;
-    } else if cfg!(target_os = "ios") {
-        base_release_artifact = crate::ios::open_base_lib(app_dir)?;
-    } else {
-        bail!("Unrecognized platform")
-    }
+    let base_release_artifact = open_base_lib(app_dir, "libapp.so")?;
     inflate(download_path, base_release_artifact, output_path)
 }
 

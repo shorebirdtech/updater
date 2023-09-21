@@ -11,12 +11,10 @@ mod config;
 mod events;
 mod logging;
 mod network;
+mod platform;
 mod updater;
 mod updater_lock;
 mod yaml;
-
-mod android;
-mod ios;
 
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;

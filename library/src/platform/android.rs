@@ -184,6 +184,9 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
     Ok(Cursor::new(buffer))
 }
 
+// On Android we don't use a direct path to libapp.so, but rather a data dir
+// and a hard-coded name for the libapp file which we look up in the
+// split APKs in that datadir. On other platforms we just use a path.
 pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but
