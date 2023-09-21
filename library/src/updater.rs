@@ -174,7 +174,7 @@ fn prepare_for_install(
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
-    if (cfg!(target_os = "android")) {
+    if cfg!(target_os = "android") {
         prepare_for_install_android(config, download_path, output_path)
     } else if cfg!(target_os = "ios") {
         prepare_for_install_ios(config, download_path, output_path)
