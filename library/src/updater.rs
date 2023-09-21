@@ -77,7 +77,6 @@ impl Display for UpdateError {
 // `AppConfig` is the rust API.  `ResolvedConfig` is the internal storage.
 // However rusty api would probably used `&str` instead of `String`,
 // but making `&str` from `CStr*` is a bit of a pain.
-#[derive(Debug)]
 pub struct AppConfig {
     pub app_storage_dir: String,
     pub code_cache_dir: String,
