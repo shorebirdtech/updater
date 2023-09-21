@@ -170,46 +170,23 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
 }
 
 fn prepare_for_install(
-    config: &UpdateConfig,
-    download_path: &Path,
-    output_path: &Path,
-) -> anyhow::Result<()> {
-    if cfg!(target_os = "android") {
-        prepare_for_install_android(config, download_path, output_path)
-    } else if cfg!(target_os = "ios") {
-        prepare_for_install_ios(config, download_path, output_path)
-    } else {
-        panic!("Unrecognized platform")
-    }
-}
-
-// This is just a place to put our terrible android hacks.
-// And also avoid (for now) dealing with inflating patches on iOS.
-fn prepare_for_install_android(
-    config: &UpdateConfig,
+    app_dir: &PathBuf,
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
     // We abuse `libapp_path` to actually be the path to the data dir for now.
     // This is an abuse because the variable name is `libapp_path`, but
     // we're making it point to a the `app_data` directory instead.
-    let app_dir = &config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
-    let base_r = crate::android::open_base_lib(app_dir, "libapp.so")?;
-    inflate(download_path, base_r, output_path)
-}
-
-// TODO(bryanoltman): consolidate this with prepare_for_install_android
-fn prepare_for_install_ios(
-    config: &UpdateConfig,
-    download_path: &Path,
-    output_path: &Path,
-) -> anyhow::Result<()> {
-    // Path to App.framework/App
-    let app_dir = &config.libapp_path;
-    debug!("app_dir: {:?}", app_dir);
-    let base_r = File::open(app_dir).with_context(|| format!("Failed to open {:?}", app_dir))?;
-    inflate(download_path, base_r, output_path)
+    let base_release_artifact;
+    if cfg!(target_os = "android") {
+        base_release_artifact = crate::android::open_base_lib(app_dir, "libapp.so")?;
+    } else if cfg!(target_os = "ios") {
+        base_release_artifact = crate::ios::open_base_lib(app_dir)?;
+    } else {
+        bail!("Unrecognized platform")
+    }
+    inflate(download_path, base_release_artifact, output_path)
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
@@ -280,8 +257,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
-    // Should not pass config, rather should read necessary information earlier.
-    prepare_for_install(&config, &download_path, &output_path)?;
+    prepare_for_install(&config.libapp_path, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
     check_hash(&output_path, &patch.hash).context(format!(

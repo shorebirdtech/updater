@@ -15,9 +15,8 @@ mod updater;
 mod updater_lock;
 mod yaml;
 
-// TODO(bryanoltman): this probably shouldn't be commented out
-// #[cfg(any(target_os = "android", test))]
 mod android;
+mod ios;
 
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;
