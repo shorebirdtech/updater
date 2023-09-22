@@ -254,10 +254,8 @@ pub extern "C" fn shorebird_report_launch_success() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        network::{testing_set_network_hooks, PatchCheckResponse},
-        platform,
-    };
+    use crate::network::{testing_set_network_hooks, PatchCheckResponse};
+    use crate::platform;
     use anyhow::Ok;
     use serial_test::serial;
     use tempdir::TempDir;
