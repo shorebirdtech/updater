@@ -31,11 +31,13 @@ pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<Pat
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
+    use std::{fs::File, path::PathBuf};
 
     use tempdir::TempDir;
 
-    use super::open_base_lib;
+    use crate::UpdateError;
+
+    use super::{libapp_path_from_settings, open_base_lib};
 
     #[test]
     fn opens_and_reads_app() {
@@ -60,4 +62,24 @@ mod tests {
 
     // TODO(bryanoltman): we don't currently test read_to_end returning an Err
     // result. We should do that, but I'm not sure how.
+
+    #[test]
+    fn libapp_path_from_settings_returns_first_path() {
+        let path1 = "some/path/1".to_string();
+        let path2 = "some/path/2".to_string();
+        let path3 = "some/path/3".to_string();
+        let result = libapp_path_from_settings(&[path1.clone(), path2.clone(), path3.clone()]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PathBuf::from(path1));
+    }
+
+    #[test]
+    fn libapp_path_from_settings_returns_err_when_provided_slice_is_empty() {
+        let result = libapp_path_from_settings(&[]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            UpdateError::InvalidArgument("original_libapp_paths".to_string(), "empty".to_string(),)
+        );
+    }
 }
