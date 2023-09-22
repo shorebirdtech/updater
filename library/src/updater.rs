@@ -1,8 +1,7 @@
 // This file's job is to be the Rust API for the updater.
 
 use std::fmt::{Display, Formatter};
-use std::fs;
-#[cfg(any(target_os = "android", test))]
+use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
@@ -16,6 +15,7 @@ use crate::logging::init_logging;
 use crate::network::{
     download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
 };
+use crate::platform::{libapp_path_from_settings, open_base_lib};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -84,29 +84,12 @@ pub struct AppConfig {
     pub original_libapp_paths: Vec<String>,
 }
 
-// On Android we don't use a direct path to libapp.so, but rather a data dir
-// and a hard-coded name for the libapp file which we look up in the
-// split APKs in that datadir. On other platforms we just use a path.
-#[cfg(not(any(target_os = "android", test)))]
-fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
-    let first = original_libapp_paths
-        .first()
-        .ok_or(UpdateError::InvalidArgument(
-            "original_libapp_paths".to_string(),
-            "empty".to_string(),
-        ));
-    first.map(PathBuf::from)
-}
-
 /// Initialize the updater library.
 /// Takes a `AppConfig` struct and a yaml string.
 /// The yaml string is the contents of the `shorebird.yaml` file.
 /// The `AppConfig` struct is information about the running app and where
 /// the updater should keep its cache.
 pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
-    #[cfg(any(target_os = "android", test))]
-    use crate::android::libapp_path_from_settings;
-
     init_logging();
     let config = YamlConfig::from_yaml(yaml)
         .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
@@ -144,7 +127,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
-    let mut file = fs::File::open(path)?;
+    let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher)?;
     // Check that the length from copy is the same as the file size?
@@ -169,32 +152,17 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// This is just a place to put our terrible android hacks.
-// And also avoid (for now) dealing with inflating patches on iOS.
-#[cfg(any(target_os = "android", test))]
 fn prepare_for_install(
-    config: &UpdateConfig,
+    app_dir: &PathBuf,
     download_path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<()> {
     // We abuse `libapp_path` to actually be the path to the data dir for now.
     // This is an abuse because the variable name is `libapp_path`, but
     // we're making it point to a the `app_data` directory instead.
-    let app_dir = &config.libapp_path;
     debug!("app_dir: {:?}", app_dir);
-    let base_r = crate::android::open_base_lib(app_dir, "libapp.so")?;
-    inflate(download_path, base_r, output_path)
-}
-
-#[cfg(not(any(target_os = "android", test)))]
-fn prepare_for_install(
-    _config: &UpdateConfig,
-    download_path: &Path,
-    output_path: &Path,
-) -> anyhow::Result<()> {
-    // On iOS we don't yet support compressed patches, just copy the file.
-    fs::copy(download_path, output_path)?;
-    Ok(())
+    let base_release_artifact = open_base_lib(app_dir, "libapp.so")?;
+    inflate(download_path, base_release_artifact, output_path)
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
@@ -265,8 +233,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
-    // Should not pass config, rather should read necessary information earlier.
-    prepare_for_install(&config, &download_path, &output_path)?;
+    prepare_for_install(&config.libapp_path, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
     check_hash(&output_path, &patch.hash).context(format!(
@@ -302,7 +269,6 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
-#[cfg(any(target_os = "android", test))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
@@ -316,10 +282,9 @@ where
     // PipeReader/Writer errors instead of file open errors.
     debug!("Reading patch file: {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
-        fs::File::open(patch_path)
-            .context(format!("Failed to open patch file: {:?}", patch_path))?,
+        File::open(patch_path).context(format!("Failed to open patch file: {:?}", patch_path))?,
     );
-    let output_file_w = fs::File::create(output_path)?;
+    let output_file_w = File::create(output_path)?;
 
     // Set up a pipe to connect the writing from the decompression thread
     // to the reading of the decompressed patch data on this thread.

@@ -255,6 +255,7 @@ pub extern "C" fn shorebird_report_launch_success() {
 mod test {
     use super::*;
     use crate::network::{testing_set_network_hooks, PatchCheckResponse};
+    use crate::platform;
     use anyhow::Ok;
     use serial_test::serial;
     use tempdir::TempDir;
@@ -409,7 +410,7 @@ mod test {
         let options = zip::write::FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
-        let app_path = crate::android::get_relative_lib_path("libapp.so");
+        let app_path = platform::get_relative_lib_path("libapp.so");
         zip.start_file(app_path.to_str().unwrap(), options).unwrap();
         zip.write_all(libapp_contents).unwrap();
         zip.finish().unwrap();
