@@ -15,5 +15,5 @@
         "reqwest",
         "tempdir",
         "vmcode"
-    ],
+    ]
 }
