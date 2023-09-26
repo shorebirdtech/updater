@@ -19,6 +19,7 @@ use crate::updater::UpdateError;
 #[cfg(test)]
 use std::{println as info, println as warn, println as debug}; // Workaround to use println! for logs.
 
+/// Where the updater state is stored on disk.
 const STATE_FILE_NAME: &str = "state.json";
 
 /// The public interface for talking about patches to the Cache.
@@ -35,6 +36,12 @@ struct Slot {
     patch_number: usize,
 }
 
+/// Records the updater's "state of the world" - which patches we know to be
+/// good or bad, which patches we have downloaded, which patch we're currently
+/// booted from, events that need to be reported to the server, etc.
+///
+/// Written out to disk as a json file at STATE_FILE_NAME.
+///
 // This struct is public, as callers can have a handle to it, but modifying
 // anything inside should be done via the functions below.
 // TODO(eseidel): Split the per-release state from the per-device state.
