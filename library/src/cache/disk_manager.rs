@@ -40,8 +40,8 @@ impl DiskManager for DiskManagerImpl {
         let path = Path::new(&self.root_dir).join(file_path);
         let file = File::create(path).context(format!("File::create for {}", file_path))?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, serializable)?;
-        Ok(())
+        serde_json::to_writer_pretty(writer, serializable)
+            .context(format!("failed to serialize to {}", file_path))
     }
 
     fn read<D>(&mut self, file_path: &str) -> anyhow::Result<D>
@@ -53,7 +53,7 @@ impl DiskManager for DiskManagerImpl {
         let path = Path::new(&self.root_dir).join(file_path);
         let file = File::open(&path)?;
         let reader = BufReader::new(file);
-        serde_json::from_reader(reader).context(format!("failed to deserialize {:?}", &path))
+        serde_json::from_reader(reader).context(format!("failed to deserialize from {:?}", &path))
     }
 }
 
