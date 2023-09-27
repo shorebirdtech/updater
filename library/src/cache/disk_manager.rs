@@ -57,6 +57,7 @@ impl DiskManager for DiskManagerImpl {
     }
 }
 
+#[cfg(test)]
 mod test {
     use serde::{Deserialize, Serialize};
 
