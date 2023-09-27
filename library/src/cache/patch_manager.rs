@@ -1,5 +1,6 @@
 use super::{disk_manager, PatchInfo};
 use anyhow::{bail, Context, Ok, Result};
+use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -10,6 +11,9 @@ const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
 
 /// Abstracts the patch file system structure
+/// TBD whether this trait is actually needed or if we can just use the PatchManager
+/// struct directly. Having it would allow us to mock PatchManager, but it is (in theory)
+/// simple enough that we could just use the real thing.
 pub trait ManagePatches {
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
@@ -47,6 +51,12 @@ pub trait ManagePatches {
     /// Resets the patch manager to its initial state, removing all patches. This is
     /// intended to be used when a new release version is installed.
     fn reset(&mut self) -> Result<()>;
+}
+
+impl Debug for dyn ManagePatches {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "TODO")
+    }
 }
 
 #[derive(Debug)]
@@ -222,7 +232,11 @@ impl ManagePatches for PatchManager {
 
     fn reset(&mut self) -> Result<()> {
         self.patches_state = PatchesState::default();
-        self.save_patches_state()
+        self.save_patches_state()?;
+        std::fs::remove_dir_all(self.patches_dir()).context(format!(
+            "Failed to delete patches dir {}",
+            self.patches_dir().display()
+        ))
     }
 }
 

@@ -50,7 +50,7 @@ pub struct UpdaterState {
     /// between runs of the app.
     cache_dir: PathBuf,
 
-    patch_manager: PatchManager,
+    patch_manager: Box<dyn ManagePatches>,
 
     serialized_state: SerializedState,
 }
@@ -99,7 +99,7 @@ impl UpdaterState {
     fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
-            patch_manager: PatchManager::with_root_dir(cache_dir.clone()),
+            patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.clone())),
             serialized_state: SerializedState {
                 client_id: client_id.or(Some(generate_client_id())),
                 release_version,
@@ -173,7 +173,7 @@ impl UpdaterState {
         let serialized_state = disk_manager::read(&path)?;
         let mut state = UpdaterState {
             cache_dir: cache_dir.to_path_buf(),
-            patch_manager: PatchManager::with_root_dir(cache_dir.to_path_buf()),
+            patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.to_path_buf())),
             serialized_state,
         };
         if state.serialized_state.client_id.is_none() {
@@ -201,13 +201,14 @@ impl UpdaterState {
     pub fn load_or_new_on_error(storage_dir: &Path, release_version: &str) -> Self {
         let load_result = Self::load(storage_dir);
         match load_result {
-            Ok(loaded) => {
+            Ok(mut loaded) => {
                 let maybe_client_id = loaded.serialized_state.client_id.clone();
                 if loaded.serialized_state.release_version != release_version {
                     info!(
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.serialized_state.release_version, release_version
                     );
+                    let _ = loaded.patch_manager.reset();
                     return Self::create_new_and_save(
                         storage_dir,
                         release_version,
