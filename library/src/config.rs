@@ -80,7 +80,6 @@ pub struct UpdateConfig {
     pub libapp_path: PathBuf,
     pub base_url: String,
     pub network_hooks: NetworkHooks,
-    pub disk_manager: DiskManager,
 }
 
 pub fn set_config(
