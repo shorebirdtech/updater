@@ -298,15 +298,15 @@ mod tests {
 
     #[test]
     fn check_patch_request_response_deserialization() {
-        let data = r###"
+        let data = r#"
     {
         "patch_available": true,
         "patch": {
             "number": 1,
             "download_url": "https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode",
-            "hash": "#"
+            "hash": "1234"
         }
-    }"###;
+    }"#;
 
         let response: PatchCheckResponse = serde_json::from_str(data).unwrap();
 
@@ -316,7 +316,7 @@ mod tests {
         let patch = response.patch.unwrap();
         assert_eq!(patch.number, 1);
         assert_eq!(patch.download_url, "https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode");
-        assert_eq!(patch.hash, "#");
+        assert_eq!(patch.hash, "1234");
     }
 
     #[test]
