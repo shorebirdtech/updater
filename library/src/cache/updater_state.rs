@@ -115,13 +115,13 @@ impl UpdaterState {
             .unwrap_or(String::new())
     }
 
-    pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
-        self.patch_manager.is_known_good_patch(patch_number)
-    }
+    // pub fn is_known_good_patch(&self, patch_number: usize) -> bool {
+    //     self.patch_manager.is_known_good_patch(patch_number)
+    // }
 
-    pub fn is_known_bad_patch(&self, patch_number: usize) -> bool {
-        self.patch_manager.is_known_bad_patch(patch_number)
-    }
+    // pub fn is_known_bad_patch(&self, patch_number: usize) -> bool {
+    //     self.patch_manager.is_known_bad_patch(patch_number)
+    // }
 
     pub fn queue_event(&mut self, event: PatchEvent) {
         self.serialized_state.queued_events.push(event);
@@ -336,14 +336,14 @@ impl UpdaterState {
 
     /// Sets the patch we will boot from on the next run to the latest non-bad
     /// patch we know about.
-    pub fn activate_latest_bootable_patch(&mut self) -> Result<(), UpdateError> {
-        self.patch_manager
-            .set_next_patch_to_latest_bootable()
-            // TODO this map_err should not be here, it should be in the patch manager.
-            .map_err(|_| UpdateError::FailedToSaveState)
-        // self.set_next_boot_patch_slot(self.latest_bootable_slot());
-        // self.save().map_err(|_| UpdateError::FailedToSaveState)
-    }
+    // pub fn activate_latest_bootable_patch(&mut self) -> Result<(), UpdateError> {
+    //     self.patch_manager
+    //         .set_next_patch_to_latest_bootable()
+    //         // TODO this map_err should not be here, it should be in the patch manager.
+    //         .map_err(|_| UpdateError::FailedToSaveState)
+    //     // self.set_next_boot_patch_slot(self.latest_bootable_slot());
+    //     // self.save().map_err(|_| UpdateError::FailedToSaveState)
+    // }
 
     // fn available_slot(&self) -> usize {
     //     // Assume we only use two slots and pick the one that's not current.
@@ -450,20 +450,20 @@ impl UpdaterState {
         // Ok(())
     }
 
-    /// Sets the `current_boot` slot to the `next_boot` slot.
-    pub fn activate_current_patch(&mut self) -> Result<(), UpdateError> {
-        self.patch_manager
-            .set_current_patch_to_next()
-            .map_err(|_| UpdateError::InvalidState("No patch to activate.".to_owned()))
-        // if self.next_boot_slot_index.is_none() {
-        //     return Err(UpdateError::InvalidState(
-        //         "No patch to activate.".to_owned(),
-        //     ));
-        // }
-        // self.current_boot_slot_index = self.next_boot_slot_index;
-        // assert!(self.current_boot_slot_index.is_some());
-        // Ok(())
-    }
+    // Sets the `current_boot` slot to the `next_boot` slot.
+    // pub fn activate_current_patch(&mut self) -> Result<(), UpdateError> {
+    //     self.patch_manager
+    //         .set_current_patch_to_next()
+    //         .map_err(|_| UpdateError::InvalidState("No patch to activate.".to_owned()))
+    //     // if self.next_boot_slot_index.is_none() {
+    //     //     return Err(UpdateError::InvalidState(
+    //     //         "No patch to activate.".to_owned(),
+    //     //     ));
+    //     // }
+    //     // self.current_boot_slot_index = self.next_boot_slot_index;
+    //     // assert!(self.current_boot_slot_index.is_some());
+    //     // Ok(())
+    // }
 
     // /// Switches the next boot slot to the given slot or clears it if None.
     // fn set_next_boot_patch_slot(&mut self, maybe_index: Option<usize>) {
@@ -478,7 +478,7 @@ impl UpdaterState {
     /// to know that they're bad).
     /// Used by the patch check logic.
     pub fn latest_patch_number(&self) -> Option<usize> {
-        self.patch_manager.latest_patch_number()
+        self.patch_manager.highest_seen_patch_number()
         // Get the max of the patch numbers in the slots.
         // // We probably could do this with chain and max?
         // let installed_max = self.slots.iter().map(|s| s.patch_number).max();

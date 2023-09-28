@@ -9,9 +9,10 @@ use std::{
     path::Path,
 };
 
-pub fn write<S, P: AsRef<Path>>(serializable: &S, path: &P) -> anyhow::Result<()>
+pub fn write<S, P>(serializable: &S, path: &P) -> anyhow::Result<()>
 where
     S: ?Sized + Serialize,
+    P: AsRef<Path>,
 {
     let path_as_ref = path.as_ref();
     let containing_dir = path_as_ref
@@ -36,9 +37,10 @@ where
         .context(format!("failed to serialize to {:?}", path_as_ref))
 }
 
-pub fn read<D, P: AsRef<Path>>(path: &P) -> anyhow::Result<D>
+pub fn read<D, P>(path: &P) -> anyhow::Result<D>
 where
     D: DeserializeOwned,
+    P: AsRef<Path>,
 {
     info!("Reading from {:?}", path.as_ref());
     let path_as_ref = path.as_ref();
