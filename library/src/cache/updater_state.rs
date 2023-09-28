@@ -142,7 +142,8 @@ impl UpdaterState {
     }
 
     pub fn mark_patch_as_bad(&mut self, patch_number: usize) -> Result<()> {
-        self.patch_manager.mark_patch_as_bad(patch_number)
+        self.patch_manager
+            .record_boot_failure_for_patch(patch_number)
         // if self.is_known_good_patch(patch_number) {
         //     bail!("Tried to report failed launch for a known good patch.  Ignoring.");
         // }
@@ -156,7 +157,8 @@ impl UpdaterState {
     }
 
     pub fn mark_patch_as_good(&mut self, patch_number: usize) -> Result<()> {
-        self.patch_manager.mark_patch_as_good(patch_number)
+        self.patch_manager
+            .record_boot_success_for_patch(patch_number)
         // if self.is_known_bad_patch(patch_number) {
         //     bail!("Tried to report successful launch for a known bad patch.  Ignoring.");
         // }
@@ -337,7 +339,7 @@ impl UpdaterState {
     pub fn activate_latest_bootable_patch(&mut self) -> Result<(), UpdateError> {
         self.patch_manager
             .set_next_patch_to_latest_bootable()
-            // TODO this map_err should not be here
+            // TODO this map_err should not be here, it should be in the patch manager.
             .map_err(|_| UpdateError::FailedToSaveState)
         // self.set_next_boot_patch_slot(self.latest_bootable_slot());
         // self.save().map_err(|_| UpdateError::FailedToSaveState)
@@ -451,7 +453,7 @@ impl UpdaterState {
     /// Sets the `current_boot` slot to the `next_boot` slot.
     pub fn activate_current_patch(&mut self) -> Result<(), UpdateError> {
         self.patch_manager
-            .record_booted_from_next_patch()
+            .set_current_patch_to_next()
             .map_err(|_| UpdateError::InvalidState("No patch to activate.".to_owned()))
         // if self.next_boot_slot_index.is_none() {
         //     return Err(UpdateError::InvalidState(
