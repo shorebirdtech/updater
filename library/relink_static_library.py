@@ -19,6 +19,11 @@ def main():
     parser.add_argument('-a', "--arch", default="arm64", help='The architecture to build for, e.g. "arm64"')
     args = parser.parse_args()
 
+    print("Relinking static library: " + args.input)
+    print("Architecture: " + args.arch)
+    print("Symbols file: " + args.symbols_file)
+    print("Output file: " + args.output)
+
     relink_static_library(args.input, args.symbols_file, args.output, args.arch)
 
 
@@ -41,3 +46,6 @@ def relink_static_library(library_path, symbols_file, output_path, arch):
             arch,
         ]
     )
+
+if __name__ == "__main__":
+    main()
