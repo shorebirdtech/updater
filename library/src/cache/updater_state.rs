@@ -261,14 +261,14 @@ impl UpdaterState {
     /// - There was no good patch at time of boot.
     /// - The updater has been initialized but no boot recorded yet.
     pub fn current_boot_patch(&self) -> Option<PatchInfo> {
-        self.patch_manager.get_current_patch()
+        self.patch_manager.last_successfully_booted_patch()
     }
 
     /// This is the patch that will be used for the next boot.
     /// Will be None if:
     /// - There has never been a patch selected.
     /// - There was a patch selected but it was later marked as bad.
-    pub fn next_boot_patch(&self) -> Option<PatchInfo> {
+    pub fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         self.patch_manager.get_next_boot_patch()
     }
 

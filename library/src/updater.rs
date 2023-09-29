@@ -352,7 +352,7 @@ where
 /// This may be changed any time `update()` or `start_update_thread()` are called.
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
-        let state =
+        let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
         Ok(state.next_boot_patch())
     })
