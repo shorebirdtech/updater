@@ -1,13 +1,16 @@
 //! Handles disk I/O in a thread-safe manner
 
 use anyhow::{bail, Context};
-use log::info;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::File,
     io::{BufReader, BufWriter},
     path::Path,
 };
+
+// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+#[cfg(test)]
+use std::println as debug; // Workaround to use println! for logs.
 
 pub fn write<S, P>(serializable: &S, path: &P) -> anyhow::Result<()>
 where
@@ -17,9 +20,7 @@ where
     let path_as_ref = path.as_ref();
     let containing_dir = path_as_ref
         .parent()
-        .context(format!("Failed to get parent dir for {:?}", path_as_ref))?;
-
-    info!("Creating dir {:?}", containing_dir);
+        .with_context(|| format!("Failed to get parent dir for {:?}", path_as_ref))?;
 
     // Because File::create can sometimes fail if the full directory path doesn't exist,
     // we create the directories in its path first.
@@ -31,7 +32,6 @@ where
     })?;
 
     let file = File::create(path).context(format!("File::create for {:?}", path_as_ref))?;
-    info!("Created file {:?} successfully", path_as_ref);
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, serializable)
         .context(format!("failed to serialize to {:?}", path_as_ref))
@@ -42,103 +42,63 @@ where
     D: DeserializeOwned,
     P: AsRef<Path>,
 {
-    info!("Reading from {:?}", path.as_ref());
+    debug!("Reading from {:?}", path.as_ref());
+
     let path_as_ref = path.as_ref();
-    if !Path::exists(path_as_ref) {
-        bail!(format!("File {} does not exist", path_as_ref.display()));
+    if !path_as_ref.exists() {
+        bail!("File {} does not exist", path_as_ref.display());
     }
 
     let file = File::open(path_as_ref)?;
-    info!("opened file {:?} successfully", path_as_ref);
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
         .context(format!("failed to deserialize from {:?}", &path_as_ref))
 }
-// /// Handles disk I/O in a thread-safe manner
-// use anyhow::{Context, Ok};
-// use serde::{de::DeserializeOwned, Serialize};
-// use std::{
-//     fs::File,
-//     io::{BufReader, BufWriter},
-//     path::{Path, PathBuf},
-// };
 
-// trait DiskManager {
-//     fn write<S>(&mut self, serializable: &S, file_path: &str) -> anyhow::Result<()>
-//     where
-//         S: ?Sized + Serialize;
+#[cfg(test)]
+mod test {
+    use std::path::Path;
 
-//     fn read<D>(&mut self, file_path: &str) -> anyhow::Result<D>
-//     where
-//         D: DeserializeOwned;
-// }
+    use serde::{Deserialize, Serialize};
+    use tempdir::TempDir;
 
-// struct DiskManagerImpl {
-//     // TODO: Implement this
-//     // paths_to_mutexes: HashMap<String, Mutex<String>>,
-//     root_dir: PathBuf,
-// }
+    use anyhow::{Ok, Result};
 
-// impl DiskManagerImpl {
-//     fn create_root_dir_if_needed(&self) -> anyhow::Result<()> {
-//         std::fs::create_dir_all(&self.root_dir)
-//             .with_context(|| format!("create_dir_all failed for {}", self.root_dir.display()))
-//     }
-// }
+    #[derive(Serialize, Deserialize, PartialEq, Eq)]
+    struct TestStruct {
+        a: u32,
+        b: String,
+    }
 
-// impl DiskManager for DiskManagerImpl {
-//     fn write<S>(&mut self, serializable: &S, file_path: &str) -> anyhow::Result<()>
-//     where
-//         S: ?Sized + Serialize,
-//     {
-//         self.create_root_dir_if_needed()?;
+    #[test]
+    fn writes_and_reads_serialized_object() -> Result<()> {
+        let test_struct = TestStruct {
+            a: 1,
+            b: "hello".to_string(),
+        };
+        let temp_dir = TempDir::new("test")?;
+        let path = temp_dir.path().join("test.json");
+        super::write(&test_struct, &path).unwrap();
+        let read_struct: TestStruct = super::read(&path).unwrap();
 
-//         let path = Path::new(&self.root_dir).join(file_path);
-//         let file = File::create(path).context(format!("File::create for {}", file_path))?;
-//         let writer = BufWriter::new(file);
-//         serde_json::to_writer_pretty(writer, serializable)
-//             .context(format!("failed to serialize to {}", file_path))
-//     }
+        assert!(test_struct == read_struct);
 
-//     fn read<D>(&mut self, file_path: &str) -> anyhow::Result<D>
-//     where
-//         D: DeserializeOwned,
-//     {
-//         self.create_root_dir_if_needed()?;
+        Ok(())
+    }
 
-//         let path = Path::new(&self.root_dir).join(file_path);
-//         let file = File::open(&path)?;
-//         let reader = BufReader::new(file);
-//         serde_json::from_reader(reader).context(format!("failed to deserialize from {:?}", &path))
-//     }
-// }
+    #[test]
+    fn read_errs_if_file_doesnt_exist() {
+        assert!(super::read::<TestStruct, _>(&Path::new("nonexistent.json")).is_err());
+    }
 
-// #[cfg(test)]
-// mod test {
-//     use serde::{Deserialize, Serialize};
+    #[test]
+    fn read_errs_if_struct_cannot_be_deserialized() -> Result<()> {
+        let temp_dir = TempDir::new("test")?;
+        let path = &temp_dir.path().join("test.json");
+        std::fs::write(path, "junk")?;
 
-//     use crate::cache::disk_manager::{DiskManager, DiskManagerImpl};
+        assert!(super::read::<TestStruct, _>(&path).is_err());
 
-//     #[derive(Serialize, Deserialize)]
-//     struct TestSerializable {
-//         test_string: String,
-//         test_int: u32,
-//     }
-
-//     #[test]
-//     fn reads_and_writes_to_file() -> anyhow::Result<()> {
-//         let mut disk_manager = DiskManagerImpl {
-//             root_dir: std::path::PathBuf::from("/tmp"),
-//         };
-//         let serializable = TestSerializable {
-//             test_string: "test".to_string(),
-//             test_int: 42,
-//         };
-//         assert!(disk_manager.write(&serializable, "test.json").is_ok());
-
-//         let deserialized = disk_manager.read::<TestSerializable>("test.json")?;
-//         assert_eq!(deserialized.test_string, serializable.test_string);
-//         assert_eq!(deserialized.test_int, serializable.test_int);
-//         Ok(())
-//     }
-// }
+        Ok(())
+    }
+}
