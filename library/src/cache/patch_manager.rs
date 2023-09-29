@@ -11,18 +11,6 @@ use std::{println as info, println as error}; // Workaround to use println! for 
 const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-enum PatchBootStatus {
-    /// We have successfully booted from this patch before.
-    Succeeded,
-
-    /// This patch has failed to boot before.
-    Failed,
-
-    /// We have not yet attempted to boot from this patch.
-    Unknown,
-}
-
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 struct PatchMetadata {
     number: usize,
