@@ -177,6 +177,42 @@ impl PatchManager {
         std::fs::remove_dir_all(&patch_dir)
             .with_context(|| format!("Failed to delete patch dir {}", &patch_dir.display()))
     }
+
+    /// Attempts to use the last successfully booted patch as the next boot patch. If the last successfully
+    /// booted patch is not bootable or has the same number as the patch we're falling back from, we clear it.
+    fn try_fall_back_to_last_booted_patch(&mut self) {
+        if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
+            // If we have a next_boot_patch that we're falling back from, delete its artifacts.
+            if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
+                error!(
+                    "Failed to delete patch artifacts for patch {}. Error: {}",
+                    next_boot_patch.number, e
+                );
+            }
+            self.patches_state.next_boot_patch = None;
+
+            if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
+                if last_boot_patch.number == next_boot_patch.number {
+                    // If the last booted patch is the same as the next boot patch, clear it.
+                    self.patches_state.last_booted_patch = None;
+                }
+            }
+        }
+
+        if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
+            if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
+                // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
+                self.patches_state.next_boot_patch = Some(last_boot_patch);
+            } else if let Err(e) = self.delete_patch_artifacts(last_boot_patch.number) {
+                // If the last booted patch is no longer bootable, delete its artifacts.
+                self.patches_state.last_booted_patch = None;
+                error!(
+                    "Failed to delete patch artifacts for patch {}. Error: {}",
+                    last_boot_patch.number, e
+                );
+            }
+        }
+    }
 }
 
 impl ManagePatches for PatchManager {
@@ -236,30 +272,8 @@ impl ManagePatches for PatchManager {
 
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
             error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
-            if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
-                error!(
-                    "Failed to delete patch artifacts for patch {}. Error: {}",
-                    next_boot_patch.number, e
-                );
-            }
-            self.patches_state.next_boot_patch = None;
 
-            if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
-                // If the last booted patch is the same as the next boot patch, clear it.
-                if last_boot_patch.number == next_boot_patch.number {
-                    if let Err(e) = self.delete_patch_artifacts(last_boot_patch.number) {
-                        error!(
-                            "Failed to delete patch artifacts for patch {}. Error: {}",
-                            next_boot_patch.number, e
-                        );
-                    }
-                    self.patches_state.last_booted_patch = None;
-                } else if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
-                    // If the last booted patch is different from the one we just decided not to boot
-                    // and we think we can still boot from it, set it as the next_boot_patch.
-                    self.patches_state.next_boot_patch = Some(last_boot_patch);
-                }
-            }
+            self.try_fall_back_to_last_booted_patch();
 
             if let Err(e) = self.save_patches_state() {
                 error!("Failed to save patches state: {}", e);
@@ -309,19 +323,8 @@ impl ManagePatches for PatchManager {
             );
         }
 
-        if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
-            error!(
-                "Failed to delete patch artifacts for patch {}. Error: {}",
-                patch_number, e
-            );
-        }
-        self.patches_state.next_boot_patch = None;
+        self.try_fall_back_to_last_booted_patch();
 
-        if let Some(current_patch) = self.patches_state.last_booted_patch {
-            if current_patch.number == patch_number {
-                self.patches_state.last_booted_patch = None;
-            }
-        }
         self.save_patches_state()
     }
 
@@ -514,6 +517,58 @@ mod get_next_boot_patch_tests {
 
         // The artifact should have been deleted.
         assert!(!&artifact_path.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn falls_back_to_last_booted_patch_if_still_bootable() -> Result<()> {
+        let patch_file_contents = "patch contents";
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, patch_file_contents)?;
+
+        // Add patch 1, pretend it booted successfully.
+        assert!(manager.add_patch(1, file_path).is_ok());
+        assert!(manager.record_boot_success_for_patch(1).is_ok());
+
+        // Add patch 2, pretend it failed to boot.
+        let file_path = &temp_dir.path().join("patch2.vmcode");
+        std::fs::write(file_path, patch_file_contents)?;
+        assert!(manager.add_patch(2, file_path).is_ok());
+        assert!(manager.record_boot_failure_for_patch(2).is_ok());
+
+        // Verify that we will next attempt to boot from patch 1.
+        assert_eq!(manager.get_next_boot_patch().unwrap().number, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_fall_back_to_last_booted_patch_if_corrupted() -> Result<()> {
+        let patch_file_contents = "patch contents";
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, patch_file_contents)?;
+
+        // Add patch 1, pretend it booted successfully.
+        assert!(manager.add_patch(1, file_path).is_ok());
+        assert!(manager.record_boot_success_for_patch(1).is_ok());
+
+        // Add patch 2, pretend it failed to boot.
+        let file_path = &temp_dir.path().join("patch2.vmcode");
+        std::fs::write(file_path, patch_file_contents)?;
+        assert!(manager.add_patch(2, file_path).is_ok());
+        assert!(manager.record_boot_failure_for_patch(2).is_ok());
+
+        // Write junk to patch 1's artifact. This should prevent us from falling back to it.
+        let patch_1_artifact_path = manager.patch_artifact_path(1);
+        std::fs::write(patch_1_artifact_path, "junk")?;
+
+        // Verify that we will not attempt to boot from either patch.
+        assert!(manager.get_next_boot_patch().is_none());
 
         Ok(())
     }
