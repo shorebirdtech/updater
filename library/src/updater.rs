@@ -375,14 +375,6 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     //   current is now "last successfully booted patch"
     //   next is now "patch to boot next"
 
-    // with_config(|config| {
-    //     let mut state =
-    //         UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-    //     // Validate that we have an installed patch.
-    //     // Make that patch the "booted" patch.
-    //     state.activate_current_patch()?;
-    //     state.save()
-    // })
     Ok(())
 }
 
@@ -390,19 +382,22 @@ pub fn report_launch_start() -> anyhow::Result<()> {
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
     info!("Reporting failed launch.");
+
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
 
+        // Attempting to get next_boot_patch might return None if the failure was due to
+        // the patch being altered on disk.
         let patch =
             state
-                .current_boot_patch()
+                .next_boot_patch()
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
-        let mark_result = state.mark_patch_as_bad(patch.number);
+        let mark_result = state.record_boot_failure_for_patch(patch.number);
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
@@ -417,13 +412,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         };
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
-        state.queue_event(event);
-        // TODO(eseidel): This does the actual save for the above mutations
-        // which is confusing.
-        // state
-        //     .activate_latest_bootable_patch()
-        //     .map_err(anyhow::Error::from)
-        Ok(())
+        state.queue_event(event)
     })
 }
 
@@ -441,16 +430,16 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             None => return Ok(()),
         };
 
+        // If we had previously booted from a patch and it has the same number as the
+        // patch we just booted from, then we don't need to do anything.
         if state
             .current_boot_patch()
             .is_some_and(|patch| patch.number == next_boot_patch.number)
         {
-            // If we had previously booted from a patch and it has the same number as the
-            // patch we just booted from, then we don't need to do anything.
             return Ok(());
         }
 
-        state.mark_patch_as_good(next_boot_patch.number)?;
+        state.record_boot_success_for_patch(next_boot_patch.number)?;
         let config_copy = config.clone();
         let client_id = state.client_id_or_default();
         std::thread::spawn(move || {
@@ -470,10 +459,6 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         });
 
         Ok(())
-
-        // state
-        //     .save()
-        //     .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
     })
 }
 
@@ -663,25 +648,30 @@ mod tests {
         // Pretend we booted from it.
         crate::report_launch_start().unwrap();
 
-        // TODO
-        // let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
-        // with_config(|config| {
-        //     let state =
-        //         UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        //     assert!(!state.is_known_good_patch(next_boot_patch.number));
-        //     Ok(())
-        // })
-        // .unwrap();
+        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
+        with_config(|config| {
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            assert_eq!(
+                state.next_boot_patch().unwrap().number,
+                next_boot_patch.number
+            );
+            Ok(())
+        })
+        .unwrap();
 
-        // super::report_launch_success().unwrap();
+        super::report_launch_success().unwrap();
 
-        // with_config(|config| {
-        //     let state =
-        //         UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        //     assert!(state.is_known_good_patch(next_boot_patch.number));
-        //     Ok(())
-        // })
-        // .unwrap();
+        with_config(|config| {
+            let state =
+                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            assert_eq!(
+                state.current_boot_patch().unwrap().number,
+                next_boot_patch.number
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[serial]
@@ -715,34 +705,36 @@ mod tests {
         // Pretend we booted from it.
         crate::report_launch_start().unwrap();
 
-        // TODO
-        // let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
-        // with_config(|config| {
-        //     let state =
-        //         UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        //     // It's not bad yet.
-        //     assert!(!state.is_known_bad_patch(next_boot_patch.number));
-        //     Ok(())
-        // })
-        // .unwrap();
+        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
+        with_config(|config| {
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            // It's not bad yet.
+            assert_eq!(
+                state.next_boot_patch().unwrap().number,
+                next_boot_patch.number
+            );
+            Ok(())
+        })
+        .unwrap();
 
-        // super::report_launch_failure().unwrap();
+        super::report_launch_failure().unwrap();
 
-        // with_config(|config| {
-        //     let state =
-        //         UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        //     // It's now bad.
-        //     assert!(state.is_known_bad_patch(next_boot_patch.number));
-        //     // And we've queued an event.
-        //     let events = state.copy_events(1);
-        //     assert_eq!(events.len(), 1);
-        //     assert_eq!(
-        //         events[0].identifier,
-        //         crate::events::EventType::PatchInstallFailure
-        //     );
-        //     Ok(())
-        // })
-        // .unwrap();
+        with_config(|config| {
+            let mut state =
+                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            // It's now bad.
+            assert!(state.next_boot_patch().is_none());
+            // And we've queued an event.
+            let events = state.copy_events(1);
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchInstallFailure
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[serial]
@@ -768,11 +760,11 @@ mod tests {
                 release_version: config.release_version.clone(),
             };
             // Queue 5 events.
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
             Ok(())
         })
         .unwrap();

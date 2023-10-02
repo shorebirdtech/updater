@@ -26,7 +26,7 @@ fn patches_events_url(base_url: &str) -> String {
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
-pub type PatchInstallSuccessFn = fn(&str, CreatePatchEventRequest) -> anyhow::Result<()>;
+pub type ReportEventFn = fn(&str, CreatePatchEventRequest) -> anyhow::Result<()>;
 
 /// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -36,7 +36,7 @@ pub struct NetworkHooks {
     /// The function to call to download a file.
     pub download_file_fn: DownloadFileFn,
     /// The function to call to report patch install success.
-    pub patch_install_success_fn: PatchInstallSuccessFn,
+    pub report_event_fn: ReportEventFn,
 }
 
 // We have to implement Debug by hand since fn types don't implement it.
@@ -45,7 +45,7 @@ impl core::fmt::Debug for NetworkHooks {
         f.debug_struct("NetworkHooks")
             .field("patch_check_request_fn", &"<fn>")
             .field("download_file_fn", &"<fn>")
-            .field("patch_install_success_fn", &"<fn>")
+            .field("report_event_fn", &"<fn>")
             .finish()
     }
 }
@@ -64,11 +64,8 @@ fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-pub fn patch_install_success_throws(
-    _url: &str,
-    _request: CreatePatchEventRequest,
-) -> anyhow::Result<()> {
-    bail!("please set a patch_install_success_fn");
+pub fn report_event_throws(_url: &str, _request: CreatePatchEventRequest) -> anyhow::Result<()> {
+    bail!("please set a report_event_fn");
 }
 
 impl Default for NetworkHooks {
@@ -77,7 +74,7 @@ impl Default for NetworkHooks {
         Self {
             patch_check_request_fn: patch_check_request_default,
             download_file_fn: download_file_default,
-            patch_install_success_fn: patch_install_success_default,
+            report_event_fn: report_event_default,
         }
     }
 
@@ -86,7 +83,7 @@ impl Default for NetworkHooks {
         Self {
             patch_check_request_fn: patch_check_request_throws,
             download_file_fn: download_file_throws,
-            patch_install_success_fn: patch_install_success_throws,
+            report_event_fn: report_event_throws,
         }
     }
 }
@@ -112,10 +109,7 @@ pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
-pub fn patch_install_success_default(
-    url: &str,
-    request: CreatePatchEventRequest,
-) -> anyhow::Result<()> {
+pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::new();
     let result = client.post(url).json(&request).send();
     handle_network_result(result)?;
@@ -156,14 +150,14 @@ fn handle_network_result(
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_file_fn: DownloadFileFn,
-    patch_install_success_fn: PatchInstallSuccessFn,
+    patch_install_success_fn: ReportEventFn,
 ) {
     crate::config::with_config_mut(|maybe_config| match maybe_config {
         Some(config) => {
             config.network_hooks = NetworkHooks {
                 patch_check_request_fn,
                 download_file_fn,
-                patch_install_success_fn,
+                report_event_fn: patch_install_success_fn,
             };
         }
         None => {
@@ -235,7 +229,7 @@ pub fn send_patch_check_request(
     config: &UpdateConfig,
     state: &UpdaterState,
 ) -> anyhow::Result<PatchCheckResponse> {
-    let latest_patch_number = state.latest_patch_number();
+    let latest_patch_number = state.latest_seen_patch_number();
 
     // Send the request to the server.
     let request = PatchCheckRequest {
@@ -262,7 +256,7 @@ pub fn send_patch_check_request(
 pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {
     let request = CreatePatchEventRequest { event };
 
-    let patch_install_success_fn = config.network_hooks.patch_install_success_fn;
+    let patch_install_success_fn = config.network_hooks.report_event_fn;
     let url = &patches_events_url(&config.base_url);
     patch_install_success_fn(url, request)
 }
@@ -366,7 +360,7 @@ mod tests {
         let debug = format!("{:?}", network_hooks);
         assert!(debug.contains("patch_check_request_fn"));
         assert!(debug.contains("download_file_fn"));
-        assert!(debug.contains("patch_install_success_fn"));
+        assert!(debug.contains("report_event_fn"));
     }
 
     #[test]
@@ -411,7 +405,7 @@ mod tests {
             release_version: "release_version".to_string(),
             identifier: EventType::PatchInstallSuccess,
         };
-        let result = super::patch_install_success_default(
+        let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
             // same error as a lack of internet connection.
             &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
@@ -425,7 +419,7 @@ mod tests {
 
     #[test]
     fn handle_network_result_unknown_error() {
-        let result = super::patch_install_success_default(
+        let result = super::report_event_default(
             // Make the request to an incorrectly formatted URL, which will
             // trigger the same error as a lack of internet connection.
             &patches_events_url("asdfasdf"),

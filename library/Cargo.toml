@@ -65,6 +65,7 @@ log-panics = { version = "2", features = ["with-backtrace"] }
 simple-logging = "2.0.2"
 
 [dev-dependencies]
+mockall = "0.11.4"
 # Gives #[serial] attribute for locking all of our shorebird_init
 # tests to a single thread so they don't conflict with each other.
 serial_test = "2.0.0"

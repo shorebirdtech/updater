@@ -4,6 +4,9 @@ use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use mockall::automock;
+
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
 use std::{println as info, println as error}; // Workaround to use println! for logs.
@@ -36,6 +39,7 @@ struct PatchesState {
 /// TBD whether this trait is actually needed or if we can just use the PatchManager
 /// struct directly. Having it would allow us to mock PatchManager, but it is (in theory)
 /// simple enough that we could just use the real thing.
+#[cfg_attr(test, automock)]
 pub trait ManagePatches {
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
@@ -100,15 +104,18 @@ impl PatchManager {
         disk_manager::write(&self.patches_state, &path)
     }
 
+    /// The directory where all patch artifacts are stored.
     fn patch_artifacts_dir(&self) -> PathBuf {
         self.root_dir.join(PATCHES_DIR_NAME)
     }
 
+    /// The directory where artifacts for the patch with the given number are stored.
     fn dir_for_patch_number(&self, patch_number: usize) -> PathBuf {
         self.patch_artifacts_dir().join(patch_number.to_string())
     }
 
-    /// Patch artifacts are stored in the patches directory, with the name <patch_number>.vmcode
+    /// The path to the runnable patch artifact with the given number. Runnable patch artifact files are
+    /// named <patch_number>.vmcode
     fn patch_artifact_path(&self, patch_number: usize) -> PathBuf {
         self.dir_for_patch_number(patch_number).join("dlc.vmcode")
     }
