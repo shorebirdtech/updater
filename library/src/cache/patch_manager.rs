@@ -216,13 +216,16 @@ impl PatchManager {
             if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
                 // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
                 self.patches_state.next_boot_patch = Some(last_boot_patch);
-            } else if let Err(e) = self.delete_patch_artifacts(last_boot_patch.number) {
-                // If the last booted patch is no longer bootable, delete its artifacts.
+            } else {
                 self.patches_state.last_booted_patch = None;
-                error!(
-                    "Failed to delete patch artifacts for patch {}. Error: {}",
-                    last_boot_patch.number, e
-                );
+
+                if let Err(e) = self.delete_patch_artifacts(last_boot_patch.number) {
+                    // If the last booted patch is no longer bootable, delete its artifacts.
+                    error!(
+                        "Failed to delete patch artifacts for patch {}. Error: {}",
+                        last_boot_patch.number, e
+                    );
+                }
             }
         }
     }
@@ -373,7 +376,7 @@ impl PatchManager {
 }
 
 #[cfg(test)]
-mod general_tests {
+mod debug_tests {
     use tempdir::TempDir;
 
     use super::PatchManager;
@@ -609,6 +612,105 @@ mod get_next_boot_patch_tests {
 
         // Verify that we will not attempt to boot from either patch.
         assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fall_back_tests {
+    use super::*;
+
+    #[test]
+    fn does_nothing_if_no_patch_exists() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        assert!(manager.patches_state.last_booted_patch.is_none());
+        assert!(manager.patches_state.next_boot_patch.is_none());
+
+        manager.try_fall_back_to_last_booted_patch();
+
+        assert!(manager.patches_state.last_booted_patch.is_none());
+        assert!(manager.patches_state.next_boot_patch.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn sets_next_patch_to_latest_patch_if_no_next_patch_exists() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        assert!(manager.patches_state.next_boot_patch.is_none());
+
+        manager.patches_state.last_booted_patch = Some(PatchMetadata { number: 1, size: 1 });
+        manager.try_fall_back_to_last_booted_patch();
+
+        assert_eq!(
+            manager.patches_state.next_boot_patch,
+            manager.patches_state.last_booted_patch
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sets_next_patch_to_latest_patch_if_both_are_present() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_success_for_patch(1)?;
+        manager.add_patch_for_test(&temp_dir, 2)?;
+
+        manager.try_fall_back_to_last_booted_patch();
+
+        assert_eq!(manager.patches_state.last_booted_patch.unwrap().number, 1);
+        assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn clears_next_and_last_patches_if_both_fail_validation() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_success_for_patch(1)?;
+        let patch_1_path = manager.patch_artifact_path(1);
+        std::fs::write(patch_1_path, "junkjunkjunk")?;
+
+        manager.add_patch_for_test(&temp_dir, 2)?;
+
+        manager.try_fall_back_to_last_booted_patch();
+
+        assert!(manager.patches_state.last_booted_patch.is_none());
+        assert!(manager.patches_state.next_boot_patch.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn succeeds_if_deleting_artifacts_fails() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_success_for_patch(1)?;
+
+        manager.add_patch_for_test(&temp_dir, 2)?;
+
+        let patch_dir = manager.patch_dir(1);
+        std::fs::remove_dir_all(patch_dir)?;
+        let patch_dir = manager.patch_dir(2);
+        std::fs::remove_dir_all(patch_dir)?;
+
+        manager.try_fall_back_to_last_booted_patch();
+
+        assert!(manager.patches_state.last_booted_patch.is_none());
+        assert!(manager.patches_state.next_boot_patch.is_none());
 
         Ok(())
     }
