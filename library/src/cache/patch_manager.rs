@@ -15,6 +15,7 @@ use std::{println as info, println as error}; // Workaround to use println! for 
 
 const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
+const PATCH_ARTIFACT_FILENAME: &str = "dlc.vmcode";
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 struct PatchMetadata {
@@ -131,19 +132,19 @@ impl PatchManager {
     }
 
     /// The directory where all patch artifacts are stored.
-    fn patch_artifacts_dir(&self) -> PathBuf {
+    fn patches_dir(&self) -> PathBuf {
         self.root_dir.join(PATCHES_DIR_NAME)
     }
 
     /// The directory where artifacts for the patch with the given number are stored.
-    fn dir_for_patch_number(&self, patch_number: usize) -> PathBuf {
-        self.patch_artifacts_dir().join(patch_number.to_string())
+    fn patch_dir(&self, patch_number: usize) -> PathBuf {
+        self.patches_dir().join(patch_number.to_string())
     }
 
     /// The path to the runnable patch artifact with the given number. Runnable patch artifact files are
     /// named <patch_number>.vmcode
     fn patch_artifact_path(&self, patch_number: usize) -> PathBuf {
-        self.dir_for_patch_number(patch_number).join("dlc.vmcode")
+        self.patch_dir(patch_number).join(PATCH_ARTIFACT_FILENAME)
     }
 
     fn patch_info_for_number(&self, patch_number: usize) -> PatchInfo {
@@ -184,7 +185,7 @@ impl PatchManager {
     fn delete_patch_artifacts(&mut self, patch_number: usize) -> Result<()> {
         info!("deleting patch artifacts for patch {}", patch_number);
 
-        let patch_dir = self.dir_for_patch_number(patch_number);
+        let patch_dir = self.patch_dir(patch_number);
 
         std::fs::remove_dir_all(&patch_dir)
             .with_context(|| format!("Failed to delete patch dir {}", &patch_dir.display()))
@@ -235,7 +236,7 @@ impl ManagePatches for PatchManager {
 
         let patch_path = self.patch_artifact_path(patch_number);
 
-        std::fs::create_dir_all(self.dir_for_patch_number(patch_number))
+        std::fs::create_dir_all(self.patch_dir(patch_number))
             .with_context(|| format!("create_dir_all failed for {}", patch_path.display()))?;
 
         std::fs::rename(file_path, &patch_path)?;
@@ -347,10 +348,10 @@ impl ManagePatches for PatchManager {
     fn reset(&mut self) -> Result<()> {
         self.patches_state = PatchesState::default();
         self.save_patches_state()?;
-        std::fs::remove_dir_all(self.patch_artifacts_dir()).with_context(|| {
+        std::fs::remove_dir_all(self.patches_dir()).with_context(|| {
             format!(
                 "Failed to delete patches dir {}",
-                self.patch_artifacts_dir().display()
+                self.patches_dir().display()
             )
         })
     }
@@ -734,7 +735,7 @@ mod reset_tests {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
-        let path_artifacts_dir = manager.patch_artifacts_dir();
+        let path_artifacts_dir = manager.patches_dir();
 
         // Make sure the directory and artifact files were created
         assert!(path_artifacts_dir.exists());
