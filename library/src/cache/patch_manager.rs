@@ -18,7 +18,10 @@ const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 struct PatchMetadata {
+    /// The number of the patch.
     number: usize,
+
+    /// The size of the patch artifact on disk.
     size: u64,
 }
 
@@ -68,17 +71,27 @@ pub trait ManagePatches {
     fn reset(&mut self) -> Result<()>;
 }
 
+// This allows us to use the Debug trait on dyn ManagePatches, which is
+// required to have it as a property of UpdaterState.
 impl Debug for dyn ManagePatches {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // This allows us to use the Debug trait on dyn ManagePatches, which is
-        // required to have it as a property of UpdaterState.
         write!(f, "ManagePatches")
     }
 }
 
 #[derive(Debug)]
 pub struct PatchManager {
+    /// The base directory used to store patch artifacts and state.
+    /// The directory structure created within this directory is:
+    ///  patches_state.json
+    ///  patches/
+    ///    <patch_number>/
+    ///      dlc.vmcode
+    ///    <patch_number>/
+    ///      dlc.vmcode
     root_dir: PathBuf,
+
+    /// Metadata about the patches we have downloaded that is persisted to disk.
     patches_state: PatchesState,
 }
 
@@ -326,6 +339,10 @@ impl ManagePatches for PatchManager {
 
 #[cfg(test)]
 impl PatchManager {
+    pub fn manager_for_test(temp_dir: &TempDir) -> PatchManager {
+        PatchManager::with_root_dir(temp_dir.path().to_owned())
+    }
+
     pub fn add_patch_for_test(&mut self, temp_dir: &TempDir, patch_number: usize) -> Result<()> {
         let file_path = &temp_dir
             .path()
@@ -336,29 +353,14 @@ impl PatchManager {
 }
 
 #[cfg(test)]
-mod tests_shared {
-    use tempdir::TempDir;
-
-    use super::*;
-
-    pub fn manager_for_test(temp_dir: &TempDir) -> PatchManager {
-        PatchManager::with_root_dir(temp_dir.path().to_owned())
-    }
-}
-
-#[cfg(test)]
 mod add_patch_tests {
-    use std::path::Path;
-
-    use tempdir::TempDir;
-
-    use crate::cache::patch_manager::tests_shared::manager_for_test;
-
     use super::*;
+    use std::path::Path;
+    use tempdir::TempDir;
 
     #[test]
     fn errs_if_file_path_does_not_exist() {
-        let mut manager = manager_for_test(&TempDir::new("patch_manager").unwrap());
+        let mut manager = PatchManager::manager_for_test(&TempDir::new("patch_manager").unwrap());
         assert!(manager
             .add_patch(1, Path::new("/path/to/file/that/does/not/exist"))
             .is_err());
@@ -394,7 +396,7 @@ mod add_patch_tests {
         let patch_file_contents = "patch contents";
 
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         assert!(manager.highest_seen_patch_number().is_none());
 
         // Add patch 1
@@ -421,16 +423,13 @@ mod add_patch_tests {
 
 #[cfg(test)]
 mod last_successfully_booted_patch_tests {
-    use tempdir::TempDir;
-
-    use crate::cache::patch_manager::tests_shared::manager_for_test;
-
     use super::*;
+    use tempdir::TempDir;
 
     #[test]
     fn returns_none_if_no_patch_has_been_booted() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         assert!(manager.last_successfully_booted_patch().is_none());
 
@@ -440,7 +439,7 @@ mod last_successfully_booted_patch_tests {
     #[test]
     fn returns_value_from_patches_state() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
 
         let expected = PatchInfo {
@@ -456,13 +455,9 @@ mod last_successfully_booted_patch_tests {
 
 #[cfg(test)]
 mod get_next_boot_patch_tests {
-    use tempdir::TempDir;
-
-    use crate::cache::patch_manager::tests_shared::manager_for_test;
-
     use super::*;
-
     use anyhow::Result;
+    use tempdir::TempDir;
 
     #[test]
     fn returns_none_if_no_next_boot_patch() {
@@ -474,7 +469,7 @@ mod get_next_boot_patch_tests {
     #[test]
     fn returns_none_if_next_boot_patch_is_not_bootable() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
 
         // Write junk to the artifact, this should render the patch unbootable in the eyes
@@ -522,10 +517,9 @@ mod get_next_boot_patch_tests {
 
 #[cfg(test)]
 mod record_boot_success_for_patch_tests {
+    use super::*;
     use anyhow::{Ok, Result};
     use tempdir::TempDir;
-
-    use super::*;
 
     #[test]
     fn errs_if_no_next_boot_patch() -> Result<()> {
@@ -569,15 +563,14 @@ mod record_boot_success_for_patch_tests {
 
 #[cfg(test)]
 mod record_boot_failure_for_patch_tests {
+    use super::*;
     use anyhow::{Ok, Result};
     use tempdir::TempDir;
-
-    use super::{tests_shared::manager_for_test, *};
 
     #[test]
     fn errs_if_no_next_boot_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         assert!(manager.record_boot_failure_for_patch(1).is_err());
 
         Ok(())
@@ -586,7 +579,7 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn errs_if_patch_number_does_not_match_next_boot_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
 
         assert!(manager.record_boot_failure_for_patch(2).is_err());
@@ -597,7 +590,7 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn deletes_failed_patch_artifacts() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         assert!(manager.record_boot_success_for_patch(1).is_ok());
         let succeeded_patch_artifact_path = manager.patch_artifact_path(1);
@@ -618,7 +611,7 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn clears_last_booted_patch_if_it_is_the_failed_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         let patch_artifact_path = manager.patch_artifact_path(1);
 
@@ -640,15 +633,14 @@ mod record_boot_failure_for_patch_tests {
 
 #[cfg(test)]
 mod highest_seen_patch_number_tests {
+    use super::*;
     use anyhow::{Ok, Result};
     use tempdir::TempDir;
-
-    use super::{tests_shared::manager_for_test, *};
 
     #[test]
     fn returns_value_from_internal_state() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         assert!(manager.patches_state.highest_seen_patch_number.is_none());
         assert!(manager.highest_seen_patch_number().is_none());
@@ -662,16 +654,14 @@ mod highest_seen_patch_number_tests {
 
 #[cfg(test)]
 mod reset_tests {
-    use tempdir::TempDir;
-
+    use super::*;
     use anyhow::{Ok, Result};
-
-    use super::{tests_shared::manager_for_test, *};
+    use tempdir::TempDir;
 
     #[test]
     fn deletes_patches_dir_and_resets_patches_state() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir);
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         let path_artifacts_dir = manager.patch_artifacts_dir();
 
