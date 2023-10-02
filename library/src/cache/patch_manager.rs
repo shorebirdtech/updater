@@ -244,16 +244,20 @@ impl ManagePatches for PatchManager {
             }
             self.patches_state.next_boot_patch = None;
 
-            // If a previously booted patch is the same as the next boot patch, clear it.
-            if let Some(current_patch) = self.patches_state.last_booted_patch {
-                if current_patch.number == next_boot_patch.number {
-                    if let Err(e) = self.delete_patch_artifacts(current_patch.number) {
+            if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
+                // If the last booted patch is the same as the next boot patch, clear it.
+                if last_boot_patch.number == next_boot_patch.number {
+                    if let Err(e) = self.delete_patch_artifacts(last_boot_patch.number) {
                         error!(
                             "Failed to delete patch artifacts for patch {}. Error: {}",
                             next_boot_patch.number, e
                         );
                     }
                     self.patches_state.last_booted_patch = None;
+                } else if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
+                    // If the last booted patch is different from the one we just decided not to boot
+                    // and we think we can still boot from it, set it as the next_boot_patch.
+                    self.patches_state.next_boot_patch = Some(last_boot_patch);
                 }
             }
 
