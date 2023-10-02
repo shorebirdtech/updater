@@ -15,6 +15,8 @@ where
     S: ?Sized + Serialize,
     P: AsRef<Path>,
 {
+    debug!("Writing to {:?}", path.as_ref());
+
     let path_as_ref = path.as_ref();
     let containing_dir = path_as_ref
         .parent()
