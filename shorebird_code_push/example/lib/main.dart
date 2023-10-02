@@ -18,7 +18,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Shorebird Code Push Demo',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
       home: const MyHomePage(title: 'Shorebird Code Push'),
@@ -132,7 +132,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _downloadUpdate() async {
     _showDownloadingBanner();
-    await _shorebirdCodePush.downloadUpdateIfAvailable();
+
+    await Future.wait([
+      _shorebirdCodePush.downloadUpdateIfAvailable(),
+      // Add an artificial delay so the banner has enough time to animate in.
+      Future<void>.delayed(const Duration(milliseconds: 1000)),
+    ]);
+
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
