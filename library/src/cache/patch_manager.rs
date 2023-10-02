@@ -183,7 +183,7 @@ impl PatchManager {
     }
 
     fn delete_patch_artifacts(&mut self, patch_number: usize) -> Result<()> {
-        info!("deleting patch artifacts for patch {}", patch_number);
+        info!("Deleting patch artifacts for patch {}", patch_number);
 
         let patch_dir = self.patch_dir(patch_number);
 
@@ -231,7 +231,7 @@ impl PatchManager {
 impl ManagePatches for PatchManager {
     fn add_patch(&mut self, patch_number: usize, file_path: &Path) -> Result<()> {
         if !file_path.exists() {
-            bail!("patch file {} does not exist", file_path.display());
+            bail!("Patch file {} does not exist", file_path.display());
         }
 
         let patch_path = self.patch_artifact_path(patch_number);
