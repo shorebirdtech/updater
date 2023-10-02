@@ -71,7 +71,9 @@ pub trait ManagePatches {
 
 impl Debug for dyn ManagePatches {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "TODO")
+        // This allows us to use the Debug trait on dyn ManagePatches, which is
+        // required to have it as a property of UpdaterState.
+        write!(f, "ManagePatches")
     }
 }
 
