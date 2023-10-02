@@ -136,7 +136,7 @@ class _MyHomePageState extends State<MyHomePage> {
     await Future.wait([
       _shorebirdCodePush.downloadUpdateIfAvailable(),
       // Add an artificial delay so the banner has enough time to animate in.
-      Future<void>.delayed(const Duration(milliseconds: 1000)),
+      Future<void>.delayed(const Duration(seconds: 1)),
     ]);
 
     if (!mounted) return;
