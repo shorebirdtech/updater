@@ -195,7 +195,7 @@ impl UpdaterState {
     /// - There has never been a patch selected.
     /// - There was a patch selected but it was later marked as bad.
     pub fn next_boot_patch(&mut self) -> Option<PatchInfo> {
-        self.patch_manager.get_next_boot_patch()
+        self.patch_manager.next_boot_patch()
     }
 
     /// Copies the patch file at file_path to the manager's directory structure sets
@@ -427,7 +427,7 @@ mod tests {
         let patch = fake_patch(&tmp_dir, patch_number);
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
-            .expect_get_next_boot_patch()
+            .expect_next_boot_patch()
             .return_const(Some(patch.clone()));
         let mut state = test_state(&tmp_dir, mock_manage_patches);
         assert_eq!(state.next_boot_patch(), Some(patch));

@@ -51,8 +51,10 @@ pub trait ManagePatches {
     /// or None if no patch is installed.
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo>;
 
-    /// Returns the next patch to boot, or None if no new patch has been downloaded.
-    fn get_next_boot_patch(&mut self) -> Option<PatchInfo>;
+    /// Returns the next patch to boot, or None if:
+    /// - no patches have been downloaded
+    /// - the patch on disk is not bootable
+    fn next_boot_patch(&mut self) -> Option<PatchInfo>;
 
     /// Records that the patch with number patch_number booted successfully and is
     /// safe to use for future boots.
@@ -264,7 +266,7 @@ impl ManagePatches for PatchManager {
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
-    fn get_next_boot_patch(&mut self) -> Option<PatchInfo> {
+    fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         let next_boot_patch = match self.patches_state.next_boot_patch {
             Some(patch) => patch,
             None => return None,
@@ -470,7 +472,7 @@ mod get_next_boot_patch_tests {
     fn returns_none_if_no_next_boot_patch() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
-        assert!(manager.get_next_boot_patch().is_none());
+        assert!(manager.next_boot_patch().is_none());
     }
 
     #[test]
@@ -484,7 +486,7 @@ mod get_next_boot_patch_tests {
         let artifact_path = manager.patch_artifact_path(1);
         std::fs::write(&artifact_path, "junk")?;
 
-        assert!(manager.get_next_boot_patch().is_none());
+        assert!(manager.next_boot_patch().is_none());
 
         // Ensure the internal state is cleared.
         assert_eq!(manager.patches_state.next_boot_patch, None);
@@ -509,7 +511,7 @@ mod get_next_boot_patch_tests {
         let artifact_path = manager.patch_artifact_path(1);
         std::fs::write(&artifact_path, "junk")?;
 
-        assert!(manager.get_next_boot_patch().is_none());
+        assert!(manager.next_boot_patch().is_none());
 
         // Ensure the internal state is cleared.
         assert_eq!(manager.patches_state.next_boot_patch, None);
@@ -540,7 +542,7 @@ mod get_next_boot_patch_tests {
         assert!(manager.record_boot_failure_for_patch(2).is_ok());
 
         // Verify that we will next attempt to boot from patch 1.
-        assert_eq!(manager.get_next_boot_patch().unwrap().number, 1);
+        assert_eq!(manager.next_boot_patch().unwrap().number, 1);
 
         Ok(())
     }
@@ -568,7 +570,7 @@ mod get_next_boot_patch_tests {
         std::fs::write(patch_1_artifact_path, "junk")?;
 
         // Verify that we will not attempt to boot from either patch.
-        assert!(manager.get_next_boot_patch().is_none());
+        assert!(manager.next_boot_patch().is_none());
 
         Ok(())
     }
@@ -677,13 +679,13 @@ mod record_boot_failure_for_patch_tests {
         // Pretend we booted from this patch
         assert!(manager.record_boot_success_for_patch(1).is_ok());
         assert_eq!(manager.last_successfully_booted_patch().unwrap().number, 1);
-        assert_eq!(manager.get_next_boot_patch().unwrap().number, 1);
+        assert_eq!(manager.next_boot_patch().unwrap().number, 1);
         assert!(patch_artifact_path.exists());
 
         // Now pretend it failed to boot
         assert!(manager.record_boot_failure_for_patch(1).is_ok());
         assert!(manager.last_successfully_booted_patch().is_none());
-        assert!(manager.get_next_boot_patch().is_none());
+        assert!(manager.next_boot_patch().is_none());
         assert!(!patch_artifact_path.exists());
 
         Ok(())
