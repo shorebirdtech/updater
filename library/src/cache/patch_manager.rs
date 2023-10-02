@@ -35,10 +35,7 @@ struct PatchesState {
     highest_seen_patch_number: Option<usize>,
 }
 
-/// Abstracts the patch file system structure
-/// TBD whether this trait is actually needed or if we can just use the PatchManager
-/// struct directly. Having it would allow us to mock PatchManager, but it is (in theory)
-/// simple enough that we could just use the real thing.
+/// Abstracts the process of managing patches.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
     /// Copies the patch file at file_path to the manager's directory structure sets
@@ -211,18 +208,34 @@ impl ManagePatches for PatchManager {
 
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
             error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
-            let _ = self.delete_patch_artifacts(next_boot_patch.number);
+            let _ = self
+                .delete_patch_artifacts(next_boot_patch.number)
+                .map_err(|e| {
+                    error!(
+                        "Failed to delete patch artifacts for patch {}. Error: {}",
+                        next_boot_patch.number, e
+                    );
+                });
             self.patches_state.next_boot_patch = None;
 
             // If a previously booted patch is the same as the next boot patch, clear it.
             if let Some(current_patch) = self.patches_state.last_booted_patch {
                 if current_patch.number == next_boot_patch.number {
-                    let _ = self.delete_patch_artifacts(current_patch.number);
+                    let _ = self
+                        .delete_patch_artifacts(current_patch.number)
+                        .map_err(|e| {
+                            error!(
+                                "Failed to delete patch artifacts for patch {}. Error: {}",
+                                next_boot_patch.number, e
+                            );
+                        });
                     self.patches_state.last_booted_patch = None;
                 }
             }
 
-            let _ = self.save_patches_state();
+            let _ = self.save_patches_state().map_err(|e| {
+                error!("Failed to save patches state: {}", e);
+            });
             return None;
         }
 
@@ -268,7 +281,14 @@ impl ManagePatches for PatchManager {
             );
         }
 
-        let _ = self.delete_patch_artifacts(next_boot_patch.number);
+        let _ = self
+            .delete_patch_artifacts(next_boot_patch.number)
+            .map_err(|e| {
+                error!(
+                    "Failed to delete patch artifacts for patch {}. Error: {}",
+                    patch_number, e
+                );
+            });
         self.patches_state.next_boot_patch = None;
 
         if let Some(current_patch) = self.patches_state.last_booted_patch {
