@@ -269,11 +269,13 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     prepare_for_install(&config, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
-    check_hash(&output_path, &patch.hash).context(format!(
-        "This app reports version {}, but the binary is different from \
+    check_hash(&output_path, &patch.hash).with_context(|| {
+        format!(
+            "This app reports version {}, but the binary is different from \
         the version {} that was submitted to Shorebird.",
-        config.release_version, config.release_version
-    ))?;
+            config.release_version, config.release_version
+        )
+    })?;
 
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from

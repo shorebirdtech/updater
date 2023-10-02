@@ -27,10 +27,10 @@ where
     std::fs::create_dir_all(containing_dir)
         .with_context(|| format!("Failed to create dir {:?}", path_as_ref))?;
 
-    let file = File::create(path).context(format!("File::create for {:?}", path_as_ref))?;
+    let file = File::create(path).with_context(|| format!("File::create for {:?}", path_as_ref))?;
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, serializable)
-        .context(format!("failed to serialize to {:?}", path_as_ref))
+        .with_context(|| format!("failed to serialize to {:?}", path_as_ref))
 }
 
 pub fn read<D, P>(path: &P) -> anyhow::Result<D>
@@ -48,7 +48,7 @@ where
     let file = File::open(path_as_ref)?;
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
-        .context(format!("failed to deserialize from {:?}", &path_as_ref))
+        .with_context(|| format!("failed to deserialize from {:?}", &path_as_ref))
 }
 
 #[cfg(test)]
