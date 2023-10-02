@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use mockall::automock;
+#[cfg(test)]
+use tempdir::TempDir;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
@@ -184,14 +186,17 @@ impl ManagePatches for PatchManager {
 
         // If a patch was never booted (next_boot_patch != last_booted_patch), we should delete
         // it here before setting next_boot_patch to the new patch.
-        if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
-            if next_boot_patch.number != patch_number {
-                let _ = self.delete_patch_artifacts(patch_number).map_err(|e| {
+        if let (Some(last_boot_patch), Some(next_boot_patch)) = (
+            self.patches_state.next_boot_patch,
+            self.patches_state.last_booted_patch,
+        ) {
+            if last_boot_patch.number != next_boot_patch.number {
+                if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
                     error!(
                         "Failed to delete patch artifacts for patch {}. Error: {}",
                         patch_number, e
                     );
-                });
+                }
             }
         }
 
@@ -218,34 +223,30 @@ impl ManagePatches for PatchManager {
 
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
             error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
-            let _ = self
-                .delete_patch_artifacts(next_boot_patch.number)
-                .map_err(|e| {
-                    error!(
-                        "Failed to delete patch artifacts for patch {}. Error: {}",
-                        next_boot_patch.number, e
-                    );
-                });
+            if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
+                error!(
+                    "Failed to delete patch artifacts for patch {}. Error: {}",
+                    next_boot_patch.number, e
+                );
+            }
             self.patches_state.next_boot_patch = None;
 
             // If a previously booted patch is the same as the next boot patch, clear it.
             if let Some(current_patch) = self.patches_state.last_booted_patch {
                 if current_patch.number == next_boot_patch.number {
-                    let _ = self
-                        .delete_patch_artifacts(current_patch.number)
-                        .map_err(|e| {
-                            error!(
-                                "Failed to delete patch artifacts for patch {}. Error: {}",
-                                next_boot_patch.number, e
-                            );
-                        });
+                    if let Err(e) = self.delete_patch_artifacts(current_patch.number) {
+                        error!(
+                            "Failed to delete patch artifacts for patch {}. Error: {}",
+                            next_boot_patch.number, e
+                        );
+                    }
                     self.patches_state.last_booted_patch = None;
                 }
             }
 
-            let _ = self.save_patches_state().map_err(|e| {
+            if let Err(e) = self.save_patches_state() {
                 error!("Failed to save patches state: {}", e);
-            });
+            }
             return None;
         }
 
@@ -291,14 +292,12 @@ impl ManagePatches for PatchManager {
             );
         }
 
-        let _ = self
-            .delete_patch_artifacts(next_boot_patch.number)
-            .map_err(|e| {
-                error!(
-                    "Failed to delete patch artifacts for patch {}. Error: {}",
-                    patch_number, e
-                );
-            });
+        if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
+            error!(
+                "Failed to delete patch artifacts for patch {}. Error: {}",
+                patch_number, e
+            );
+        }
         self.patches_state.next_boot_patch = None;
 
         if let Some(current_patch) = self.patches_state.last_booted_patch {
@@ -326,24 +325,24 @@ impl ManagePatches for PatchManager {
 }
 
 #[cfg(test)]
+impl PatchManager {
+    pub fn add_patch_for_test(&mut self, temp_dir: &TempDir, patch_number: usize) -> Result<()> {
+        let file_path = &temp_dir
+            .path()
+            .join(format!("patch{}.vmcode", patch_number));
+        std::fs::write(file_path, patch_number.to_string().repeat(patch_number)).unwrap();
+        self.add_patch(patch_number, file_path)
+    }
+}
+
+#[cfg(test)]
 mod tests_shared {
     use tempdir::TempDir;
 
     use super::*;
 
-    pub fn manager_for_test(temp_dir: &TempDir, number_of_patches: usize) -> PatchManager {
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
-
-        for patch_number in 1..=number_of_patches {
-            // Write
-            let file_path = &temp_dir
-                .path()
-                .join(format!("patch{}.vmcode", patch_number));
-            std::fs::write(file_path, patch_number.to_string().repeat(patch_number)).unwrap();
-            manager.add_patch(patch_number, file_path).unwrap();
-        }
-
-        manager
+    pub fn manager_for_test(temp_dir: &TempDir) -> PatchManager {
+        PatchManager::with_root_dir(temp_dir.path().to_owned())
     }
 }
 
@@ -359,7 +358,7 @@ mod add_patch_tests {
 
     #[test]
     fn errs_if_file_path_does_not_exist() {
-        let mut manager = manager_for_test(&TempDir::new("patch_manager").unwrap(), 0);
+        let mut manager = manager_for_test(&TempDir::new("patch_manager").unwrap());
         assert!(manager
             .add_patch(1, Path::new("/path/to/file/that/does/not/exist"))
             .is_err());
@@ -395,7 +394,7 @@ mod add_patch_tests {
         let patch_file_contents = "patch contents";
 
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 0);
+        let mut manager = manager_for_test(&temp_dir);
         assert!(manager.highest_seen_patch_number().is_none());
 
         // Add patch 1
@@ -429,14 +428,20 @@ mod last_successfully_booted_patch_tests {
     use super::*;
 
     #[test]
-    fn returns_none_if_no_patch_has_been_booted() {
-        let manager = manager_for_test(&TempDir::new("patch_manager").unwrap(), 1);
+    fn returns_none_if_no_patch_has_been_booted() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
         assert!(manager.last_successfully_booted_patch().is_none());
+
+        Ok(())
     }
 
     #[test]
-    fn returns_value_from_patches_state() {
-        let mut manager = manager_for_test(&TempDir::new("patch_manager").unwrap(), 1);
+    fn returns_value_from_patches_state() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
 
         let expected = PatchInfo {
             path: manager.patch_artifact_path(1),
@@ -444,6 +449,8 @@ mod last_successfully_booted_patch_tests {
         };
         manager.patches_state.last_booted_patch = manager.patches_state.next_boot_patch;
         assert_eq!(manager.last_successfully_booted_patch(), Some(expected));
+
+        Ok(())
     }
 }
 
@@ -467,7 +474,8 @@ mod get_next_boot_patch_tests {
     #[test]
     fn returns_none_if_next_boot_patch_is_not_bootable() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 1);
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
 
         // Write junk to the artifact, this should render the patch unbootable in the eyes
         // of the PatchManager.
@@ -569,7 +577,7 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn errs_if_no_next_boot_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 0);
+        let mut manager = manager_for_test(&temp_dir);
         assert!(manager.record_boot_failure_for_patch(1).is_err());
 
         Ok(())
@@ -578,7 +586,8 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn errs_if_patch_number_does_not_match_next_boot_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 1);
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
 
         assert!(manager.record_boot_failure_for_patch(2).is_err());
 
@@ -588,8 +597,12 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn deletes_failed_patch_artifacts() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 2);
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        assert!(manager.record_boot_success_for_patch(1).is_ok());
         let succeeded_patch_artifact_path = manager.patch_artifact_path(1);
+
+        manager.add_patch_for_test(&temp_dir, 2)?;
         let failed_patch_artifact_path = manager.patch_artifact_path(2);
 
         // Make sure patch artifacts exist
@@ -605,7 +618,8 @@ mod record_boot_failure_for_patch_tests {
     #[test]
     fn clears_last_booted_patch_if_it_is_the_failed_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 1);
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
         let patch_artifact_path = manager.patch_artifact_path(1);
 
         // Pretend we booted from this patch
@@ -634,7 +648,7 @@ mod highest_seen_patch_number_tests {
     #[test]
     fn returns_value_from_internal_state() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 0);
+        let mut manager = manager_for_test(&temp_dir);
 
         assert!(manager.patches_state.highest_seen_patch_number.is_none());
         assert!(manager.highest_seen_patch_number().is_none());
@@ -657,12 +671,13 @@ mod reset_tests {
     #[test]
     fn deletes_patches_dir_and_resets_patches_state() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = manager_for_test(&temp_dir, 3);
+        let mut manager = manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
         let path_artifacts_dir = manager.patch_artifacts_dir();
 
         // Make sure the directory and artifact files were created
         assert!(path_artifacts_dir.exists());
-        assert_eq!(std::fs::read_dir(&path_artifacts_dir).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(&path_artifacts_dir).unwrap().count(), 1);
 
         assert!(manager.reset().is_ok());
 
