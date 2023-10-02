@@ -1,5 +1,5 @@
 use super::{disk_io, PatchInfo};
-use anyhow::{bail, Context, Ok, Result};
+use anyhow::{bail, Context, Result};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -112,7 +112,17 @@ impl PatchManager {
 
     fn load_patches_state(root_dir: &Path) -> Option<PatchesState> {
         let path = root_dir.join(PATCHES_STATE_FILE_NAME);
-        disk_io::read(&path).ok()
+        match disk_io::read(&path) {
+            Ok(maybe_state) => maybe_state,
+            Err(e) => {
+                error!(
+                    "Failed to load patches state from {}: {}",
+                    path.display(),
+                    e
+                );
+                None
+            }
+        }
     }
 
     fn save_patches_state(&self) -> Result<()> {
