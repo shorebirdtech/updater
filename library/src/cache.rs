@@ -1,4 +1,4 @@
-mod disk_manager;
+mod disk_io;
 mod patch_manager;
 pub mod updater_state;
 

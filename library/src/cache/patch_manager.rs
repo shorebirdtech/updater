@@ -1,4 +1,4 @@
-use super::{disk_manager, PatchInfo};
+use super::{disk_io, PatchInfo};
 use anyhow::{bail, Context, Ok, Result};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
@@ -96,12 +96,12 @@ impl PatchManager {
 
     fn load_patches_state(root_dir: &Path) -> Option<PatchesState> {
         let path = root_dir.join(PATCHES_STATE_FILE_NAME);
-        disk_manager::read(&path).ok()
+        disk_io::read(&path).ok()
     }
 
     fn save_patches_state(&self) -> Result<()> {
         let path = self.root_dir.join(PATCHES_STATE_FILE_NAME);
-        disk_manager::write(&self.patches_state, &path)
+        disk_io::write(&self.patches_state, &path)
     }
 
     /// The directory where all patch artifacts are stored.

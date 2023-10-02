@@ -17,7 +17,7 @@ use crate::events::PatchEvent;
 use std::{println as info, println as warn}; // Workaround to use println! for logs.
 
 use super::patch_manager::{ManagePatches, PatchManager};
-use super::{disk_manager, PatchInfo};
+use super::{disk_io, PatchInfo};
 
 /// Where the updater state is stored on disk.
 const STATE_FILE_NAME: &str = "state.json";
@@ -92,7 +92,7 @@ impl UpdaterState {
     /// Loads UpdaterState from disk
     fn load(cache_dir: &Path) -> anyhow::Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
-        let serialized_state = disk_manager::read(&path)?;
+        let serialized_state = disk_io::read(&path)?;
         let mut state = UpdaterState {
             cache_dir: cache_dir.to_path_buf(),
             patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.to_path_buf())),
@@ -154,7 +154,7 @@ impl UpdaterState {
     /// Saves the updater state to disk.
     pub fn save(&self) -> anyhow::Result<()> {
         let path = Path::new(&self.cache_dir).join(STATE_FILE_NAME);
-        disk_manager::write(&self.serialized_state, &path)
+        disk_io::write(&self.serialized_state, &path)
     }
 }
 

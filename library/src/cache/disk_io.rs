@@ -1,5 +1,3 @@
-//! Handles disk I/O in a thread-safe manner
-
 use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
