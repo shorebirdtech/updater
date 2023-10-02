@@ -182,8 +182,18 @@ impl ManagePatches for PatchManager {
             size: std::fs::metadata(&patch_path)?.len(),
         };
 
-        // TODO(bryanoltman): if a patch was never booted (next_boot_patch != last_booted_patch),
-        // we should delete it here before setting next_boot_patch to the new patch.
+        // If a patch was never booted (next_boot_patch != last_booted_patch), we should delete
+        // it here before setting next_boot_patch to the new patch.
+        if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
+            if next_boot_patch.number != patch_number {
+                let _ = self.delete_patch_artifacts(patch_number).map_err(|e| {
+                    error!(
+                        "Failed to delete patch artifacts for patch {}. Error: {}",
+                        patch_number, e
+                    );
+                });
+            }
+        }
 
         self.patches_state.next_boot_patch = Some(new_patch);
         self.patches_state.highest_seen_patch_number = self
