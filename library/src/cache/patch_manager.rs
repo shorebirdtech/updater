@@ -373,6 +373,33 @@ impl PatchManager {
 }
 
 #[cfg(test)]
+mod general_tests {
+    use tempdir::TempDir;
+
+    use super::PatchManager;
+
+    #[test]
+    fn manage_patches_is_debug() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let patch_manager: Box<dyn super::ManagePatches> = Box::new(
+            super::PatchManager::with_root_dir(temp_dir.path().to_owned()),
+        );
+        assert_eq!(format!("{:?}", patch_manager), "ManagePatches");
+    }
+
+    #[test]
+    fn patch_manager_is_debug() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let patch_manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let expected_str = format!(
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, next_boot_patch: None, highest_seen_patch_number: None }} }}",
+            temp_dir.path().display()
+        );
+        assert_eq!(format!("{:?}", patch_manager), expected_str);
+    }
+}
+
+#[cfg(test)]
 mod add_patch_tests {
     use super::*;
     use std::path::Path;
@@ -613,6 +640,9 @@ mod record_boot_success_for_patch_tests {
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
         assert!(manager.add_patch(patch_number, file_path).is_ok());
+        assert!(manager
+            .record_boot_success_for_patch(patch_number + 1)
+            .is_err());
 
         Ok(())
     }
