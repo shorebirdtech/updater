@@ -24,12 +24,8 @@ where
 
     // Because File::create can sometimes fail if the full directory path doesn't exist,
     // we create the directories in its path first.
-    std::fs::create_dir_all(containing_dir).with_context(|| {
-        format!(
-            "Failed to create root dir {:?} when initializing PatchManager",
-            path_as_ref
-        )
-    })?;
+    std::fs::create_dir_all(containing_dir)
+        .with_context(|| format!("Failed to create dir {:?}", path_as_ref))?;
 
     let file = File::create(path).context(format!("File::create for {:?}", path_as_ref))?;
     let writer = BufWriter::new(file);
