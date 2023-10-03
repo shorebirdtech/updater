@@ -432,15 +432,18 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             None => return Ok(()),
         };
 
+        let maybe_previous_boot_patch = state.current_boot_patch();
+
         state.record_boot_success_for_patch(next_boot_patch.number)?;
 
-        // If we had previously booted from a patch and it has the same number as the
-        // patch we just booted from, then we don't need to do anything.
-        if state
-            .current_boot_patch()
-            .is_some_and(|patch| patch.number == next_boot_patch.number)
+        if let (Some(previous_boot_patch), Some(current_boot_patch)) =
+            (maybe_previous_boot_patch, state.current_boot_patch())
         {
-            return Ok(());
+            // If we had previously booted from a patch and it has the same number as the
+            // patch we just booted from, then we don't need to do anything.
+            if previous_boot_patch.number == current_boot_patch.number {
+                return Ok(());
+            }
         }
 
         let config_copy = config.clone();
