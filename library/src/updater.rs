@@ -432,6 +432,8 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             None => return Ok(()),
         };
 
+        state.record_boot_success_for_patch(next_boot_patch.number)?;
+
         // If we had previously booted from a patch and it has the same number as the
         // patch we just booted from, then we don't need to do anything.
         if state
@@ -441,7 +443,6 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        state.record_boot_success_for_patch(next_boot_patch.number)?;
         let config_copy = config.clone();
         let client_id = state.client_id_or_default();
         std::thread::spawn(move || {

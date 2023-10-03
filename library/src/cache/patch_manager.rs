@@ -318,7 +318,10 @@ impl ManagePatches for PatchManager {
         }
 
         if let Some(current_patch) = self.patches_state.last_booted_patch {
-            self.delete_patch_artifacts(current_patch.number)?;
+            if current_patch.number != patch_number {
+                // If we now have a new last_booted_patch, delete the old one's artifacts.
+                self.delete_patch_artifacts(current_patch.number)?;
+            }
         }
 
         self.patches_state.last_booted_patch = Some(next_boot_patch);
@@ -760,6 +763,41 @@ mod record_boot_success_for_patch_tests {
         assert!(manager.add_patch(patch_number, file_path).is_ok());
 
         assert!(manager.record_boot_success_for_patch(patch_number).is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_calls_to_record_success_succeed() -> Result<()> {
+        let patch_number = 1;
+        let patch_file_contents = "patch contents";
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, patch_file_contents)?;
+
+        // Add the patch, make sure it has an artifact.
+        assert!(manager.add_patch(patch_number, file_path).is_ok());
+        let patch_artifact_path = manager.patch_artifact_path(patch_number);
+        assert!(patch_artifact_path.exists());
+
+        // Record success, make sure the artifact still exists.
+        assert!(manager.record_boot_success_for_patch(patch_number).is_ok());
+        assert_eq!(
+            manager.last_successfully_booted_patch().unwrap().number,
+            patch_number
+        );
+        assert_eq!(manager.next_boot_patch().unwrap().number, patch_number);
+        assert!(patch_artifact_path.exists());
+
+        // Record another success, make sure the artifact still exists.
+        assert!(manager.record_boot_success_for_patch(patch_number).is_ok());
+        assert_eq!(
+            manager.last_successfully_booted_patch().unwrap().number,
+            patch_number
+        );
+        assert_eq!(manager.next_boot_patch().unwrap().number, patch_number);
+        assert!(patch_artifact_path.exists());
 
         Ok(())
     }
