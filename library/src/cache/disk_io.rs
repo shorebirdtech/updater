@@ -74,8 +74,8 @@ mod test {
         };
         let temp_dir = TempDir::new("test")?;
         let path = temp_dir.path().join("test.json");
-        super::write(&test_struct, &path).unwrap();
-        let read_struct: TestStruct = super::read(&path).unwrap();
+        super::write(&test_struct, &path)?;
+        let read_struct: TestStruct = super::read(&path)?;
 
         assert!(test_struct == read_struct);
 
