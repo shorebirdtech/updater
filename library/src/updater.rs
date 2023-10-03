@@ -269,11 +269,13 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     prepare_for_install(&config, &download_path, &output_path)?;
 
     // Check the hash before moving into place.
-    check_hash(&output_path, &patch.hash).context(format!(
-        "This app reports version {}, but the binary is different from \
+    check_hash(&output_path, &patch.hash).with_context(|| {
+        format!(
+            "This app reports version {}, but the binary is different from \
         the version {} that was submitted to Shorebird.",
-        config.release_version, config.release_version
-    ))?;
+            config.release_version, config.release_version
+        )
+    })?;
 
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
@@ -352,7 +354,7 @@ where
 /// This may be changed any time `update()` or `start_update_thread()` are called.
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
-        let state =
+        let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
         Ok(state.next_boot_patch())
     })
@@ -370,33 +372,34 @@ pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
-    with_config(|config| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        // Validate that we have an installed patch.
-        // Make that patch the "booted" patch.
-        state.activate_current_patch()?;
-        state.save()
-    })
+    // We previously set the "current" patch the value of the "next" patch, but no longer
+    // do so because the semantics have changed:
+    //   current is now "last successfully booted patch"
+    //   next is now "patch to boot next"
+
+    Ok(())
 }
 
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
     info!("Reporting failed launch.");
+
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
 
+        // Attempting to get next_boot_patch might return None if the failure was due to
+        // the patch being altered on disk.
         let patch =
             state
-                .current_boot_patch()
+                .next_boot_patch()
                 .ok_or(anyhow::Error::from(UpdateError::InvalidState(
                     "No current patch".to_string(),
                 )))?;
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
-        let mark_result = state.mark_patch_as_bad(patch.number);
+        let mark_result = state.record_boot_failure_for_patch(patch.number);
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
@@ -411,51 +414,57 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         };
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
-        state.queue_event(event);
-        // TODO(eseidel): This does the actual save for the above mutations
-        // which is confusing.
-        state
-            .activate_latest_bootable_patch()
-            .map_err(anyhow::Error::from)
+        state.queue_event(event)
     })
 }
 
 pub fn report_launch_success() -> anyhow::Result<()> {
     with_config(|config| {
+        // We can tell the UpdaterState that we have successfully booted from the "next" patch
+        // and make that the "current" patch.
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
 
-        if let Some(patch) = state.current_boot_patch() {
-            if !state.is_known_good_patch(patch.number) {
-                // Ignore the error here, we'll try to activate the next best patch
-                // even if we fail to mark this one as good.
-                if state.mark_patch_as_good(patch.number).is_ok() {
-                    let config_copy = config.clone();
-                    let client_id = state.client_id_or_default();
-                    std::thread::spawn(move || {
-                        let event = PatchEvent {
-                            app_id: config_copy.app_id.clone(),
-                            arch: current_arch().to_string(),
-                            client_id,
-                            patch_number: patch.number,
-                            platform: current_platform().to_string(),
-                            release_version: config_copy.release_version.clone(),
-                            identifier: EventType::PatchInstallSuccess,
-                        };
-                        let report_result = crate::network::send_patch_event(event, &config_copy);
-                        if let Err(err) = report_result {
-                            error!("Failed to report successful patch install: {:?}", err);
-                        }
-                    });
-                }
-            }
+        let next_boot_patch = match state.next_boot_patch() {
+            Some(patch) => patch,
 
-            state
-                .save()
-                .map_err(|_| anyhow::Error::from(UpdateError::FailedToSaveState))
-        } else {
-            Ok(())
+            // We didn't boot from a patch, so there's nothing to do.
+            None => return Ok(()),
+        };
+
+        let maybe_previous_boot_patch = state.current_boot_patch();
+
+        state.record_boot_success_for_patch(next_boot_patch.number)?;
+
+        if let (Some(previous_boot_patch), Some(current_boot_patch)) =
+            (maybe_previous_boot_patch, state.current_boot_patch())
+        {
+            // If we had previously booted from a patch and it has the same number as the
+            // patch we just booted from, then we shouldn't report a patch install.
+            if previous_boot_patch.number == current_boot_patch.number {
+                return Ok(());
+            }
         }
+
+        let config_copy = config.clone();
+        let client_id = state.client_id_or_default();
+        std::thread::spawn(move || {
+            let event = PatchEvent {
+                app_id: config_copy.app_id.clone(),
+                arch: current_arch().to_string(),
+                client_id,
+                patch_number: next_boot_patch.number,
+                platform: current_platform().to_string(),
+                release_version: config_copy.release_version.clone(),
+                identifier: EventType::PatchInstallSuccess,
+            };
+            let report_result = crate::network::send_patch_event(event, &config_copy);
+            if let Err(err) = report_result {
+                error!("Failed to report successful patch install: {:?}", err);
+            }
+        });
+
+        Ok(())
     })
 }
 
@@ -647,9 +656,12 @@ mod tests {
 
         let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
         with_config(|config| {
-            let state =
+            let mut state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-            assert!(!state.is_known_good_patch(next_boot_patch.number));
+            assert_eq!(
+                state.next_boot_patch().unwrap().number,
+                next_boot_patch.number
+            );
             Ok(())
         })
         .unwrap();
@@ -659,7 +671,10 @@ mod tests {
         with_config(|config| {
             let state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-            assert!(state.is_known_good_patch(next_boot_patch.number));
+            assert_eq!(
+                state.current_boot_patch().unwrap().number,
+                next_boot_patch.number
+            );
             Ok(())
         })
         .unwrap();
@@ -698,10 +713,13 @@ mod tests {
 
         let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
         with_config(|config| {
-            let state =
+            let mut state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
             // It's not bad yet.
-            assert!(!state.is_known_bad_patch(next_boot_patch.number));
+            assert_eq!(
+                state.next_boot_patch().unwrap().number,
+                next_boot_patch.number
+            );
             Ok(())
         })
         .unwrap();
@@ -709,10 +727,10 @@ mod tests {
         super::report_launch_failure().unwrap();
 
         with_config(|config| {
-            let state =
+            let mut state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
             // It's now bad.
-            assert!(state.is_known_bad_patch(next_boot_patch.number));
+            assert!(state.next_boot_patch().is_none());
             // And we've queued an event.
             let events = state.copy_events(1);
             assert_eq!(events.len(), 1);
@@ -748,11 +766,11 @@ mod tests {
                 release_version: config.release_version.clone(),
             };
             // Queue 5 events.
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
-            state.queue_event(fail_event.clone());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
+            assert!(state.queue_event(fail_event.clone()).is_ok());
             Ok(())
         })
         .unwrap();
