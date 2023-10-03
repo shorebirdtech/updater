@@ -440,7 +440,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             (maybe_previous_boot_patch, state.current_boot_patch())
         {
             // If we had previously booted from a patch and it has the same number as the
-            // patch we just booted from, then we don't need to do anything.
+            // patch we just booted from, then we shouldn't report a patch install.
             if previous_boot_patch.number == current_boot_patch.number {
                 return Ok(());
             }
