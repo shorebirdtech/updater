@@ -188,6 +188,10 @@ impl PatchManager {
         let patch_dir = self.patch_dir(patch_number);
 
         std::fs::remove_dir_all(&patch_dir)
+            .map_err(|e| {
+                error!("Failed to delete patch dir {}: {}", patch_dir.display(), e);
+                e
+            })
             .with_context(|| format!("Failed to delete patch dir {}", &patch_dir.display()))
     }
 
@@ -196,12 +200,7 @@ impl PatchManager {
     fn try_fall_back_to_last_booted_patch(&mut self) {
         if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
             // If we have a next_boot_patch that we're falling back from, delete its artifacts.
-            if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
-                error!(
-                    "Failed to delete patch artifacts for patch {}. Error: {}",
-                    next_boot_patch.number, e
-                );
-            }
+            let _ = self.delete_patch_artifacts(next_boot_patch.number);
             self.patches_state.next_boot_patch = None;
 
             if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
@@ -218,14 +217,7 @@ impl PatchManager {
                 self.patches_state.next_boot_patch = Some(last_boot_patch);
             } else {
                 self.patches_state.last_booted_patch = None;
-
-                if let Err(e) = self.delete_patch_artifacts(last_boot_patch.number) {
-                    // If the last booted patch is no longer bootable, delete its artifacts.
-                    error!(
-                        "Failed to delete patch artifacts for patch {}. Error: {}",
-                        last_boot_patch.number, e
-                    );
-                }
+                let _ = self.delete_patch_artifacts(last_boot_patch.number);
             }
         }
     }
@@ -256,12 +248,7 @@ impl ManagePatches for PatchManager {
             self.patches_state.last_booted_patch,
         ) {
             if last_boot_patch.number != next_boot_patch.number {
-                if let Err(e) = self.delete_patch_artifacts(next_boot_patch.number) {
-                    error!(
-                        "Failed to delete patch artifacts for patch {}. Error: {}",
-                        patch_number, e
-                    );
-                }
+                let _ = self.delete_patch_artifacts(next_boot_patch.number);
             }
         }
 
@@ -320,7 +307,7 @@ impl ManagePatches for PatchManager {
         if let Some(current_patch) = self.patches_state.last_booted_patch {
             if current_patch.number != patch_number {
                 // If we now have a new last_booted_patch, delete the old one's artifacts.
-                self.delete_patch_artifacts(current_patch.number)?;
+                let _ = self.delete_patch_artifacts(current_patch.number);
             }
         }
 
