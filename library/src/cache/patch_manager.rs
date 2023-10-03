@@ -533,7 +533,7 @@ mod get_next_boot_patch_tests {
         assert!(manager.next_boot_patch().is_none());
 
         // Ensure the internal state is cleared.
-        assert_eq!(manager.patches_state.next_boot_patch, None);
+        assert!(manager.patches_state.next_boot_patch.is_none());
 
         // The artifact should have been deleted.
         assert!(!&artifact_path.exists());
@@ -558,8 +558,8 @@ mod get_next_boot_patch_tests {
         assert!(manager.next_boot_patch().is_none());
 
         // Ensure the internal state is cleared.
-        assert_eq!(manager.patches_state.next_boot_patch, None);
-        assert_eq!(manager.patches_state.last_booted_patch, None);
+        assert!(manager.patches_state.next_boot_patch.is_none());
+        assert!(manager.patches_state.last_booted_patch.is_none());
 
         // The artifact should have been deleted.
         assert!(!&artifact_path.exists());
