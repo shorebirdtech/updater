@@ -150,14 +150,14 @@ fn handle_network_result(
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_file_fn: DownloadFileFn,
-    patch_install_success_fn: ReportEventFn,
+    report_event_fn: ReportEventFn,
 ) {
     crate::config::with_config_mut(|maybe_config| match maybe_config {
         Some(config) => {
             config.network_hooks = NetworkHooks {
                 patch_check_request_fn,
                 download_file_fn,
-                report_event_fn: patch_install_success_fn,
+                report_event_fn,
             };
         }
         None => {
@@ -256,9 +256,9 @@ pub fn send_patch_check_request(
 pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {
     let request = CreatePatchEventRequest { event };
 
-    let patch_install_success_fn = config.network_hooks.report_event_fn;
+    let report_event_fn = config.network_hooks.report_event_fn;
     let url = &patches_events_url(&config.base_url);
-    patch_install_success_fn(url, request)
+    report_event_fn(url, request)
 }
 
 pub fn download_to_path(
