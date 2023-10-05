@@ -11,7 +11,7 @@ use tempdir::TempDir;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as error}; // Workaround to use println! for logs.
+use std::{println as info, println as error, println as debug}; // Workaround to use println! for logs.
 
 const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
@@ -116,7 +116,7 @@ impl PatchManager {
         match disk_io::read(&path) {
             Ok(maybe_state) => maybe_state,
             Err(e) => {
-                error!(
+                debug!(
                     "Failed to load patches state from {}: {}",
                     path.display(),
                     e
