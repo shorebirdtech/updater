@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
+// <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
 use std::println as debug; // Workaround to use println! for logs.
 
@@ -73,7 +73,7 @@ fn android_arch_names() -> &'static ArchNames {
         apk_split: "armeabi_v7a", // e.g. base-armeabi_v7a.apk
         lib_dir: "armeabi-v7a",   // e.g. lib/armeabi-v7a/libapp.so
     };
-    return &ARCH;
+    &ARCH
 }
 
 // This is public so c_api can use this for testing.
@@ -102,7 +102,7 @@ fn check_for_lib_path(zip_path: &Path, lib_path: &str) -> anyhow::Result<ZipLoca
             internal_path: lib_path.to_owned(),
         });
     }
-    return Err(anyhow::anyhow!("Library not found in APK"));
+    Err(anyhow::anyhow!("Library not found in APK"))
 }
 
 /// Given a directory of APKs, find the one that contains the library we want.
@@ -150,7 +150,7 @@ fn find_and_open_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<ZipLocat
     // If we failed to find a split, assume the base.apk contains the library.
     let base_apk_path = apks_dir.join("base.apk");
     debug!("Checking base APK: {:?}", base_apk_path);
-    return check_for_lib_path(&base_apk_path, &lib_path);
+    check_for_lib_path(&base_apk_path, &lib_path)
 }
 
 /// Given a directory of APKs, find the one that contains the library we want.
@@ -184,9 +184,7 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
     Ok(Cursor::new(buffer))
 }
 
-pub fn libapp_path_from_settings(
-    original_libapp_paths: &Vec<String>,
-) -> Result<PathBuf, UpdateError> {
+pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but
     // may not be true in the future.  Better would be for the engine to
@@ -239,7 +237,7 @@ mod tests {
 
         // Write an empty file (invalid apk) to the base apk.
         let base_apk_path = tmp_dir.path().join("base.apk");
-        std::fs::File::create(&base_apk_path).unwrap();
+        std::fs::File::create(base_apk_path).unwrap();
         let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
         assert_eq!(error.to_string(), "invalid Zip archive: Invalid zip header");
 

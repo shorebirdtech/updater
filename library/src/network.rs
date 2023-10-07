@@ -1,7 +1,7 @@
 // This file's job is to deal with the update_server and network side
 // of the updater library.
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
@@ -10,22 +10,23 @@ use std::string::ToString;
 
 use crate::cache::UpdaterState;
 use crate::config::{current_arch, current_platform, UpdateConfig};
+use crate::events::PatchEvent;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
+use std::{println as info, println as debug}; // Workaround to use println! for logs.
 
 fn patches_check_url(base_url: &str) -> String {
-    return format!("{}/api/v1/patches/check", base_url);
+    format!("{base_url}/api/v1/patches/check")
 }
 
 fn patches_events_url(base_url: &str) -> String {
-    return format!("{}/api/v1/patches/events", base_url);
+    format!("{base_url}/api/v1/patches/events")
 }
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
 pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
-pub type PatchInstallSuccessFn = fn(&str, CreatePatchInstallEventRequest) -> anyhow::Result<()>;
+pub type ReportEventFn = fn(&str, CreatePatchEventRequest) -> anyhow::Result<()>;
 
 /// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -35,7 +36,7 @@ pub struct NetworkHooks {
     /// The function to call to download a file.
     pub download_file_fn: DownloadFileFn,
     /// The function to call to report patch install success.
-    pub patch_install_success_fn: PatchInstallSuccessFn,
+    pub report_event_fn: ReportEventFn,
 }
 
 // We have to implement Debug by hand since fn types don't implement it.
@@ -44,7 +45,7 @@ impl core::fmt::Debug for NetworkHooks {
         f.debug_struct("NetworkHooks")
             .field("patch_check_request_fn", &"<fn>")
             .field("download_file_fn", &"<fn>")
-            .field("patch_install_success_fn", &"<fn>")
+            .field("report_event_fn", &"<fn>")
             .finish()
     }
 }
@@ -63,11 +64,8 @@ fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-pub fn patch_install_success_throws(
-    _url: &str,
-    _request: CreatePatchInstallEventRequest,
-) -> anyhow::Result<()> {
-    bail!("please set a patch_install_success_fn");
+pub fn report_event_throws(_url: &str, _request: CreatePatchEventRequest) -> anyhow::Result<()> {
+    bail!("please set a report_event_fn");
 }
 
 impl Default for NetworkHooks {
@@ -76,7 +74,7 @@ impl Default for NetworkHooks {
         Self {
             patch_check_request_fn: patch_check_request_default,
             download_file_fn: download_file_default,
-            patch_install_success_fn: patch_install_success_default,
+            report_event_fn: report_event_default,
         }
     }
 
@@ -85,7 +83,7 @@ impl Default for NetworkHooks {
         Self {
             patch_check_request_fn: patch_check_request_throws,
             download_file_fn: download_file_throws,
-            patch_install_success_fn: patch_install_success_throws,
+            report_event_fn: report_event_throws,
         }
     }
 }
@@ -111,10 +109,7 @@ pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
-pub fn patch_install_success_default(
-    url: &str,
-    request: CreatePatchInstallEventRequest,
-) -> anyhow::Result<()> {
+pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::new();
     let result = client.post(url).json(&request).send();
     handle_network_result(result)?;
@@ -132,7 +127,7 @@ fn handle_network_result(
     match result {
         Ok(response) => {
             if response.status().is_success() {
-                return Ok(response);
+                Ok(response)
             } else {
                 bail!("Request failed with status: {}", response.status())
             }
@@ -155,14 +150,14 @@ fn handle_network_result(
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_file_fn: DownloadFileFn,
-    patch_install_success_fn: PatchInstallSuccessFn,
+    report_event_fn: ReportEventFn,
 ) {
     crate::config::with_config_mut(|maybe_config| match maybe_config {
         Some(config) => {
             config.network_hooks = NetworkHooks {
                 patch_check_request_fn,
                 download_file_fn,
-                patch_install_success_fn,
+                report_event_fn,
             };
         }
         None => {
@@ -183,17 +178,29 @@ pub struct Patch {
     pub download_url: String,
 }
 
+/// Any edits to this struct should be made carefully and in accordance
+/// with our privacy policy:
+/// <https://docs.shorebird.dev/privacy>
+/// The request body for the patch check endpoint.
 #[derive(Debug, Serialize)]
 pub struct PatchCheckRequest {
     /// The Shorebird app_id built into the shorebird.yaml in the app.
+    /// app_ids are unique to each app and are used to identify the app
+    /// within Shorebird's system (similar to a bundle identifier).  They
+    /// are not secret and are safe to share publicly.
+    /// <https://docs.shorebird.dev/concepts>
     pub app_id: String,
     /// The Shorebird channel built into the shorebird.yaml in the app.
+    /// This is not currently used, but intended for future use to allow
+    /// staged rollouts of patches.
     pub channel: String,
     /// The release version from AndroidManifest.xml, Info.plist in the app.
+    /// This is used to identify the version of the app that the client is
+    /// running.  Patches are keyed to release versions and will only be
+    /// offered to clients running the same release version.
     pub release_version: String,
     /// The latest patch number that the client has downloaded.
     /// Not necessarily the one it's running (if some have been marked bad).
-    /// We could rename this to be more clear.    
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch_number: Option<usize>,
     /// Platform (e.g. "android", "ios", "windows", "macos", "linux").
@@ -202,60 +209,13 @@ pub struct PatchCheckRequest {
     pub arch: String,
 }
 
-/// An event that is sent to the server when a patch is successfully installed.
-#[derive(Debug, Serialize)]
-pub struct PatchInstallEvent {
-    /// The Shorebird app_id built into the shorebird.yaml in the app.
-    pub app_id: String,
-
-    /// The architecture we're running (e.g. "aarch64", "x86", "x86_64").
-    pub arch: String,
-
-    /// The unique ID of this device.
-    pub client_id: String,
-
-    /// The identifier of this event.
-    #[serde(rename = "type")]
-    pub identifier: String,
-
-    /// The patch number that was installed.
-    pub patch_number: usize,
-
-    /// The platform we're running on (e.g. "android", "ios", "windows", "macos", "linux").
-    pub platform: String,
-
-    /// The release version from AndroidManifest.xml, Info.plist in the app.
-    pub release_version: String,
-}
-
-impl PatchInstallEvent {
-    pub fn new(
-        app_id: String,
-        arch: String,
-        client_id: String,
-        patch_number: usize,
-        platform: String,
-        release_version: String,
-    ) -> Self {
-        Self {
-            app_id,
-            arch,
-            client_id,
-            identifier: "__patch_install__".to_string(),
-            patch_number,
-            platform,
-            release_version,
-        }
-    }
-}
-
 /// The request body for the create patch install event endpoint.
 ///
 /// We may want to consider making this more generic if/when we add more events
-/// using something like https://github.com/dtolnay/typetag.
+/// using something like <https://github.com/dtolnay/typetag>.
 #[derive(Debug, Serialize)]
-pub struct CreatePatchInstallEventRequest {
-    event: PatchInstallEvent,
+pub struct CreatePatchEventRequest {
+    event: PatchEvent,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,7 +229,7 @@ pub fn send_patch_check_request(
     config: &UpdateConfig,
     state: &UpdaterState,
 ) -> anyhow::Result<PatchCheckResponse> {
-    let latest_patch_number = state.latest_patch_number();
+    let latest_patch_number = state.latest_seen_patch_number();
 
     // Send the request to the server.
     let request = PatchCheckRequest {
@@ -280,33 +240,25 @@ pub fn send_patch_check_request(
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     };
-    debug!("Sending patch check request: {:?}", request);
+    // Dumping the request should be info! since we direct users to look for it
+    // in the logs: https://docs.shorebird.dev/troubleshooting#how-to-fix-it-1
+    // Another option would be to make verbosity configurable via a key
+    // in shorebird.yaml.
+    info!("Sending patch check request: {:?}", request);
     let url = &patches_check_url(&config.base_url);
     let patch_check_request_fn = config.network_hooks.patch_check_request_fn;
     let response = patch_check_request_fn(url, request)?;
 
     debug!("Patch check response: {:?}", response);
-    return Ok(response);
+    Ok(response)
 }
 
-pub fn report_successful_patch_install(
-    config: &UpdateConfig,
-    client_id: String,
-    patch_number: usize,
-) -> anyhow::Result<()> {
-    let event = PatchInstallEvent::new(
-        config.app_id.clone(),
-        current_arch().to_string(),
-        client_id,
-        patch_number,
-        current_platform().to_string(),
-        config.release_version.clone(),
-    );
-    let request = CreatePatchInstallEventRequest { event };
+pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {
+    let request = CreatePatchEventRequest { event };
 
-    let patch_install_success_fn = config.network_hooks.patch_install_success_fn;
+    let report_event_fn = config.network_hooks.report_event_fn;
     let url = &patches_events_url(&config.base_url);
-    patch_install_success_fn(url, request)
+    report_event_fn(url, request)
 }
 
 pub fn download_to_path(
@@ -317,16 +269,17 @@ pub fn download_to_path(
     debug!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
     let download_file_hook = network_hooks.download_file_fn;
-    let mut bytes = download_file_hook(url)?;
+    let bytes = download_file_hook(url)?;
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
         debug!("Creating download directory: {:?}", parent);
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all failed for {}", parent.display()))?;
     }
 
     debug!("Writing download to: {:?}", path);
     let mut file = File::create(path)?;
-    file.write_all(&mut bytes)?;
+    file.write_all(&bytes)?;
     Ok(())
 }
 
@@ -334,43 +287,44 @@ pub fn download_to_path(
 mod tests {
     use crate::network::PatchCheckResponse;
 
-    use super::{patches_events_url, PatchInstallEvent};
+    use super::{patches_events_url, PatchEvent};
+    use crate::events::EventType;
 
     #[test]
     fn check_patch_request_response_deserialization() {
-        let data = r###"
+        let data = r#"
     {
         "patch_available": true,
         "patch": {
             "number": 1,
             "download_url": "https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode",
-            "hash": "#"
+            "hash": "1234"
         }
-    }"###;
+    }"#;
 
         let response: PatchCheckResponse = serde_json::from_str(data).unwrap();
 
-        assert!(response.patch_available == true);
+        assert!(response.patch_available);
         assert!(response.patch.is_some());
 
         let patch = response.patch.unwrap();
         assert_eq!(patch.number, 1);
         assert_eq!(patch.download_url, "https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode");
-        assert_eq!(patch.hash, "#");
+        assert_eq!(patch.hash, "1234");
     }
 
     #[test]
     fn create_patch_install_event_request_serializes() {
-        let request = super::CreatePatchInstallEventRequest {
-            event: super::PatchInstallEvent::new(
-                "app_id".to_string(),
-                "arch".to_string(),
-                "client_id".to_string(),
-                1,
-                "platform".to_string(),
-                "release_version".to_string(),
-            ),
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            arch: "arch".to_string(),
+            client_id: "client_id".to_string(),
+            patch_number: 1,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: EventType::PatchInstallSuccess,
         };
+        let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
@@ -406,7 +360,7 @@ mod tests {
         let debug = format!("{:?}", network_hooks);
         assert!(debug.contains("patch_check_request_fn"));
         assert!(debug.contains("download_file_fn"));
-        assert!(debug.contains("patch_install_success_fn"));
+        assert!(debug.contains("report_event_fn"));
     }
 
     #[test]
@@ -442,20 +396,20 @@ mod tests {
 
     #[test]
     fn handle_network_result_no_internet() {
-        let result = super::patch_install_success_default(
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            arch: "arch".to_string(),
+            client_id: "client_id".to_string(),
+            patch_number: 2,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: EventType::PatchInstallSuccess,
+        };
+        let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
             // same error as a lack of internet connection.
             &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
-            super::CreatePatchInstallEventRequest {
-                event: PatchInstallEvent::new(
-                    "app_id".to_string(),
-                    "arch".to_string(),
-                    "client_id".to_string(),
-                    2,
-                    "platform".to_string(),
-                    "release_version".to_string(),
-                ),
-            },
+            super::CreatePatchEventRequest { event },
         );
 
         assert!(result.is_err());
@@ -465,19 +419,20 @@ mod tests {
 
     #[test]
     fn handle_network_result_unknown_error() {
-        let result = super::patch_install_success_default(
+        let result = super::report_event_default(
             // Make the request to an incorrectly formatted URL, which will
             // trigger the same error as a lack of internet connection.
             &patches_events_url("asdfasdf"),
-            super::CreatePatchInstallEventRequest {
-                event: PatchInstallEvent::new(
-                    "app_id".to_string(),
-                    "arch".to_string(),
-                    "client_id".to_string(),
-                    2,
-                    "platform".to_string(),
-                    "release_version".to_string(),
-                ),
+            super::CreatePatchEventRequest {
+                event: PatchEvent {
+                    app_id: "app_id".to_string(),
+                    arch: "arch".to_string(),
+                    client_id: "client_id".to_string(),
+                    patch_number: 2,
+                    platform: "platform".to_string(),
+                    release_version: "release_version".to_string(),
+                    identifier: EventType::PatchInstallSuccess,
+                },
             },
         );
 

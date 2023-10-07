@@ -25,7 +25,21 @@ runs:
         cargo install cargo-llvm-cov
         cargo llvm-cov --lcov --output-path lcov.info
     
+    # Per https://stackoverflow.com/questions/73402042/github-action-expressions-split-string
+    - name: Split package name
+      env:
+        PACKAGE_PATH: ${{ inputs.working_directory}}
+      id: split
+      shell: ${{ inputs.shell }}
+      run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
+
     - name: Upload Coverage
       uses: codecov/codecov-action@v3
       with:
+        # We use Codecov's carryforward flags to allow our PR testing to only
+        # run affected packages, but also allow our coverage information from
+        # past runs to "carry forward" on a "per flag" basis.  We tag coverage
+        # information with "flags" explaining what directory the coverage is from.
+        # https://docs.codecov.com/docs/carryforward-flags
+        flags: ${{ steps.split.outputs.package_name }}
         token: ${{ inputs.codecov_token }}

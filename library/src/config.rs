@@ -16,9 +16,9 @@ use std::println as debug; // Workaround to use println! for logs.
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
 /// cbindgen:ignore
-const DEFAULT_BASE_URL: &'static str = "https://api.shorebird.dev";
+const DEFAULT_BASE_URL: &str = "https://api.shorebird.dev";
 /// cbindgen:ignore
-const DEFAULT_CHANNEL: &'static str = "stable";
+const DEFAULT_CHANNEL: &str = "stable";
 
 fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
     static INSTANCE: OnceCell<Mutex<Option<UpdateConfig>>> = OnceCell::new();
@@ -41,7 +41,7 @@ where
     F: FnOnce(&UpdateConfig) -> anyhow::Result<R>,
 {
     match maybe_config {
-        Some(config) => f(&config),
+        Some(config) => f(config),
         None => anyhow::bail!(UpdateError::ConfigNotInitialized),
     }
 }
@@ -71,7 +71,7 @@ where
 // The config passed into init.  This is immutable once set and copyable.
 #[derive(Debug, Clone)]
 pub struct UpdateConfig {
-    pub cache_dir: PathBuf,
+    pub storage_dir: PathBuf,
     pub download_dir: PathBuf,
     pub auto_update: bool,
     pub channel: String,
@@ -85,19 +85,19 @@ pub struct UpdateConfig {
 pub fn set_config(
     app_config: AppConfig,
     libapp_path: PathBuf,
-    yaml: YamlConfig,
+    yaml: &YamlConfig,
     network_hooks: NetworkHooks,
 ) -> anyhow::Result<()> {
     with_config_mut(|config| {
         anyhow::ensure!(config.is_none(), "shorebird_init has already been called.");
 
-        let mut cache_path = std::path::PathBuf::from(&app_config.cache_dir);
-        cache_path.push("downloads");
-        let download_dir = cache_path;
+        let mut code_cache_path = std::path::PathBuf::from(&app_config.code_cache_dir);
+        code_cache_path.push("downloads");
+        let download_dir = code_cache_path;
 
         let new_config = UpdateConfig {
-            cache_dir: std::path::PathBuf::from(app_config.cache_dir),
-            download_dir: download_dir,
+            storage_dir: std::path::PathBuf::from(app_config.app_storage_dir),
+            download_dir,
             channel: yaml
                 .channel
                 .as_deref()
@@ -131,7 +131,7 @@ pub fn current_arch() -> &'static str {
     static ARCH: &str = "aarch64";
     #[cfg(target_arch = "arm")]
     static ARCH: &str = "arm";
-    return ARCH;
+    ARCH
 }
 
 pub fn current_platform() -> &'static str {
@@ -145,5 +145,5 @@ pub fn current_platform() -> &'static str {
     static PLATFORM: &str = "android";
     #[cfg(target_os = "ios")]
     static PLATFORM: &str = "ios";
-    return PLATFORM;
+    PLATFORM
 }
