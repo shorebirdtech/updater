@@ -61,7 +61,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final isUpdateAvailable = await shorebirdCodePush.isNewPatchAvailableForDownload();
 
     if (isUpdateAvailable) {
-      // Download a new patch.
+      // Download the new patch if it's available.
       await shorebirdCodePush.downloadUpdateIfAvailable();
     }
   }
