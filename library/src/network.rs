@@ -50,26 +50,7 @@ impl core::fmt::Debug for NetworkHooks {
     }
 }
 
-#[cfg(test)]
-fn patch_check_request_throws(
-    _url: &str,
-    _request: PatchCheckRequest,
-) -> anyhow::Result<PatchCheckResponse> {
-    bail!("please set a patch_check_request_fn");
-}
-
-#[cfg(test)]
-fn download_file_throws(_url: &str) -> anyhow::Result<Vec<u8>> {
-    bail!("please set a download_file_fn");
-}
-
-#[cfg(test)]
-pub fn report_event_throws(_url: &str, _request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    bail!("please set a report_event_fn");
-}
-
 impl Default for NetworkHooks {
-    #[cfg(not(test))]
     fn default() -> Self {
         Self {
             patch_check_request_fn: patch_check_request_default,
@@ -77,18 +58,8 @@ impl Default for NetworkHooks {
             report_event_fn: report_event_default,
         }
     }
-
-    #[cfg(test)]
-    fn default() -> Self {
-        Self {
-            patch_check_request_fn: patch_check_request_throws,
-            download_file_fn: download_file_throws,
-            report_event_fn: report_event_throws,
-        }
-    }
 }
 
-#[cfg(not(test))]
 pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
@@ -99,7 +70,6 @@ pub fn patch_check_request_default(
     Ok(response)
 }
 
-#[cfg(not(test))]
 pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     let client = reqwest::blocking::Client::new();
     let result = client.get(url).send();
@@ -166,7 +136,7 @@ pub fn testing_set_network_hooks(
     });
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Patch {
     /// The patch number.  Starts at 1 for each new release and increases
     /// monotonically.
@@ -218,7 +188,7 @@ pub struct CreatePatchEventRequest {
     event: PatchEvent,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PatchCheckResponse {
     pub patch_available: bool,
     #[serde(default)]
