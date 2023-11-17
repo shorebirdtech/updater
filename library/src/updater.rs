@@ -493,9 +493,14 @@ mod tests {
 
     use crate::config::testing_reset_config;
 
-    fn init_for_testing(tmp_dir: &TempDir) {
+    fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
         testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        let mut yaml = "app_id: 1234".to_string();
+        if let Some(url) = base_url {
+            yaml += &format!("\nbase_url: {}", url);
+        }
+
         crate::init(
             crate::AppConfig {
                 app_storage_dir: cache_dir.clone(),
@@ -503,7 +508,7 @@ mod tests {
                 release_version: "1.0.0+1".to_string(),
                 original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
             },
-            "app_id: 1234",
+            &yaml,
         )
         .unwrap();
     }
@@ -512,7 +517,7 @@ mod tests {
     #[test]
     fn ignore_version_after_marked_bad() {
         let tmp_dir = TempDir::new("example").unwrap();
-        init_for_testing(&tmp_dir);
+        init_for_testing(&tmp_dir, None);
 
         use crate::cache::{PatchInfo, UpdaterState};
         use crate::config::with_config;
@@ -612,7 +617,7 @@ mod tests {
     #[test]
     fn report_launch_result_with_no_current_patch() {
         let tmp_dir = TempDir::new("example").unwrap();
-        init_for_testing(&tmp_dir);
+        init_for_testing(&tmp_dir, None);
         assert_eq!(
             crate::report_launch_failure()
                 .unwrap_err()
@@ -629,7 +634,7 @@ mod tests {
         use crate::cache::{PatchInfo, UpdaterState};
         use crate::config::with_config;
         let tmp_dir = TempDir::new("example").unwrap();
-        init_for_testing(&tmp_dir);
+        init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
         with_config(|config| {
@@ -686,7 +691,7 @@ mod tests {
         use crate::cache::{PatchInfo, UpdaterState};
         use crate::config::with_config;
         let tmp_dir = TempDir::new("example").unwrap();
-        init_for_testing(&tmp_dir);
+        init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
         with_config(|config| {
@@ -749,9 +754,25 @@ mod tests {
         use crate::cache::UpdaterState;
         use crate::config::{current_arch, current_platform, with_config};
         use crate::events::{EventType, PatchEvent};
-        use crate::network::{testing_set_network_hooks, PatchCheckResponse};
+        use crate::network::PatchCheckResponse;
+        let check_response = PatchCheckResponse {
+            patch_available: false,
+            patch: None,
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+
+        let mut server = mockito::Server::new();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let event_mock = server
+            .mock("POST", "/api/v1/patches/events")
+            .with_status(201)
+            .create();
         let tmp_dir = TempDir::new("example").unwrap();
-        init_for_testing(&tmp_dir);
+        init_for_testing(&tmp_dir, Some(&server.url()));
 
         with_config(|config| {
             let mut state =
@@ -775,31 +796,9 @@ mod tests {
         })
         .unwrap();
 
-        // TODO(eseidel): Count the number of events sent.
-        // let mut event_call_count = 0;
-        // set up the network hooks to return a patch.
-        testing_set_network_hooks(
-            |_url, _request| {
-                Ok(PatchCheckResponse {
-                    patch_available: false,
-                    patch: None,
-                })
-            },
-            |_url| {
-                // Never called.
-                Ok(Vec::new())
-            },
-            // I can't actually count the number of times this is called
-            // without making this a closure, or refactoring NetworkHooks
-            // to be a trait.
-            |_url, _event| {
-                // event_call_count += 1;
-                Ok(())
-            },
-        );
         super::update().unwrap();
         // Only 3 events should have been sent.
-        // assert_eq!(event_call_count, 3);
+        event_mock.expect(3);
 
         with_config(|config| {
             let state =

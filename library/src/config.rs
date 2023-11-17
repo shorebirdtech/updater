@@ -16,7 +16,13 @@ use std::println as debug; // Workaround to use println! for logs.
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
 /// cbindgen:ignore
+#[cfg(test)]
+const DEFAULT_BASE_URL: &str = "DEFAULT_BASE_URL should be mocked using mockito::Server";
+
+/// cbindgen:ignore
+#[cfg(not(test))]
 const DEFAULT_BASE_URL: &str = "https://api.shorebird.dev";
+
 /// cbindgen:ignore
 const DEFAULT_CHANNEL: &str = "stable";
 
