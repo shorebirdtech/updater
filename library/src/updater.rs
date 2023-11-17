@@ -755,13 +755,13 @@ mod tests {
         use crate::config::{current_arch, current_platform, with_config};
         use crate::events::{EventType, PatchEvent};
         use crate::network::PatchCheckResponse;
+
+        let mut server = mockito::Server::new();
         let check_response = PatchCheckResponse {
             patch_available: false,
             patch: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
-
-        let mut server = mockito::Server::new();
         let _ = server
             .mock("POST", "/api/v1/patches/check")
             .with_status(200)
