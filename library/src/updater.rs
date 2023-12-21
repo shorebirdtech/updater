@@ -406,7 +406,6 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         let event = PatchEvent {
             app_id: config.app_id.clone(),
             arch: current_arch().to_string(),
-            client_id: state.client_id_or_default(),
             identifier: EventType::PatchInstallFailure,
             patch_number: patch.number,
             platform: current_platform().to_string(),
@@ -447,12 +446,10 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         }
 
         let config_copy = config.clone();
-        let client_id = state.client_id_or_default();
         std::thread::spawn(move || {
             let event = PatchEvent {
                 app_id: config_copy.app_id.clone(),
                 arch: current_arch().to_string(),
-                client_id,
                 patch_number: next_boot_patch.number,
                 platform: current_platform().to_string(),
                 release_version: config_copy.release_version.clone(),
@@ -780,7 +777,6 @@ mod tests {
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
                 arch: current_arch().to_string(),
-                client_id: state.client_id_or_default(),
                 identifier: EventType::PatchInstallFailure,
                 patch_number: 1,
                 platform: current_platform().to_string(),
