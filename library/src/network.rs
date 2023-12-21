@@ -288,7 +288,6 @@ mod tests {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
             arch: "arch".to_string(),
-            client_id: "client_id".to_string(),
             patch_number: 1,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
@@ -298,7 +297,7 @@ mod tests {
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
-            r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version"}}"#
+            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version"}}"#
         )
     }
 
@@ -369,7 +368,6 @@ mod tests {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
             arch: "arch".to_string(),
-            client_id: "client_id".to_string(),
             patch_number: 2,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
@@ -397,7 +395,6 @@ mod tests {
                 event: PatchEvent {
                     app_id: "app_id".to_string(),
                     arch: "arch".to_string(),
-                    client_id: "client_id".to_string(),
                     patch_number: 2,
                     platform: "platform".to_string(),
                     release_version: "release_version".to_string(),

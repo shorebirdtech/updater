@@ -48,9 +48,6 @@ pub struct UpdaterState {
 /// Written out to disk as a json file at STATE_FILE_NAME.
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
-    /// The client ID for this device.
-    pub client_id: Option<String>,
-
     // Per-release state:
     /// The release version this cache corresponds to.
     /// If this does not match the release version we're booting from we will
@@ -70,19 +67,14 @@ fn is_file_not_found(error: &anyhow::Error) -> bool {
     false
 }
 
-fn generate_client_id() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
 /// Lifecycle methods for the updater state.
 impl UpdaterState {
-    /// Creates a new `UpdaterState`. If `client_id` is None, a new one will be generated.
-    fn new(cache_dir: PathBuf, release_version: String, client_id: Option<String>) -> Self {
+    /// Creates a new `UpdaterState`.
+    fn new(cache_dir: PathBuf, release_version: String) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
             patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.clone())),
             serialized_state: SerializedState {
-                client_id: client_id.or(Some(generate_client_id())),
                 release_version,
                 queued_events: Vec::new(),
             },
@@ -93,30 +85,16 @@ impl UpdaterState {
     fn load(cache_dir: &Path) -> anyhow::Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
         let serialized_state = disk_io::read(&path)?;
-        let mut state = UpdaterState {
+        Ok(UpdaterState {
             cache_dir: cache_dir.to_path_buf(),
             patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.to_path_buf())),
             serialized_state,
-        };
-        if state.serialized_state.client_id.is_none() {
-            // Generate a client id if we don't already have one.
-            state.serialized_state.client_id = Some(generate_client_id());
-            let _ = state.save();
-        }
-        Ok(state)
+        })
     }
 
     /// Initializes a new UpdaterState and saves it to disk.
-    fn create_new_and_save(
-        storage_dir: &Path,
-        release_version: &str,
-        client_id: Option<String>,
-    ) -> Self {
-        let state = Self::new(
-            storage_dir.to_owned(),
-            release_version.to_owned(),
-            client_id,
-        );
+    fn create_new_and_save(storage_dir: &Path, release_version: &str) -> Self {
+        let state = Self::new(storage_dir.to_owned(), release_version.to_owned());
         if let Err(e) = state.save() {
             warn!("Error saving state {:?}, ignoring.", e);
         }
@@ -127,18 +105,13 @@ impl UpdaterState {
         let load_result = Self::load(storage_dir);
         match load_result {
             Ok(mut loaded) => {
-                let maybe_client_id = loaded.serialized_state.client_id.clone();
                 if loaded.serialized_state.release_version != release_version {
                     info!(
                         "release_version changed {} -> {}, clearing updater state",
                         loaded.serialized_state.release_version, release_version
                     );
                     let _ = loaded.patch_manager.reset();
-                    return Self::create_new_and_save(
-                        storage_dir,
-                        release_version,
-                        maybe_client_id,
-                    );
+                    return Self::create_new_and_save(storage_dir, release_version);
                 }
                 loaded
             }
@@ -146,7 +119,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     warn!("Error loading state: {:#}, clearing state.", e);
                 }
-                Self::create_new_and_save(storage_dir, release_version, None)
+                Self::create_new_and_save(storage_dir, release_version)
             }
         }
     }
@@ -155,16 +128,6 @@ impl UpdaterState {
     pub fn save(&self) -> anyhow::Result<()> {
         let path = Path::new(&self.cache_dir).join(STATE_FILE_NAME);
         disk_io::write(&self.serialized_state, &path)
-    }
-}
-
-/// Serialized updater state
-impl UpdaterState {
-    pub fn client_id_or_default(&self) -> String {
-        self.serialized_state
-            .client_id
-            .clone()
-            .unwrap_or(String::new())
     }
 }
 
@@ -260,7 +223,6 @@ mod tests {
             patch_manager: Box::new(patch_manager),
             serialized_state: SerializedState {
                 release_version: "1.0.0+1".to_string(),
-                client_id: None,
                 queued_events: Vec::new(),
             },
         }
@@ -305,58 +267,6 @@ mod tests {
     }
 
     #[test]
-    fn creates_updater_state_with_client_id() {
-        let tmp_dir = TempDir::new("example").unwrap();
-        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
-        assert!(state.serialized_state.client_id.is_some());
-        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1");
-        assert_eq!(
-            state.serialized_state.client_id,
-            saved_state.serialized_state.client_id
-        );
-    }
-
-    #[test]
-    fn adds_client_id_to_saved_state() {
-        let tmp_dir = TempDir::new("example").unwrap();
-        let mock_manage_patches = MockManagePatches::new();
-        let state = test_state(&tmp_dir, mock_manage_patches);
-
-        assert!(state.save().is_ok());
-
-        let loaded_state = UpdaterState::load_or_new_on_error(
-            &state.cache_dir,
-            &state.serialized_state.release_version,
-        );
-        assert!(loaded_state.serialized_state.client_id.is_some());
-    }
-
-    // A new UpdaterState is created when the release version is changed, but
-    // the client_id should remain the same.
-    #[test]
-    fn client_id_does_not_change_if_release_version_changes() {
-        let tmp_dir = TempDir::new("example").unwrap();
-
-        let state = test_state(
-            &tmp_dir,
-            PatchManager::with_root_dir(tmp_dir.path().to_path_buf()),
-        );
-        let original_loaded = UpdaterState::load_or_new_on_error(
-            &state.cache_dir,
-            &state.serialized_state.release_version,
-        );
-
-        let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2");
-
-        assert!(original_loaded.serialized_state.client_id.is_some());
-        assert!(new_loaded.serialized_state.client_id.is_some());
-        assert_eq!(
-            original_loaded.serialized_state.client_id,
-            new_loaded.serialized_state.client_id
-        );
-    }
-
-    #[test]
     fn does_not_save_cache_dir() {
         let original_tmp_dir = TempDir::new("example").unwrap();
         let original_state = UpdaterState {
@@ -366,7 +276,6 @@ mod tests {
             )),
             serialized_state: SerializedState {
                 release_version: "1.0.0+1".to_string(),
-                client_id: None,
                 queued_events: Vec::new(),
             },
         };
