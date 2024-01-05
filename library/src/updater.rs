@@ -302,6 +302,69 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
     with_updater_thread_lock(update_internal)
 }
 
+// A Read and Seek which chains across 4 buffers.
+// https://doc.rust-lang.org/std/io/trait.Read.html
+// https://doc.rust-lang.org/std/io/trait.Seek.html
+
+struct ReadAndSeekFourBuffers {
+    buffers: [Vec<u8>; 4],
+    current_buffer: usize,
+    current_buffer_offset: usize,
+}
+
+impl ReadAndSeekFourBuffers {
+    fn new(buffers: [Vec<u8>; 4]) -> Self {
+        Self {
+            buffers,
+            current_buffer: 0,
+            current_buffer_offset: 0,
+        }
+    }
+}
+
+impl Read for ReadAndSeekFourBuffers {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut bytes_read = 0;
+        while bytes_read < buf.len() {
+            if self.current_buffer >= self.buffers.len() {
+                break;
+            }
+            let buffer = &self.buffers[self.current_buffer];
+            let bytes_to_copy = std::cmp::min(buf.len() - bytes_read, buffer.len());
+            buf[bytes_read..bytes_read + bytes_to_copy].copy_from_slice(
+                &buffer[self.current_buffer_offset..self.current_buffer_offset + bytes_to_copy],
+            );
+            bytes_read += bytes_to_copy;
+            self.current_buffer_offset += bytes_to_copy;
+            if self.current_buffer_offset >= buffer.len() {
+                self.current_buffer += 1;
+                self.current_buffer_offset = 0;
+            }
+        }
+        Ok(bytes_read)
+    }
+}
+
+impl Seek for ReadAndSeekFourBuffers {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        match pos {
+            std::io::SeekFrom::Start(offset) => {
+                self.current_buffer = 0;
+                self.current_buffer_offset = offset as usize;
+            }
+            std::io::SeekFrom::End(offset) => {
+                self.current_buffer = self.buffers.len() - 1;
+                self.current_buffer_offset =
+                    self.buffers[self.current_buffer].len() - offset as usize;
+            }
+            std::io::SeekFrom::Current(offset) => {
+                self.current_buffer_offset += offset as usize;
+            }
+        }
+        Ok(self.current_buffer_offset as u64)
+    }
+}
+
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
 #[cfg(any(target_os = "android", test))]

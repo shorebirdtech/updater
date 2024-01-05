@@ -44,6 +44,17 @@ pub struct AppParameters {
     /// Path to cache directory where the updater will store downloaded
     /// artifacts and data that can be deleted when a new release is detected.
     pub code_cache_dir: *const libc::c_char,
+
+    /// Callbacks for open, read and seek operations on the app's libapp.so.
+    pub libapp_callbacks: *const LibappCallbacks,
+}
+
+#[repr(C)]
+pub struct LibappCallbacks {
+    pub open: extern "C" fn(*const libc::c_char) -> libc::c_int,
+    pub read: extern "C" fn(libc::c_int, *mut libc::c_void, libc::size_t) -> libc::ssize_t,
+    pub seek: extern "C" fn(libc::c_int, libc::off_t, libc::c_int) -> libc::off_t,
+    pub close: extern "C" fn(libc::c_int) -> libc::c_int,
 }
 
 /// Converts a C string to a Rust string, does not free the C string.

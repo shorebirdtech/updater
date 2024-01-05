@@ -14,6 +14,13 @@
 #endif
 
 
+typedef struct LibappCallbacks {
+  int (*open)(const char*);
+  ssize_t (*read)(int, void*, size_t);
+  off_t (*seek)(int, off_t, int);
+  int (*close)(int);
+} LibappCallbacks;
+
 /**
  * Struct containing configuration parameters for the updater.
  * Passed to all updater functions.
@@ -45,6 +52,10 @@ typedef struct AppParameters {
    * artifacts and data that can be deleted when a new release is detected.
    */
   const char *code_cache_dir;
+  /**
+   * Callbacks for open, read and seek operations on the app's libapp.so.
+   */
+  const struct LibappCallbacks *libapp_callbacks;
 } AppParameters;
 
 #ifdef __cplusplus
