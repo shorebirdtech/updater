@@ -53,7 +53,6 @@ typedef struct AppParameters {
 typedef struct BlobReader {
   uintptr_t (*read)(void*, uint8_t*, uintptr_t);
   int64_t (*seek)(void*, int64_t, int32_t);
-  void (*close)(void*);
   void *handle;
 } BlobReader;
 

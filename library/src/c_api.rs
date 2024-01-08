@@ -52,7 +52,6 @@ pub struct AppParameters {
 pub struct BlobReader {
     pub read: extern "C" fn(*mut libc::c_void, *mut u8, usize) -> usize,
     pub seek: extern "C" fn(*mut libc::c_void, i64, i32) -> i64,
-    pub close: extern "C" fn(*mut libc::c_void),
     pub handle: *mut libc::c_void,
 }
 
