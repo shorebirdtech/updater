@@ -1,15 +1,15 @@
 // This file's job is to be the Rust API for the updater.
 
+use std::ffi::CString;
 use std::fmt::{Display, Formatter};
-use std::fs;
+use std::fs::{self};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use anyhow::Context;
-use reqwest::blocking;
 
-use crate::c_api::BlobReader;
+use crate::c_api::FileCallbacks;
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
@@ -75,6 +75,57 @@ impl Display for UpdateError {
     }
 }
 
+/// Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
+pub struct BlobReader {
+    file_callbacks: FileCallbacks,
+    handle: *mut libc::c_void,
+}
+
+impl BlobReader {
+    pub fn new(file_callbacks: FileCallbacks) -> Self {
+        // TODO: use real values for these
+        let c_str = CString::new("").unwrap();
+        let handle =
+            (file_callbacks.open)(c_str.as_ptr() as *const libc::c_char, 'r' as libc::c_char);
+        Self {
+            file_callbacks,
+            handle,
+        }
+    }
+}
+
+impl Drop for BlobReader {
+    fn drop(&mut self) {
+        (self.file_callbacks.close)(self.handle);
+    }
+}
+
+impl Read for BlobReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        Ok((self.file_callbacks.read)(
+            self.handle,
+            buf.as_mut_ptr(),
+            buf.len(),
+        ))
+    }
+}
+
+impl Seek for BlobReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        let (offset, whence) = match pos {
+            std::io::SeekFrom::Start(offset) => (offset as i64, libc::SEEK_SET),
+            std::io::SeekFrom::End(offset) => (offset, libc::SEEK_END),
+            std::io::SeekFrom::Current(offset) => (offset, libc::SEEK_CUR),
+        };
+        let result = (self.file_callbacks.seek)(self.handle, offset, whence);
+        if result < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(result as u64)
+        }
+    }
+}
+
 // `AppConfig` is the rust API.  `ResolvedConfig` is the internal storage.
 // However rusty api would probably used `&str` instead of `String`,
 // but making `&str` from `CStr*` is a bit of a pain.
@@ -104,7 +155,11 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
 /// The yaml string is the contents of the `shorebird.yaml` file.
 /// The `AppConfig` struct is information about the running app and where
 /// the updater should keep its cache.
-pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
+pub fn init(
+    app_config: AppConfig,
+    c_file_callbacks: FileCallbacks,
+    yaml: &str,
+) -> Result<(), UpdateError> {
     #[cfg(any(target_os = "android", test))]
     use crate::android::libapp_path_from_settings;
 
@@ -114,8 +169,14 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     debug!("libapp_path: {:?}", libapp_path);
-    set_config(app_config, libapp_path, &config, NetworkHooks::default())
-        .map_err(|err| UpdateError::InvalidState(err.to_string()))
+    set_config(
+        app_config,
+        c_file_callbacks,
+        libapp_path,
+        &config,
+        NetworkHooks::default(),
+    )
+    .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
 pub fn should_auto_update() -> anyhow::Result<bool> {
@@ -204,7 +265,7 @@ fn copy_update_config() -> anyhow::Result<UpdateConfig> {
 
 // Callers must possess the Updater lock, but we don't care about the contents
 // since they're empty.
-fn update_internal(_: &UpdaterLockState, blob_reader: BlobReader) -> anyhow::Result<UpdateStatus> {
+fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Only one copy of Update can be running at a time.
     // Update will take the global Updater lock.
     // Update will need to take the Config lock at times, but will only
@@ -266,6 +327,7 @@ fn update_internal(_: &UpdaterLockState, blob_reader: BlobReader) -> anyhow::Res
     download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
+    let blob_reader = BlobReader::new(config.file_callbacks);
     // Should not pass config, rather should read necessary information earlier.
     inflate(&download_path, blob_reader, &output_path)?;
 
@@ -299,8 +361,8 @@ fn update_internal(_: &UpdaterLockState, blob_reader: BlobReader) -> anyhow::Res
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
-pub fn update(blob_reader: BlobReader) -> anyhow::Result<UpdateStatus> {
-    with_updater_thread_lock(|lock| update_internal(lock, blob_reader))
+pub fn update() -> anyhow::Result<UpdateStatus> {
+    with_updater_thread_lock(update_internal)
 }
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
@@ -468,9 +530,9 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 /// This does not return status.  The only output is the change to the saved
 /// cache. The Engine calls this during boot and it will check for an update
 /// and install it if available.
-pub fn start_update_thread(blob_reader: BlobReader) {
+pub fn start_update_thread() {
     std::thread::spawn(move || {
-        let result = update(blob_reader);
+        let result = update();
         let status = match result {
             Ok(status) => status,
             Err(err) => {

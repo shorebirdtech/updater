@@ -11,7 +11,6 @@
 /// You can see usage of this API in Shorebird's Flutter engine:
 /// <https://github.com/shorebirdtech/engine/blob/shorebird/dev/shell/common/shorebird.cc>
 use std::ffi::{CStr, CString};
-use std::io::{Read, Seek};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
@@ -47,37 +46,14 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
-/// Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
+#[derive(Clone, Debug)]
 #[repr(C)]
-pub struct BlobReader {
+pub struct FileCallbacks {
+    pub open: extern "C" fn(*const libc::c_char, libc::c_char) -> *mut libc::c_void,
     pub read: extern "C" fn(*mut libc::c_void, *mut u8, usize) -> usize,
     pub seek: extern "C" fn(*mut libc::c_void, i64, i32) -> i64,
-    pub handle: *mut libc::c_void,
+    pub close: extern "C" fn(*mut libc::c_void),
 }
-
-impl Read for BlobReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok((self.read)(self.handle, buf.as_mut_ptr(), buf.len()))
-    }
-}
-
-impl Seek for BlobReader {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        let (offset, whence) = match pos {
-            std::io::SeekFrom::Start(offset) => (offset as i64, libc::SEEK_SET),
-            std::io::SeekFrom::End(offset) => (offset, libc::SEEK_END),
-            std::io::SeekFrom::Current(offset) => (offset, libc::SEEK_CUR),
-        };
-        let result = (self.seek)(self.handle, offset, whence);
-        if result < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(result as u64)
-        }
-    }
-}
-
-unsafe impl Send for BlobReader {}
 
 /// Converts a C string to a Rust string, does not free the C string.
 fn to_rust(c_string: *const libc::c_char) -> anyhow::Result<String> {
@@ -140,13 +116,14 @@ where
 #[no_mangle]
 pub extern "C" fn shorebird_init(
     c_params: *const AppParameters,
+    c_file_callbacks: FileCallbacks,
     c_yaml: *const libc::c_char,
 ) -> bool {
     log_on_error(
         || {
             let config = app_config_from_c(c_params)?;
             let yaml_string = to_rust(c_yaml)?;
-            updater::init(config, &yaml_string)?;
+            updater::init(config, c_file_callbacks, &yaml_string)?;
             Ok(true)
         },
         "initializing updater",
@@ -230,9 +207,9 @@ pub extern "C" fn shorebird_check_for_update() -> bool {
 
 /// Synchronously download an update if one is available.
 #[no_mangle]
-pub extern "C" fn shorebird_update(reader: BlobReader) {
+pub extern "C" fn shorebird_update() {
     log_on_error(
-        || updater::update(reader).map(|result| info!("Update result: {}", result)),
+        || updater::update().map(|result| info!("Update result: {}", result)),
         "downloading update",
         (),
     );
@@ -240,8 +217,8 @@ pub extern "C" fn shorebird_update(reader: BlobReader) {
 
 /// Start a thread to download an update if one is available.
 #[no_mangle]
-pub extern "C" fn shorebird_start_update_thread(reader: BlobReader) {
-    updater::start_update_thread(reader);
+pub extern "C" fn shorebird_start_update_thread() {
+    updater::start_update_thread();
 }
 
 /// Tell the updater that we're launching from what it told us was the

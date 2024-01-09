@@ -1,3 +1,4 @@
+use crate::c_api::FileCallbacks;
 // This file handles the global config for the updater library.
 use crate::network::NetworkHooks;
 
@@ -86,10 +87,12 @@ pub struct UpdateConfig {
     pub libapp_path: PathBuf,
     pub base_url: String,
     pub network_hooks: NetworkHooks,
+    pub file_callbacks: FileCallbacks,
 }
 
 pub fn set_config(
     app_config: AppConfig,
+    file_callbacks: FileCallbacks,
     libapp_path: PathBuf,
     yaml: &YamlConfig,
     network_hooks: NetworkHooks,
@@ -119,6 +122,7 @@ pub fn set_config(
                 .unwrap_or(DEFAULT_BASE_URL)
                 .to_owned(),
             network_hooks,
+            file_callbacks,
         };
         debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);

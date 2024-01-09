@@ -47,14 +47,12 @@ typedef struct AppParameters {
   const char *code_cache_dir;
 } AppParameters;
 
-/**
- * Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
- */
-typedef struct BlobReader {
+typedef struct FileCallbacks {
+  void *(*open)(const char*, char);
   uintptr_t (*read)(void*, uint8_t*, uintptr_t);
   int64_t (*seek)(void*, int64_t, int32_t);
-  void *handle;
-} BlobReader;
+  void (*close)(void*);
+} FileCallbacks;
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,6 +66,7 @@ extern "C" {
  */
 SHOREBIRD_EXPORT
 bool shorebird_init(const struct AppParameters *c_params,
+                    struct FileCallbacks c_file_callbacks,
                     const char *c_yaml);
 
 /**
@@ -110,12 +109,12 @@ SHOREBIRD_EXPORT bool shorebird_check_for_update(void);
 /**
  * Synchronously download an update if one is available.
  */
-SHOREBIRD_EXPORT void shorebird_update(struct BlobReader reader);
+SHOREBIRD_EXPORT void shorebird_update(void);
 
 /**
  * Start a thread to download an update if one is available.
  */
-SHOREBIRD_EXPORT void shorebird_start_update_thread(struct BlobReader reader);
+SHOREBIRD_EXPORT void shorebird_start_update_thread(void);
 
 /**
  * Tell the updater that we're launching from what it told us was the
