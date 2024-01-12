@@ -93,9 +93,10 @@ pub trait ReadSeek: Read + Seek {}
 /// TODO
 pub trait ExternalFileProvider: Debug + Send + DynClone {
     fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>>;
-    // fn close(&self, file: Box<dyn ExternalFile>) -> anyhow::Result<()>;
 }
 
+// This is required for ExternalFileProvider to be used as a field in the Clone-able
+// UpdateConfig struct.
 dyn_clone::clone_trait_object!(ExternalFileProvider);
 
 // On Android we don't use a direct path to libapp.so, but rather a data dir
@@ -204,7 +205,7 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
 #[cfg(not(any(target_os = "android", test)))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     // TODO use a nonempty string here
-    Ok(config.file_provider.open("")?)
+    config.file_provider.open("")
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
