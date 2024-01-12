@@ -11,10 +11,11 @@
 /// You can see usage of this API in Shorebird's Flutter engine:
 /// <https://github.com/shorebirdtech/engine/blob/shorebird/dev/shell/common/shorebird.cc>
 use std::ffi::{CStr, CString};
+use std::io::{Read, Seek};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use crate::updater;
+use crate::{updater, ExternalFileProvider, ReadSeek};
 
 // <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
@@ -46,7 +47,65 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
+/// Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
+pub struct CFile {
+    file_callbacks: FileCallbacks,
+    handle: *mut libc::c_void,
+}
+
 #[derive(Clone, Debug)]
+struct CFileProvder {
+    file_callbacks: FileCallbacks,
+}
+
+impl ExternalFileProvider for CFileProvder {
+    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>> {
+        let c_str = CString::new(path).unwrap();
+        let handle =
+            (self.file_callbacks.open)(c_str.as_ptr() as *const libc::c_char, 'r' as libc::c_char);
+        let file = CFile {
+            file_callbacks: self.file_callbacks,
+            handle,
+        };
+        Ok(Box::new(file))
+    }
+}
+
+impl ReadSeek for CFile {}
+
+impl Drop for CFile {
+    fn drop(&mut self) {
+        (self.file_callbacks.close)(self.handle);
+    }
+}
+
+impl Read for CFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        Ok((self.file_callbacks.read)(
+            self.handle,
+            buf.as_mut_ptr(),
+            buf.len(),
+        ))
+    }
+}
+
+impl Seek for CFile {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        let (offset, whence) = match pos {
+            std::io::SeekFrom::Start(offset) => (offset as i64, libc::SEEK_SET),
+            std::io::SeekFrom::End(offset) => (offset, libc::SEEK_END),
+            std::io::SeekFrom::Current(offset) => (offset, libc::SEEK_CUR),
+        };
+        let result = (self.file_callbacks.seek)(self.handle, offset, whence);
+        if result < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(result as u64)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FileCallbacks {
     pub open: extern "C" fn(*const libc::c_char, libc::c_char) -> *mut libc::c_void,
@@ -122,8 +181,11 @@ pub extern "C" fn shorebird_init(
     log_on_error(
         || {
             let config = app_config_from_c(c_params)?;
+            let file_provider = Box::new(CFileProvder {
+                file_callbacks: c_file_callbacks.clone(),
+            });
             let yaml_string = to_rust(c_yaml)?;
-            updater::init(config, c_file_callbacks, &yaml_string)?;
+            updater::init(config, file_provider, &yaml_string)?;
             Ok(true)
         },
         "initializing updater",
