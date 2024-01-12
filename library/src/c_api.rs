@@ -47,6 +47,13 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
+#[no_mangle]
+pub static SHOREBIRD_PATCH_BASE_FILENAME: &[u8; 21] = b"shorebird_patch_base\0";
+
+pub fn patch_base_filename() -> &'static str {
+    std::str::from_utf8(SHOREBIRD_PATCH_BASE_FILENAME).unwrap()
+}
+
 /// Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
 pub struct CFile {
     file_callbacks: FileCallbacks,

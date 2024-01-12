@@ -204,8 +204,9 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
 
 #[cfg(not(any(target_os = "android", test)))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    // TODO use a nonempty string here
-    config.file_provider.open("")
+    config
+        .file_provider
+        .open(crate::c_api::patch_base_filename())
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {

@@ -58,6 +58,8 @@ typedef struct FileCallbacks {
 extern "C" {
 #endif // __cplusplus
 
+extern const uint8_t (*SHOREBIRD_PATCH_BASE_FILENAME)[21];
+
 /**
  * Configures updater.  First parameter is a struct containing configuration
  * from the running app.  Second parameter is a YAML string containing
