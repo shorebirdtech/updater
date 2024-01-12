@@ -673,12 +673,10 @@ mod test {
             // Lock the mutex before starting the thread.
             let _lock = CALLBACK_MUTEX.lock().unwrap();
             // Start our thread, which should hang on that lock.
-            // BO_TODO
-            // shorebird_start_update_thread();
+            shorebird_start_update_thread();
             // Wait for the thread to start.
             std::thread::sleep(std::time::Duration::from_millis(100));
-            // BO_TODO
-            // assert!(updater::update().is_err());
+            assert!(updater::update().is_err());
         }
         // Unlock the lock, and wait for the thread to finish.
         std::thread::sleep(std::time::Duration::from_millis(100));

@@ -90,7 +90,8 @@ pub struct AppConfig {
 
 pub trait ReadSeek: Read + Seek {}
 
-/// TODO
+/// Provides an interface to get an opaque ReadSeek object for a given path.
+/// This is used to provide a way to read the patch base file on iOS.
 pub trait ExternalFileProvider: Debug + Send + DynClone {
     fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>>;
 }
