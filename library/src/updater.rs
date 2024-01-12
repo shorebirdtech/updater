@@ -88,11 +88,11 @@ pub struct AppConfig {
 // Has two callbacks.  One open, which returns a Read+Seek object
 // The other a close which takes the Read+Seek object
 
-pub trait ExternalFile: Read + Seek {}
+pub trait ReadSeek: Read + Seek {}
 
 /// TODO
 pub trait ExternalFileProvider: Debug + Send + DynClone {
-    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ExternalFile>>;
+    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>>;
     // fn close(&self, file: Box<dyn ExternalFile>) -> anyhow::Result<()>;
 }
 
@@ -193,16 +193,16 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-impl ExternalFile for Cursor<Vec<u8>> {}
+impl ReadSeek for Cursor<Vec<u8>> {}
 
 #[cfg(any(target_os = "android", test))]
-fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ExternalFile>> {
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     let base_r = crate::android::open_base_lib(&config.libapp_path, "libapp.so")?;
     Ok(Box::new(base_r))
 }
 
 #[cfg(not(any(target_os = "android", test)))]
-fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ExternalFile>> {
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     // TODO use a nonempty string here
     Ok(config.file_provider.open("")?)
 }

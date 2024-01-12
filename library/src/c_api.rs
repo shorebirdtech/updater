@@ -15,7 +15,7 @@ use std::io::{Read, Seek};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use crate::{updater, ExternalFile, ExternalFileProvider};
+use crate::{updater, ExternalFileProvider, ReadSeek};
 
 // <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
@@ -59,7 +59,7 @@ struct CFileProvder {
 }
 
 impl ExternalFileProvider for CFileProvder {
-    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ExternalFile>> {
+    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>> {
         let c_str = CString::new(path).unwrap();
         let handle =
             (self.file_callbacks.open)(c_str.as_ptr() as *const libc::c_char, 'r' as libc::c_char);
@@ -71,7 +71,7 @@ impl ExternalFileProvider for CFileProvder {
     }
 }
 
-impl ExternalFile for CFile {}
+impl ReadSeek for CFile {}
 
 impl Drop for CFile {
     fn drop(&mut self) {
