@@ -84,10 +84,6 @@ pub struct AppConfig {
     pub original_libapp_paths: Vec<String>,
 }
 
-// Struct which provides file callbacks in a rust-like way
-// Has two callbacks.  One open, which returns a Read+Seek object
-// The other a close which takes the Read+Seek object
-
 pub trait ReadSeek: Read + Seek {}
 
 /// Provides an interface to get an opaque ReadSeek object for a given path.
