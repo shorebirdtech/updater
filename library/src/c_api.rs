@@ -189,7 +189,7 @@ pub extern "C" fn shorebird_init(
         || {
             let config = app_config_from_c(c_params)?;
             let file_provider = Box::new(CFileProvder {
-                file_callbacks: c_file_callbacks.clone(),
+                file_callbacks: c_file_callbacks,
             });
             let yaml_string = to_rust(c_yaml)?;
             updater::init(config, file_provider, &yaml_string)?;
