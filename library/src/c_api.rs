@@ -47,17 +47,10 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
-#[no_mangle]
-pub static SHOREBIRD_PATCH_BASE_FILENAME: &[u8; 21] = b"shorebird_patch_base\0";
-
-pub fn patch_base_filename() -> &'static str {
-    std::str::from_utf8(SHOREBIRD_PATCH_BASE_FILENAME).unwrap()
-}
-
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FileCallbacks {
-    pub open: extern "C" fn(*const libc::c_char, libc::c_char) -> *mut libc::c_void,
+    pub open: extern "C" fn() -> *mut libc::c_void,
     pub read: extern "C" fn(*mut libc::c_void, *mut u8, usize) -> usize,
     pub seek: extern "C" fn(*mut libc::c_void, i64, i32) -> i64,
     pub close: extern "C" fn(*mut libc::c_void),
@@ -75,10 +68,8 @@ struct CFileProvder {
 }
 
 impl ExternalFileProvider for CFileProvder {
-    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>> {
-        let c_str = CString::new(path).unwrap();
-        let handle =
-            (self.file_callbacks.open)(c_str.as_ptr() as *const libc::c_char, 'r' as libc::c_char);
+    fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>> {
+        let handle = (self.file_callbacks.open)();
         let file = CFile {
             file_callbacks: self.file_callbacks,
             handle,
@@ -353,7 +344,7 @@ mod test {
     //     pub close: extern "C" fn(*mut libc::c_void),
     // }
 
-    extern "C" fn fake_open(_path: *const libc::c_char, _mode: libc::c_char) -> *mut libc::c_void {
+    extern "C" fn fake_open() -> *mut libc::c_void {
         std::ptr::null_mut()
     }
 

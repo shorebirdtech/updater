@@ -48,7 +48,7 @@ typedef struct AppParameters {
 } AppParameters;
 
 typedef struct FileCallbacks {
-  void *(*open)(const char*, char);
+  void *(*open)(void);
   uintptr_t (*read)(void*, uint8_t*, uintptr_t);
   int64_t (*seek)(void*, int64_t, int32_t);
   void (*close)(void*);
@@ -57,8 +57,6 @@ typedef struct FileCallbacks {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
-
-extern const uint8_t (*SHOREBIRD_PATCH_BASE_FILENAME)[21];
 
 /**
  * Configures updater.  First parameter is a struct containing configuration

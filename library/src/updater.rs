@@ -89,7 +89,7 @@ pub trait ReadSeek: Read + Seek {}
 /// Provides an interface to get an opaque ReadSeek object for a given path.
 /// This is used to provide a way to read the patch base file on iOS.
 pub trait ExternalFileProvider: Debug + Send + DynClone {
-    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ReadSeek>>;
+    fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>>;
 }
 
 // This is required for ExternalFileProvider to be used as a field in the Clone-able
@@ -201,9 +201,7 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
 
 #[cfg(not(any(target_os = "android", test)))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    config
-        .file_provider
-        .open(crate::c_api::patch_base_filename())
+    config.file_provider.open()
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
@@ -501,7 +499,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct FakeExternalFileProvider {}
     impl ExternalFileProvider for FakeExternalFileProvider {
-        fn open(&self, _path: &str) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
+        fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))
         }
     }
