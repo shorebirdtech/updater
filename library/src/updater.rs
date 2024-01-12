@@ -1,15 +1,14 @@
 // This file's job is to be the Rust API for the updater.
 
-use std::ffi::CString;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use anyhow::Context;
+use dyn_clone::DynClone;
 
-use crate::c_api::FileCallbacks;
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
@@ -75,57 +74,6 @@ impl Display for UpdateError {
     }
 }
 
-/// Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
-pub struct BlobReader {
-    file_callbacks: FileCallbacks,
-    handle: *mut libc::c_void,
-}
-
-impl BlobReader {
-    pub fn new(file_callbacks: FileCallbacks) -> Self {
-        // TODO: use real values for these
-        let c_str = CString::new("").unwrap();
-        let handle =
-            (file_callbacks.open)(c_str.as_ptr() as *const libc::c_char, 'r' as libc::c_char);
-        Self {
-            file_callbacks,
-            handle,
-        }
-    }
-}
-
-impl Drop for BlobReader {
-    fn drop(&mut self) {
-        (self.file_callbacks.close)(self.handle);
-    }
-}
-
-impl Read for BlobReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok((self.file_callbacks.read)(
-            self.handle,
-            buf.as_mut_ptr(),
-            buf.len(),
-        ))
-    }
-}
-
-impl Seek for BlobReader {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        let (offset, whence) = match pos {
-            std::io::SeekFrom::Start(offset) => (offset as i64, libc::SEEK_SET),
-            std::io::SeekFrom::End(offset) => (offset, libc::SEEK_END),
-            std::io::SeekFrom::Current(offset) => (offset, libc::SEEK_CUR),
-        };
-        let result = (self.file_callbacks.seek)(self.handle, offset, whence);
-        if result < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(result as u64)
-        }
-    }
-}
-
 // `AppConfig` is the rust API.  `ResolvedConfig` is the internal storage.
 // However rusty api would probably used `&str` instead of `String`,
 // but making `&str` from `CStr*` is a bit of a pain.
@@ -135,6 +83,20 @@ pub struct AppConfig {
     pub release_version: String,
     pub original_libapp_paths: Vec<String>,
 }
+
+// Struct which provides file callbacks in a rust-like way
+// Has two callbacks.  One open, which returns a Read+Seek object
+// The other a close which takes the Read+Seek object
+
+pub trait ExternalFile: Read + Seek {}
+
+/// TODO
+pub trait ExternalFileProvider: Debug + Send + DynClone {
+    fn open(&self, path: &str) -> anyhow::Result<Box<dyn ExternalFile>>;
+    // fn close(&self, file: Box<dyn ExternalFile>) -> anyhow::Result<()>;
+}
+
+dyn_clone::clone_trait_object!(ExternalFileProvider);
 
 // On Android we don't use a direct path to libapp.so, but rather a data dir
 // and a hard-coded name for the libapp file which we look up in the
@@ -157,7 +119,7 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
 /// the updater should keep its cache.
 pub fn init(
     app_config: AppConfig,
-    c_file_callbacks: FileCallbacks,
+    file_provider: Box<dyn ExternalFileProvider>,
     yaml: &str,
 ) -> Result<(), UpdateError> {
     #[cfg(any(target_os = "android", test))]
@@ -171,7 +133,7 @@ pub fn init(
     debug!("libapp_path: {:?}", libapp_path);
     set_config(
         app_config,
-        c_file_callbacks,
+        file_provider,
         libapp_path,
         &config,
         NetworkHooks::default(),
@@ -231,33 +193,18 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// // This is just a place to put our terrible android hacks.
-// // And also avoid (for now) dealing with inflating patches on iOS.
-// #[cfg(any(target_os = "android", test))]
-// fn prepare_for_install(
-//     config: &UpdateConfig,
-//     download_path: &Path,
-//     output_path: &Path,
-// ) -> anyhow::Result<()> {
-//     // We abuse `libapp_path` to actually be the path to the data dir for now.
-//     // This is an abuse because the variable name is `libapp_path`, but
-//     // we're making it point to a the `app_data` directory instead.
-//     let app_dir = &config.libapp_path;
-//     debug!("app_dir: {:?}", app_dir);
-//     let base_r = crate::android::open_base_lib(app_dir, "libapp.so")?;
-//     inflate(download_path, base_r, output_path)
-// }
+impl ExternalFile for Cursor<Vec<u8>> {}
 
-// #[cfg(not(any(target_os = "android", test)))]
-// fn prepare_for_install(
-//     _config: &UpdateConfig,
-//     download_path: &Path,
-//     output_path: &Path,
-// ) -> anyhow::Result<()> {
-//     // On iOS we don't yet support compressed patches, just copy the file.
-//     fs::copy(download_path, output_path)?;
-//     Ok(())
-// }
+#[cfg(any(target_os = "android", test))]
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ExternalFile>> {
+    let base_r = crate::android::open_base_lib(&config.libapp_path, "libapp.so")?;
+    Ok(Box::new(base_r))
+}
+
+#[cfg(not(any(target_os = "android", test)))]
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ExternalFile>> {
+    Ok(config.file_provider.open("")?)
+}
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
     with_config(|config: &UpdateConfig| Ok(config.clone()))
@@ -327,9 +274,8 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
-    let blob_reader = BlobReader::new(config.file_callbacks);
-    // Should not pass config, rather should read necessary information earlier.
-    inflate(&download_path, blob_reader, &output_path)?;
+    let patch_base_rs = patch_base(&config)?;
+    inflate(&download_path, patch_base_rs, &output_path)?;
 
     // Check the hash before moving into place.
     check_hash(&output_path, &patch.hash).with_context(|| {

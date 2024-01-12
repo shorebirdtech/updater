@@ -22,6 +22,7 @@ bipatch = "1.0.0"
 comde = { version = "0.2.3", default-features = false, features = [
     "zstandard",
 ] }
+dyn-clone = "1.0.16"
 # For decoding the hex-encoded hashes in Patch network responses.
 hex = "0.4.3"
 # Used to construct mock responses.
