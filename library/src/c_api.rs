@@ -60,7 +60,6 @@ struct CFileProvder {
 
 impl ExternalFileProvider for CFileProvder {
     fn open(&self, path: &str) -> anyhow::Result<Box<dyn ExternalFile>> {
-        // TODO use a nonempty string here
         let c_str = CString::new(path).unwrap();
         let handle =
             (self.file_callbacks.open)(c_str.as_ptr() as *const libc::c_char, 'r' as libc::c_char);

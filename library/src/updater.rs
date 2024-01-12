@@ -203,6 +203,7 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ExternalFile>> {
 
 #[cfg(not(any(target_os = "android", test)))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ExternalFile>> {
+    // TODO use a nonempty string here
     Ok(config.file_provider.open("")?)
 }
 
