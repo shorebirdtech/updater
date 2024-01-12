@@ -114,7 +114,10 @@ impl Seek for CFile {
         };
         let result = (self.file_callbacks.seek)(self.handle, offset, whence);
         if result < 0 {
-            Err(std::io::Error::last_os_error())
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("CFile seek failed with error code: {}", result),
+            ))
         } else {
             Ok(result as u64)
         }
