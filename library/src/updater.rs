@@ -499,7 +499,15 @@ mod tests {
     use std::fs;
     use tempdir::TempDir;
 
-    use crate::config::testing_reset_config;
+    use crate::{config::testing_reset_config, ExternalFileProvider};
+
+    #[derive(Debug, Clone)]
+    struct FakeExternalFileProvider {}
+    impl ExternalFileProvider for FakeExternalFileProvider {
+        fn open(&self, _path: &str) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
+            Ok(Box::new(std::io::Cursor::new(vec![])))
+        }
+    }
 
     fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
         testing_reset_config();
@@ -516,6 +524,7 @@ mod tests {
                 release_version: "1.0.0+1".to_string(),
                 original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
             },
+            Box::new(FakeExternalFileProvider {}),
             &yaml,
         )
         .unwrap();
@@ -612,6 +621,7 @@ mod tests {
                     release_version: "1.0.0+1".to_string(),
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
                 },
+                Box::new(FakeExternalFileProvider {}),
                 "",
             ),
             Err(crate::UpdateError::InvalidArgument(
@@ -803,8 +813,7 @@ mod tests {
         })
         .unwrap();
 
-        // BO_TODO
-        // super::update().unwrap();
+        super::update().unwrap();
         // Only 3 events should have been sent.
         event_mock.expect(3);
 

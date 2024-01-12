@@ -350,19 +350,19 @@ mod test {
     //     pub close: extern "C" fn(*mut libc::c_void),
     // }
 
-    extern "C" fn fake_open(path: *const libc::c_char, mode: libc::c_char) -> *mut libc::c_void {
+    extern "C" fn fake_open(_path: *const libc::c_char, _mode: libc::c_char) -> *mut libc::c_void {
         std::ptr::null_mut()
     }
 
-    extern "C" fn fake_read(handle: *mut libc::c_void, buffer: *mut u8, length: usize) -> usize {
+    extern "C" fn fake_read(_handle: *mut libc::c_void, _buffer: *mut u8, _length: usize) -> usize {
         0
     }
 
-    extern "C" fn fake_seek(handle: *mut libc::c_void, offset: i64, seek_from: i32) -> i64 {
+    extern "C" fn fake_seek(_handle: *mut libc::c_void, _offset: i64, _seek_from: i32) -> i64 {
         0
     }
 
-    extern "C" fn fake_close(handle: *mut libc::c_void) {}
+    extern "C" fn fake_close(_handle: *mut libc::c_void) {}
 
     const FAKE_CALLBACKS: FileCallbacks = FileCallbacks {
         open: fake_open,
@@ -575,8 +575,7 @@ mod test {
         assert!(shorebird_check_for_update());
 
         // Go ahead and do the update.
-        // BO_TODO
-        // shorebird_update();
+        shorebird_update();
 
         assert_eq!(shorebird_current_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_number(), 1);
