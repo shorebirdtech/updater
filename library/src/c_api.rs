@@ -11,15 +11,18 @@
 /// You can see usage of this API in Shorebird's Flutter engine:
 /// <https://github.com/shorebirdtech/engine/blob/shorebird/dev/shell/common/shorebird.cc>
 use std::ffi::{CStr, CString};
-use std::io::{Read, Seek};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use crate::{updater, ExternalFileProvider, ReadSeek};
+use crate::updater;
 
 // <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
 use std::{println as info, println as error}; // Workaround to use println! for logs.
+
+use self::c_file::CFileProvder;
+
+mod c_file;
 
 /// Struct containing configuration parameters for the updater.
 /// Passed to all updater functions.
@@ -54,65 +57,6 @@ pub struct FileCallbacks {
     pub read: extern "C" fn(*mut libc::c_void, *mut u8, usize) -> usize,
     pub seek: extern "C" fn(*mut libc::c_void, i64, i32) -> i64,
     pub close: extern "C" fn(*mut libc::c_void),
-}
-
-/// Allows C++ engine to provide POSIX file Read+Seek interface to the updater.
-pub struct CFile {
-    file_callbacks: FileCallbacks,
-    handle: *mut libc::c_void,
-}
-
-#[derive(Clone, Debug)]
-struct CFileProvder {
-    file_callbacks: FileCallbacks,
-}
-
-impl ExternalFileProvider for CFileProvder {
-    fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>> {
-        let handle = (self.file_callbacks.open)();
-        let file = CFile {
-            file_callbacks: self.file_callbacks,
-            handle,
-        };
-        Ok(Box::new(file))
-    }
-}
-
-impl ReadSeek for CFile {}
-
-impl Drop for CFile {
-    fn drop(&mut self) {
-        (self.file_callbacks.close)(self.handle);
-    }
-}
-
-impl Read for CFile {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok((self.file_callbacks.read)(
-            self.handle,
-            buf.as_mut_ptr(),
-            buf.len(),
-        ))
-    }
-}
-
-impl Seek for CFile {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        let (offset, whence) = match pos {
-            std::io::SeekFrom::Start(offset) => (offset as i64, libc::SEEK_SET),
-            std::io::SeekFrom::End(offset) => (offset, libc::SEEK_END),
-            std::io::SeekFrom::Current(offset) => (offset, libc::SEEK_CUR),
-        };
-        let result = (self.file_callbacks.seek)(self.handle, offset, whence);
-        if result < 0 {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("CFile seek failed with error code: {}", result),
-            ))
-        } else {
-            Ok(result as u64)
-        }
-    }
 }
 
 /// Converts a C string to a Rust string, does not free the C string.
@@ -335,36 +279,6 @@ mod test {
 
     use std::{ffi::CString, ptr::null_mut};
 
-    // #[derive(Clone, Copy, Debug)]
-    // #[repr(C)]
-    // pub struct FileCallbacks {
-    //     pub open: extern "C" fn(*const libc::c_char, libc::c_char) -> *mut libc::c_void,
-    //     pub read: extern "C" fn(*mut libc::c_void, *mut u8, usize) -> usize,
-    //     pub seek: extern "C" fn(*mut libc::c_void, i64, i32) -> i64,
-    //     pub close: extern "C" fn(*mut libc::c_void),
-    // }
-
-    extern "C" fn fake_open() -> *mut libc::c_void {
-        std::ptr::null_mut()
-    }
-
-    extern "C" fn fake_read(_handle: *mut libc::c_void, _buffer: *mut u8, _length: usize) -> usize {
-        0
-    }
-
-    extern "C" fn fake_seek(_handle: *mut libc::c_void, _offset: i64, _seek_from: i32) -> i64 {
-        0
-    }
-
-    extern "C" fn fake_close(_handle: *mut libc::c_void) {}
-
-    const FAKE_CALLBACKS: FileCallbacks = FileCallbacks {
-        open: fake_open,
-        read: fake_read,
-        seek: fake_seek,
-        close: fake_close,
-    };
-
     fn c_string(string: &str) -> *mut libc::c_char {
         CString::new(string).unwrap().into_raw()
     }
@@ -432,7 +346,7 @@ mod test {
         // Should log but not crash.
         assert!(!shorebird_init(
             std::ptr::null(),
-            FAKE_CALLBACKS,
+            FileCallbacks::new(),
             std::ptr::null()
         ));
 
@@ -452,7 +366,11 @@ mod test {
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
         };
-        assert!(!shorebird_init(&c_params, FAKE_CALLBACKS, std::ptr::null()));
+        assert!(!shorebird_init(
+            &c_params,
+            FileCallbacks::new(),
+            std::ptr::null()
+        ));
     }
 
     #[serial]
@@ -462,7 +380,7 @@ mod test {
         let tmp_dir = TempDir::new("example").unwrap();
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         let c_yaml = c_string("bad yaml");
-        assert!(!shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
@@ -480,7 +398,7 @@ mod test {
         base_url: baz
         auto_update: false",
         );
-        assert!(shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
         assert!(!shorebird_should_auto_update());
@@ -494,7 +412,7 @@ mod test {
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -537,7 +455,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -605,7 +523,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -613,7 +531,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: bar");
-        assert!(!shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
@@ -632,7 +550,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, FAKE_CALLBACKS, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
