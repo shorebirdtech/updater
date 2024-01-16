@@ -17,6 +17,9 @@ pub struct CFileProvder {
 impl ExternalFileProvider for CFileProvder {
     fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>> {
         let handle = (self.file_callbacks.open)();
+        if handle.is_null() {
+            return Err(anyhow::anyhow!("CFile open failed"));
+        }
         let file = CFile {
             file_callbacks: self.file_callbacks,
             handle,
@@ -68,14 +71,18 @@ mod test {
 
     use super::*;
 
+    static OPEN_RET_VAL: u32 = 42;
+
     static mut OPEN_CALL_COUNT: usize = 0;
     static mut CLOSE_CALL_COUNT: usize = 0;
+    static mut OPEN_RET: *mut libc::c_void = OPEN_RET_VAL as *mut libc::c_void;
     static mut READ_ARGS: Vec<(*mut libc::c_void, *mut u8, usize)> = Vec::new();
     static mut SEEK_ARGS: Vec<(*mut libc::c_void, i64, i32)> = Vec::new();
     static mut SEEK_RET: i64 = 0;
 
     fn reset_tests() {
         unsafe {
+            OPEN_RET = OPEN_RET_VAL as *mut libc::c_void;
             OPEN_CALL_COUNT = 0;
             CLOSE_CALL_COUNT = 0;
             READ_ARGS.clear();
@@ -86,8 +93,8 @@ mod test {
     extern "C" fn fake_open() -> *mut libc::c_void {
         unsafe {
             OPEN_CALL_COUNT += 1;
+            OPEN_RET
         }
-        std::ptr::null_mut()
     }
 
     extern "C" fn fake_read(_handle: *mut libc::c_void, _buffer: *mut u8, _length: usize) -> usize {
@@ -141,6 +148,21 @@ mod test {
             assert_eq!(OPEN_CALL_COUNT, 1);
             assert_eq!(CLOSE_CALL_COUNT, 1);
         }
+    }
+
+    #[serial]
+    #[test]
+    fn test_open_failure() {
+        reset_tests();
+        unsafe {
+            OPEN_RET = std::ptr::null_mut();
+        }
+
+        let file_provider = CFileProvder {
+            file_callbacks: FileCallbacks::new(),
+        };
+        let result = file_provider.open();
+        assert!(result.is_err());
     }
 
     #[serial]
