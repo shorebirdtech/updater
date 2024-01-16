@@ -53,10 +53,20 @@ pub struct AppParameters {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FileCallbacks {
+    /// Opens the "file" (actually an in-memory buffer) and returns a handle.
     pub open: extern "C" fn() -> *mut libc::c_void,
-    pub read: extern "C" fn(*mut libc::c_void, *mut u8, usize) -> usize,
-    pub seek: extern "C" fn(*mut libc::c_void, i64, i32) -> i64,
-    pub close: extern "C" fn(*mut libc::c_void),
+
+    /// Reads count bytes from the file into buffer.  Returns the number of
+    /// bytes read.
+    pub read: extern "C" fn(file_handle: *mut libc::c_void, buffer: *mut u8, count: usize) -> usize,
+
+    /// Moves the file pointer to the given offset relative from whence (one of
+    /// libc::SEEK_SET, libc::SEEK_CUR, or libc::SEEK_END). Returns the new
+    /// offset relative to the start of the file.
+    pub seek: extern "C" fn(file_handle: *mut libc::c_void, offset: i64, whence: i32) -> i64,
+
+    /// Closes and frees the file handle.
+    pub close: extern "C" fn(file_handle: *mut libc::c_void),
 }
 
 /// Converts a C string to a Rust string, does not free the C string.
