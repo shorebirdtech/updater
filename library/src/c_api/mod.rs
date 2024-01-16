@@ -20,6 +20,10 @@ use crate::updater;
 #[cfg(test)]
 use std::{println as info, println as error}; // Workaround to use println! for logs.
 
+use self::c_file::CFileProvder;
+
+mod c_file;
+
 /// Struct containing configuration parameters for the updater.
 /// Passed to all updater functions.
 /// NOTE: If this struct is changed all language bindings must be updated.
@@ -44,6 +48,25 @@ pub struct AppParameters {
     /// Path to cache directory where the updater will store downloaded
     /// artifacts and data that can be deleted when a new release is detected.
     pub code_cache_dir: *const libc::c_char,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct FileCallbacks {
+    /// Opens the "file" (actually an in-memory buffer) and returns a handle.
+    pub open: extern "C" fn() -> *mut libc::c_void,
+
+    /// Reads count bytes from the file into buffer.  Returns the number of
+    /// bytes read.
+    pub read: extern "C" fn(file_handle: *mut libc::c_void, buffer: *mut u8, count: usize) -> usize,
+
+    /// Moves the file pointer to the given offset relative from whence (one of
+    /// libc::SEEK_SET, libc::SEEK_CUR, or libc::SEEK_END). Returns the new
+    /// offset relative to the start of the file.
+    pub seek: extern "C" fn(file_handle: *mut libc::c_void, offset: i64, whence: i32) -> i64,
+
+    /// Closes and frees the file handle.
+    pub close: extern "C" fn(file_handle: *mut libc::c_void),
 }
 
 /// Converts a C string to a Rust string, does not free the C string.
@@ -107,13 +130,17 @@ where
 #[no_mangle]
 pub extern "C" fn shorebird_init(
     c_params: *const AppParameters,
+    c_file_callbacks: FileCallbacks,
     c_yaml: *const libc::c_char,
 ) -> bool {
     log_on_error(
         || {
             let config = app_config_from_c(c_params)?;
+            let file_provider = Box::new(CFileProvder {
+                file_callbacks: c_file_callbacks,
+            });
             let yaml_string = to_rust(c_yaml)?;
-            updater::init(config, &yaml_string)?;
+            updater::init(config, file_provider, &yaml_string)?;
             Ok(true)
         },
         "initializing updater",
@@ -327,7 +354,11 @@ mod test {
     fn init_with_nulls() {
         testing_reset_config();
         // Should log but not crash.
-        assert!(!shorebird_init(std::ptr::null(), std::ptr::null()));
+        assert!(!shorebird_init(
+            std::ptr::null(),
+            FileCallbacks::new(),
+            std::ptr::null()
+        ));
 
         // free_string also doesn't crash with null.
         unsafe { shorebird_free_string(std::ptr::null_mut()) }
@@ -345,7 +376,11 @@ mod test {
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
         };
-        assert!(!shorebird_init(&c_params, std::ptr::null()));
+        assert!(!shorebird_init(
+            &c_params,
+            FileCallbacks::new(),
+            std::ptr::null()
+        ));
     }
 
     #[serial]
@@ -355,7 +390,7 @@ mod test {
         let tmp_dir = TempDir::new("example").unwrap();
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         let c_yaml = c_string("bad yaml");
-        assert!(!shorebird_init(&c_params, c_yaml));
+        assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
@@ -373,7 +408,7 @@ mod test {
         base_url: baz
         auto_update: false",
         );
-        assert!(shorebird_init(&c_params, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
         assert!(!shorebird_should_auto_update());
@@ -387,7 +422,7 @@ mod test {
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -430,7 +465,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -498,7 +533,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 
@@ -506,7 +541,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: bar");
-        assert!(!shorebird_init(&c_params, c_yaml));
+        assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
@@ -525,7 +560,7 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: foo");
-        assert!(shorebird_init(&c_params, c_yaml));
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
 

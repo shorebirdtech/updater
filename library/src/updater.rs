@@ -1,13 +1,13 @@
 // This file's job is to be the Rust API for the updater.
 
-use std::fmt::{Display, Formatter};
-use std::fs;
-#[cfg(any(target_os = "android", test))]
-use std::io::{Read, Seek};
+use std::fmt::{Debug, Display, Formatter};
+use std::fs::{self};
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use anyhow::Context;
+use dyn_clone::DynClone;
 
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
@@ -84,6 +84,18 @@ pub struct AppConfig {
     pub original_libapp_paths: Vec<String>,
 }
 
+pub trait ReadSeek: Read + Seek {}
+
+/// Provides an interface to get an opaque ReadSeek object for a given path.
+/// This is used to provide a way to read the patch base file on iOS.
+pub trait ExternalFileProvider: Debug + Send + DynClone {
+    fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>>;
+}
+
+// This is required for ExternalFileProvider to be used as a field in the Clone-able
+// UpdateConfig struct.
+dyn_clone::clone_trait_object!(ExternalFileProvider);
+
 // On Android we don't use a direct path to libapp.so, but rather a data dir
 // and a hard-coded name for the libapp file which we look up in the
 // split APKs in that datadir. On other platforms we just use a path.
@@ -103,7 +115,11 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
 /// The yaml string is the contents of the `shorebird.yaml` file.
 /// The `AppConfig` struct is information about the running app and where
 /// the updater should keep its cache.
-pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
+pub fn init(
+    app_config: AppConfig,
+    file_provider: Box<dyn ExternalFileProvider>,
+    yaml: &str,
+) -> Result<(), UpdateError> {
     #[cfg(any(target_os = "android", test))]
     use crate::android::libapp_path_from_settings;
 
@@ -113,8 +129,14 @@ pub fn init(app_config: AppConfig, yaml: &str) -> Result<(), UpdateError> {
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     debug!("libapp_path: {:?}", libapp_path);
-    set_config(app_config, libapp_path, &config, NetworkHooks::default())
-        .map_err(|err| UpdateError::InvalidState(err.to_string()))
+    set_config(
+        app_config,
+        file_provider,
+        libapp_path,
+        &config,
+        NetworkHooks::default(),
+    )
+    .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
 pub fn should_auto_update() -> anyhow::Result<bool> {
@@ -169,32 +191,17 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// This is just a place to put our terrible android hacks.
-// And also avoid (for now) dealing with inflating patches on iOS.
+impl ReadSeek for Cursor<Vec<u8>> {}
+
 #[cfg(any(target_os = "android", test))]
-fn prepare_for_install(
-    config: &UpdateConfig,
-    download_path: &Path,
-    output_path: &Path,
-) -> anyhow::Result<()> {
-    // We abuse `libapp_path` to actually be the path to the data dir for now.
-    // This is an abuse because the variable name is `libapp_path`, but
-    // we're making it point to a the `app_data` directory instead.
-    let app_dir = &config.libapp_path;
-    debug!("app_dir: {:?}", app_dir);
-    let base_r = crate::android::open_base_lib(app_dir, "libapp.so")?;
-    inflate(download_path, base_r, output_path)
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    let base_r = crate::android::open_base_lib(&config.libapp_path, "libapp.so")?;
+    Ok(Box::new(base_r))
 }
 
 #[cfg(not(any(target_os = "android", test)))]
-fn prepare_for_install(
-    _config: &UpdateConfig,
-    download_path: &Path,
-    output_path: &Path,
-) -> anyhow::Result<()> {
-    // On iOS we don't yet support compressed patches, just copy the file.
-    fs::copy(download_path, output_path)?;
-    Ok(())
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    config.file_provider.open()
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
@@ -265,8 +272,8 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
-    // Should not pass config, rather should read necessary information earlier.
-    prepare_for_install(&config, &download_path, &output_path)?;
+    let patch_base_rs = patch_base(&config)?;
+    inflate(&download_path, patch_base_rs, &output_path)?;
 
     // Check the hash before moving into place.
     check_hash(&output_path, &patch.hash).with_context(|| {
@@ -304,7 +311,6 @@ pub fn update() -> anyhow::Result<UpdateStatus> {
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
-#[cfg(any(target_os = "android", test))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
@@ -488,7 +494,15 @@ mod tests {
     use std::fs;
     use tempdir::TempDir;
 
-    use crate::config::testing_reset_config;
+    use crate::{config::testing_reset_config, ExternalFileProvider};
+
+    #[derive(Debug, Clone)]
+    struct FakeExternalFileProvider {}
+    impl ExternalFileProvider for FakeExternalFileProvider {
+        fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
+            Ok(Box::new(std::io::Cursor::new(vec![])))
+        }
+    }
 
     fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
         testing_reset_config();
@@ -505,6 +519,7 @@ mod tests {
                 release_version: "1.0.0+1".to_string(),
                 original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
             },
+            Box::new(FakeExternalFileProvider {}),
             &yaml,
         )
         .unwrap();
@@ -601,6 +616,7 @@ mod tests {
                     release_version: "1.0.0+1".to_string(),
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
                 },
+                Box::new(FakeExternalFileProvider {}),
                 "",
             ),
             Err(crate::UpdateError::InvalidArgument(

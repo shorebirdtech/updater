@@ -47,6 +47,28 @@ typedef struct AppParameters {
   const char *code_cache_dir;
 } AppParameters;
 
+typedef struct FileCallbacks {
+  /**
+   * Opens the "file" (actually an in-memory buffer) and returns a handle.
+   */
+  void *(*open)(void);
+  /**
+   * Reads count bytes from the file into buffer.  Returns the number of
+   * bytes read.
+   */
+  uintptr_t (*read)(void *file_handle, uint8_t *buffer, uintptr_t count);
+  /**
+   * Moves the file pointer to the given offset relative from whence (one of
+   * libc::SEEK_SET, libc::SEEK_CUR, or libc::SEEK_END). Returns the new
+   * offset relative to the start of the file.
+   */
+  int64_t (*seek)(void *file_handle, int64_t offset, int32_t whence);
+  /**
+   * Closes and frees the file handle.
+   */
+  void (*close)(void *file_handle);
+} FileCallbacks;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -59,6 +81,7 @@ extern "C" {
  */
 SHOREBIRD_EXPORT
 bool shorebird_init(const struct AppParameters *c_params,
+                    struct FileCallbacks c_file_callbacks,
                     const char *c_yaml);
 
 /**
