@@ -221,6 +221,7 @@ mod tests {
             NetworkHooks::default(),
         );
         assert!(first_result.is_ok());
+
         let second_result = set_config(
             fake_app_config(),
             Box::new(FakeExternalFileProvider {}),
