@@ -135,8 +135,9 @@ pub fn init(
         libapp_path,
         &config,
         NetworkHooks::default(),
-    )
-    .map_err(|err| UpdateError::InvalidState(err.to_string()))
+    );
+
+    Ok(())
 }
 
 pub fn should_auto_update() -> anyhow::Result<bool> {

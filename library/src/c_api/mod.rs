@@ -541,7 +541,10 @@ mod test {
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: bar");
-        assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+
+        // This will return true, but log a warning and not change the already-
+        // set config.
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }
