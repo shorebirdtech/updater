@@ -53,7 +53,6 @@ pub enum UpdateError {
     FailedToSaveState,
     ConfigNotInitialized,
     UpdateAlreadyInProgress,
-    UpdaterAlreadyInitialized,
 }
 
 impl std::error::Error for UpdateError {}
@@ -71,7 +70,6 @@ impl Display for UpdateError {
             UpdateError::UpdateAlreadyInProgress => {
                 write!(f, "Update already in progress")
             }
-            UpdateError::UpdaterAlreadyInitialized => write!(f, "Updater already initialized"),
         }
     }
 }
@@ -137,7 +135,9 @@ pub fn init(
         libapp_path,
         &config,
         NetworkHooks::default(),
-    )
+    );
+
+    Ok(())
 }
 
 pub fn should_auto_update() -> anyhow::Result<bool> {

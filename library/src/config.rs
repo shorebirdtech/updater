@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
+use std::{println as warn, println as debug}; // Workaround to use println! for logs.
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -95,10 +95,14 @@ pub fn set_config(
     libapp_path: PathBuf,
     yaml: &YamlConfig,
     network_hooks: NetworkHooks,
-) -> Result<(), UpdateError> {
+) {
     with_config_mut(|config: &mut Option<UpdateConfig>| {
         if config.is_some() {
-            return Err(UpdateError::UpdaterAlreadyInitialized);
+            // This previously returned an error, but this happens regularly
+            // with apps that use Firebase Messaging, and logging it as an error
+            // has caused confusion.
+            warn!("Updater already initialized");
+            return;
         }
 
         let mut code_cache_path = std::path::PathBuf::from(&app_config.code_cache_dir);
@@ -127,9 +131,7 @@ pub fn set_config(
         };
         debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
-
-        Ok(())
-    })
+    });
 }
 
 // Arch/Platform names need to be kept in sync with the shorebird cli.
@@ -194,45 +196,25 @@ mod tests {
     // These tests are serial because they modify global state.
     #[serial]
     #[test]
-    fn set_config_creates_new_config_on_first_call() {
+    fn set_config_is_noop_on_subsequent_calls() {
         testing_reset_config();
 
-        let result = set_config(
+        set_config(
             fake_app_config(),
             Box::new(FakeExternalFileProvider {}),
-            "".into(),
+            "first_path".into(),
             &fake_yaml(),
             NetworkHooks::default(),
         );
-        assert!(result.is_ok());
-    }
-
-    // These tests are serial because they modify global state.
-    #[serial]
-    #[test]
-    fn set_config_returns_updater_already_initialized_on_subsequent_calls() {
-        testing_reset_config();
-
-        let first_result = set_config(
+        set_config(
             fake_app_config(),
             Box::new(FakeExternalFileProvider {}),
-            "".into(),
+            "second_path".into(),
             &fake_yaml(),
             NetworkHooks::default(),
         );
-        assert!(first_result.is_ok());
 
-        let second_result = set_config(
-            fake_app_config(),
-            Box::new(FakeExternalFileProvider {}),
-            "".into(),
-            &fake_yaml(),
-            NetworkHooks::default(),
-        );
-        assert!(second_result.is_err());
-        assert_eq!(
-            second_result.err().unwrap(),
-            crate::UpdateError::UpdaterAlreadyInitialized
-        );
+        let config = super::with_config(|config| Ok(config.clone())).unwrap();
+        assert_eq!(config.libapp_path.to_str(), Some("first_path"));
     }
 }
