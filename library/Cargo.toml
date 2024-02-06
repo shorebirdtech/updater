@@ -62,8 +62,8 @@ log-panics = { version = "2", features = ["with-backtrace"] }
 [target.'cfg(target_os = "ios")'.dependencies]
 # Send panics to syslog (instead of stderr).
 log-panics = { version = "2", features = ["with-backtrace"] }
-# Use stderr for logging on iOS.
-simple-logging = "2.0.2"
+# Support for logging on iOS (https://developer.apple.com/documentation/oslog)
+oslog = "0.2.0"
 
 [dev-dependencies]
 mockall = "0.11.4"
