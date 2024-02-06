@@ -13,10 +13,16 @@ pub fn init_logging() {
 
 #[cfg(target_os = "ios")]
 pub fn init_logging() {
-    // I could not figure out how to get fancier logging set up on iOS
-    // but logging to stderr seems to work.
-    simple_logging::log_to(std::io::stderr(), log::LevelFilter::Info);
-    debug!("Logging initialized");
+    use log::LevelFilter;
+
+    let init_result = oslog::OsLogger::new("dev.shorebird")
+        .level_filter(LevelFilter::Debug)
+        .category_level_filter("Settings", LevelFilter::Info)
+        .init();
+    match init_result {
+        Ok(_) => debug!("Logging initialized"),
+        Err(e) => error!("Failed to initialize logging: {}", e),
+    }
 }
 
 #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
