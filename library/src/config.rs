@@ -97,7 +97,6 @@ pub fn set_config(
     network_hooks: NetworkHooks,
 ) -> Result<(), UpdateError> {
     with_config_mut(|config: &mut Option<UpdateConfig>| {
-        println!("Setting config");
         if config.is_some() {
             return Err(UpdateError::UpdaterAlreadyInitialized);
         }
