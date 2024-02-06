@@ -117,7 +117,7 @@ impl UpdaterState {
             }
             Err(e) => {
                 if !is_file_not_found(&e) {
-                    warn!("No existing state file found: {:#}, creating new state.", e);
+                    info!("No existing state file found: {:#}, creating new state.", e);
                 }
                 Self::create_new_and_save(storage_dir, release_version)
             }
