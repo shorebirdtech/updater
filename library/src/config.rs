@@ -101,7 +101,7 @@ pub fn set_config(
             // This previously returned an error, but this happens regularly
             // with apps that use Firebase Messaging, and logging it as an error
             // has caused confusion.
-            warn!("Updater already initialized");
+            warn!("Updater already initialized, ignoring second shorebird_init call.");
             return;
         }
 
