@@ -13,11 +13,8 @@ pub fn init_logging() {
 
 #[cfg(target_os = "ios")]
 pub fn init_logging() {
-    use log::LevelFilter;
-
     let init_result = oslog::OsLogger::new("dev.shorebird")
-        .level_filter(LevelFilter::Debug)
-        .category_level_filter("Settings", LevelFilter::Info)
+        .level_filter(log::LevelFilter::Info)
         .init();
     match init_result {
         Ok(_) => debug!("Logging initialized"),
