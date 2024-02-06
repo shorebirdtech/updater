@@ -53,6 +53,7 @@ pub enum UpdateError {
     FailedToSaveState,
     ConfigNotInitialized,
     UpdateAlreadyInProgress,
+    UpdaterAlreadyInitialized,
 }
 
 impl std::error::Error for UpdateError {}
@@ -70,6 +71,7 @@ impl Display for UpdateError {
             UpdateError::UpdateAlreadyInProgress => {
                 write!(f, "Update already in progress")
             }
+            UpdateError::UpdaterAlreadyInitialized => write!(f, "Updater already initialized"),
         }
     }
 }
@@ -136,7 +138,6 @@ pub fn init(
         &config,
         NetworkHooks::default(),
     )
-    .map_err(|err| UpdateError::InvalidState(err.to_string()))
 }
 
 pub fn should_auto_update() -> anyhow::Result<bool> {
@@ -497,7 +498,7 @@ mod tests {
     use crate::{config::testing_reset_config, ExternalFileProvider};
 
     #[derive(Debug, Clone)]
-    struct FakeExternalFileProvider {}
+    pub struct FakeExternalFileProvider {}
     impl ExternalFileProvider for FakeExternalFileProvider {
         fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))

@@ -95,9 +95,12 @@ pub fn set_config(
     libapp_path: PathBuf,
     yaml: &YamlConfig,
     network_hooks: NetworkHooks,
-) -> anyhow::Result<()> {
-    with_config_mut(|config| {
-        anyhow::ensure!(config.is_none(), "shorebird_init has already been called.");
+) -> Result<(), UpdateError> {
+    with_config_mut(|config: &mut Option<UpdateConfig>| {
+        println!("Setting config");
+        if config.is_some() {
+            return Err(UpdateError::UpdaterAlreadyInitialized);
+        }
 
         let mut code_cache_path = std::path::PathBuf::from(&app_config.code_cache_dir);
         code_cache_path.push("downloads");
@@ -155,4 +158,81 @@ pub fn current_platform() -> &'static str {
     #[cfg(target_os = "ios")]
     static PLATFORM: &str = "ios";
     PLATFORM
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_config;
+    use crate::{network::NetworkHooks, testing_reset_config, AppConfig, ExternalFileProvider};
+    use serial_test::serial;
+
+    #[derive(Debug, Clone)]
+    pub struct FakeExternalFileProvider {}
+    impl ExternalFileProvider for FakeExternalFileProvider {
+        fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
+            Ok(Box::new(std::io::Cursor::new(vec![])))
+        }
+    }
+
+    fn fake_app_config() -> AppConfig {
+        AppConfig {
+            app_storage_dir: "/tmp".to_string(),
+            code_cache_dir: "/tmp".to_string(),
+            release_version: "1.0.0".to_string(),
+            original_libapp_paths: vec!["libapp.so".to_string()],
+        }
+    }
+
+    fn fake_yaml() -> crate::yaml::YamlConfig {
+        crate::yaml::YamlConfig {
+            app_id: "fake_app_id".to_string(),
+            channel: Some("fake_channel".to_string()),
+            auto_update: Some(true),
+            base_url: Some("fake_base_url".to_string()),
+        }
+    }
+
+    // These tests are serial because they modify global state.
+    #[serial]
+    #[test]
+    fn set_config_creates_new_config_on_first_call() {
+        testing_reset_config();
+
+        let result = set_config(
+            fake_app_config(),
+            Box::new(FakeExternalFileProvider {}),
+            "".into(),
+            &fake_yaml(),
+            NetworkHooks::default(),
+        );
+        assert!(result.is_ok());
+    }
+
+    // These tests are serial because they modify global state.
+    #[serial]
+    #[test]
+    fn set_config_returns_updater_already_initialized_on_subsequent_calls() {
+        testing_reset_config();
+
+        let first_result = set_config(
+            fake_app_config(),
+            Box::new(FakeExternalFileProvider {}),
+            "".into(),
+            &fake_yaml(),
+            NetworkHooks::default(),
+        );
+        assert!(first_result.is_ok());
+        let second_result = set_config(
+            fake_app_config(),
+            Box::new(FakeExternalFileProvider {}),
+            "".into(),
+            &fake_yaml(),
+            NetworkHooks::default(),
+        );
+        assert!(second_result.is_err());
+        assert_eq!(
+            second_result.err().unwrap(),
+            crate::UpdateError::UpdaterAlreadyInitialized
+        );
+    }
 }

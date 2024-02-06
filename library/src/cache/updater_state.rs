@@ -107,7 +107,7 @@ impl UpdaterState {
             Ok(mut loaded) => {
                 if loaded.serialized_state.release_version != release_version {
                     info!(
-                        "release_version changed {} -> {}, clearing updater state",
+                        "release_version changed {} -> {}, creating new state",
                         loaded.serialized_state.release_version, release_version
                     );
                     let _ = loaded.patch_manager.reset();
@@ -117,7 +117,7 @@ impl UpdaterState {
             }
             Err(e) => {
                 if !is_file_not_found(&e) {
-                    warn!("Error loading state: {:#}, clearing state.", e);
+                    warn!("No existing state file found: {:#}, creating new state.", e);
                 }
                 Self::create_new_and_save(storage_dir, release_version)
             }
