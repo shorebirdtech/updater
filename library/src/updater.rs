@@ -498,7 +498,7 @@ mod tests {
     use crate::{config::testing_reset_config, ExternalFileProvider};
 
     #[derive(Debug, Clone)]
-    pub struct FakeExternalFileProvider {}
+    struct FakeExternalFileProvider {}
     impl ExternalFileProvider for FakeExternalFileProvider {
         fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))
