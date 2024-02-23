@@ -15,5 +15,9 @@
         "reqwest",
         "tempdir",
         "vmcode"
-    ]
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+    "python.formatting.provider": "none"
 }
