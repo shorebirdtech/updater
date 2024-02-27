@@ -1,4 +1,4 @@
 # Prevents missing DLLs when running the binary on Windows
 # See https://github.com/shorebirdtech/shorebird/issues/1487
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-Ctarget-feature=+crt-static"]
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
