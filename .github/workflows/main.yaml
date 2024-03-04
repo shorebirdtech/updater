@@ -27,7 +27,7 @@ jobs:
       - name: 📚 Git Checkout
         uses: actions/checkout@v4
 
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         name: Build Detection
         id: needs_flutter_build
         with:
@@ -37,7 +37,7 @@ jobs:
               - ./.github/actions/flutter_package/action.yaml
               - shorebird_code_push/**
 
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         name: Build Detection
         id: needs_rust_build
         with:
