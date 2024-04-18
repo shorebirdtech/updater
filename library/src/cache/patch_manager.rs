@@ -675,6 +675,43 @@ mod get_next_boot_patch_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn returns_null_patch_if_first_patch_failed_to_boot() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a first patch and pretend it failed to boot.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_failure_for_patch(1)?;
+
+        // Because there is no previous patch, we should not attempt to boot any patch.
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_last_booted_patch_if_next_patch_failed_to_boot() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a first patch and pretend it booted successfully.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success_for_patch(1)?;
+
+        // Add a second patch and pretend it failed to boot.
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+        manager.record_boot_failure_for_patch(2)?;
+
+        // Verify that we will next attempt to boot from patch 1.
+        assert_eq!(manager.next_boot_patch().unwrap().number, 1);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
