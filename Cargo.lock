@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "patch"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "bidiff",
  "comde",
@@ -1804,7 +1804,6 @@ dependencies = [
  "serial_test",
  "sha2",
  "tempdir",
- "uuid",
  "zip",
 ]
 
@@ -1817,15 +1816,6 @@ dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
-]
-
-[[package]]
-name = "uuid"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e395fcf16a7a3d8127ec99782007af141946b4795001f876d54fb0d55978560"
-dependencies = [
- "getrandom",
 ]
 
 [[package]]
