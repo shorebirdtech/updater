@@ -211,8 +211,8 @@ impl PatchManager {
                         )
                     }
                 } else {
-                    // We've tried and failed to boot from this patch before,
-                    // don't try again.
+                    // We've tried to boot from this patch before and didn't
+                    // succeed. Don't try again.
                     bail!(
                         "Already attempted and failed to boot patch {}",
                         patch.number
@@ -329,7 +329,6 @@ impl ManagePatches for PatchManager {
             if let Err(e) = self.save_patches_state() {
                 error!("Failed to save patches state: {}", e);
             }
-            return None;
         }
 
         self.patches_state
@@ -560,7 +559,7 @@ mod last_successfully_booted_patch_tests {
 }
 
 #[cfg(test)]
-mod get_next_boot_patch_tests {
+mod next_boot_patch_tests {
     use super::*;
     use anyhow::Result;
     use tempdir::TempDir;
@@ -709,6 +708,40 @@ mod get_next_boot_patch_tests {
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_null_if_first_patch_did_not_successfully_boot() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a first patch and pretend it booted successfully.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_null_if_next_patch_did_not_successfully_boot() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a first patch and pretend it booted successfully.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success_for_patch(1)?;
+
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+
+        assert!(manager
+            .next_boot_patch()
+            .is_some_and(|patch| patch.number == 1));
 
         Ok(())
     }
