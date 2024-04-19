@@ -132,25 +132,16 @@ NDK_HOME=$HOME/Documents/GitHub/engine/src/third_party/android_tools/ndk cargo n
   - `downloading`: Downloading an update.
   - `downloaded`: Downloaded an update.
 - Client keeps on disk:
-  - cache of patches in "slots"
-  - cache of in-progress download state.
-  - Last booted patch (may not have been successful).
-  - Last successful patch (never rolled back from unless becomes invalid).
+  - Cache of patches in numbered directories. Only last good patch and next patch artifacts are kept.
+  - Cache of in-progress download state.
+  - Highest seen patch (may not have been booted yet, or may have been rolled back from).
+  - Last attempted boot patch (may not have been successful).
+  - Last successful boot patch (never rolled back from unless becomes invalid).
+  - Next patch to boot (may be the same as last successful patch)
 - Boot State Machine:
   - `ready`: Just woke up, ready to boot.
   - `booting`: Booting a patch.
   - `booted`: Patch is booted, we will not go back from here.
-
-### Slot State Machine
-
-- Patches are cached on disk in "slots".
-- There is a currently active slot (the one that is booted).
-- Patches are identified by base revision + patch number.
-- A given slot is:
-  - `empty`: No update is installed.
-  - `pending`: An update is installed but has not been validated.
-  - `valid`: An update is installed and has been validated.
-- Validation is a temporary state. Patches/slots are revalidated on boot.
 
 ### Trust model
 
