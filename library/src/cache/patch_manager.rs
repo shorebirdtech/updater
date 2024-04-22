@@ -190,29 +190,20 @@ impl PatchManager {
             );
         }
 
-        // Verify that this patch isn't known bad.
-        // Have we attempted to boot from any patch before?
-        if let Some(last_attempted_patch) = self.patches_state.last_attempted_patch {
-            // We would ideally perform the last_attempted_patch.number == patch.number
-            // check as part of the if statement above, but Rust does not like that, at least for
-            // the time being. The following error is produced:
-            // error[E0658]: `let` expressions in this position are unstable
-            // https://github.com/rust-lang/rust/issues/53667
-
-            // If the last patch we tried to boot from was this patch, that's OK so long as
-            // it was successful.
-            if last_attempted_patch.number == patch.number {
-                // Have we successfully booted from any patch before?
-                if let Some(last_successful_patch) = self.patches_state.last_booted_patch {
-                    // Was it this patch?
-                    if last_attempted_patch.number != last_successful_patch.number {
-                        // If not, don't try to boot from this patch again.
-                        bail!(
-                            "Already attempted and failed to boot patch {}",
-                            patch.number
-                        )
-                    }
-                } else {
+        // Verify that we haven't tried and failed to boot this patch.
+        if self.is_patch_last_attempted_patch(patch.number) {
+            match self.last_successful_boot_patch_number() {
+                Some(last_successful_patch_number)
+                    if last_successful_patch_number != patch.number =>
+                {
+                    // We've tried to boot this patch before and weren't successful,
+                    // so don't try again.
+                    bail!(
+                        "Already attempted and failed to boot patch {}",
+                        patch.number
+                    )
+                }
+                None => {
                     // We've tried to boot from this patch before and didn't
                     // succeed. Don't try again.
                     bail!(
@@ -220,10 +211,29 @@ impl PatchManager {
                         patch.number
                     )
                 }
+                Some(_) => {
+                    // This is a known-good patch.
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Whether the given patch number is the last one we attempted to boot
+    /// (whether it was successful or not).
+    fn is_patch_last_attempted_patch(&self, patch_number: usize) -> bool {
+        self.patches_state
+            .last_attempted_patch
+            .map(|patch| patch.number == patch_number)
+            .unwrap_or(false)
+    }
+
+    /// The number of the patch we last successfully booted, if any.
+    fn last_successful_boot_patch_number(&self) -> Option<usize> {
+        self.patches_state
+            .last_booted_patch
+            .map(|patch| patch.number)
     }
 
     fn delete_patch_artifacts(&mut self, patch_number: usize) -> Result<()> {
