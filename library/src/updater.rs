@@ -358,7 +358,10 @@ where
 
 /// The patch which will be run on next boot (which may still be the same
 /// as the current boot).
-/// This may be changed any time `update()` or `start_update_thread()` are called.
+/// This may be changed any time by:
+///  1. `update()`
+///  2. `start_update_thread()`
+///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
         let mut state =
@@ -383,8 +386,19 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     // do so because the semantics have changed:
     //   current is now "last successfully booted patch"
     //   next is now "patch to boot next"
+    info!("Reporting launch start.");
 
-    Ok(())
+    with_config(|config| {
+        let mut state =
+            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+
+        let next_boot_patch = match state.next_boot_patch() {
+            Some(patch) => patch,
+            None => return Ok(()),
+        };
+
+        state.record_boot_start_for_patch(next_boot_patch.number)
+    })
 }
 
 /// Report that the current active path failed to launch.
@@ -396,14 +410,11 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
 
-        // Attempting to get next_boot_patch might return None if the failure was due to
-        // the patch being altered on disk.
-        let patch =
-            state
-                .next_boot_patch()
-                .ok_or(anyhow::Error::from(UpdateError::InvalidState(
-                    "No current patch".to_string(),
-                )))?;
+        let patch = state
+            .last_attempted_boot_patch()
+            .ok_or(anyhow::Error::from(UpdateError::InvalidState(
+                "last_attempted_boot_patch is None".to_string(),
+            )))?;
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
         let mark_result = state.record_boot_failure_for_patch(patch.number);
@@ -431,7 +442,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
 
-        let next_boot_patch = match state.next_boot_patch() {
+        let last_attempted_boot_patch = match state.last_attempted_boot_patch() {
             Some(patch) => patch,
 
             // We didn't boot from a patch, so there's nothing to do.
@@ -440,7 +451,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         let maybe_previous_boot_patch = state.current_boot_patch();
 
-        state.record_boot_success_for_patch(next_boot_patch.number)?;
+        state.record_boot_success_for_patch(last_attempted_boot_patch.number)?;
 
         if let (Some(previous_boot_patch), Some(current_boot_patch)) =
             (maybe_previous_boot_patch, state.current_boot_patch())
@@ -457,7 +468,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             let event = PatchEvent {
                 app_id: config_copy.app_id.clone(),
                 arch: current_arch().to_string(),
-                patch_number: next_boot_patch.number,
+                patch_number: last_attempted_boot_patch.number,
                 platform: current_platform().to_string(),
                 release_version: config_copy.release_version.clone(),
                 identifier: EventType::PatchInstallSuccess,
@@ -632,12 +643,13 @@ mod tests {
     fn report_launch_result_with_no_current_patch() {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
+        assert!(crate::report_launch_start().is_ok());
         assert_eq!(
             crate::report_launch_failure()
                 .unwrap_err()
                 .downcast::<crate::UpdateError>()
                 .unwrap(),
-            crate::UpdateError::InvalidState("No current patch".to_string())
+            crate::UpdateError::InvalidState("last_attempted_boot_patch is None".to_string())
         );
         assert!(crate::report_launch_success().is_ok());
     }
@@ -647,6 +659,7 @@ mod tests {
     fn report_launch_success_with_patch() {
         use crate::cache::{PatchInfo, UpdaterState};
         use crate::config::with_config;
+        let patch_number = 1;
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
@@ -662,7 +675,7 @@ mod tests {
             state
                 .install_patch(&PatchInfo {
                     path: artifact_path,
-                    number: 1,
+                    number: patch_number,
                 })
                 .expect("move failed");
             state.save().expect("save failed");
@@ -672,28 +685,12 @@ mod tests {
 
         // Pretend we booted from it.
         crate::report_launch_start().unwrap();
-
-        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
-        with_config(|config| {
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-            assert_eq!(
-                state.next_boot_patch().unwrap().number,
-                next_boot_patch.number
-            );
-            Ok(())
-        })
-        .unwrap();
-
         super::report_launch_success().unwrap();
 
         with_config(|config| {
             let state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-            assert_eq!(
-                state.current_boot_patch().unwrap().number,
-                next_boot_patch.number
-            );
+            assert_eq!(state.current_boot_patch().unwrap().number, patch_number);
             Ok(())
         })
         .unwrap();
@@ -727,22 +724,8 @@ mod tests {
         })
         .unwrap();
 
-        // Pretend we booted from it.
+        // Pretend we fail to boot from it.
         crate::report_launch_start().unwrap();
-
-        let next_boot_patch = crate::next_boot_patch().unwrap().unwrap();
-        with_config(|config| {
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-            // It's not bad yet.
-            assert_eq!(
-                state.next_boot_patch().unwrap().number,
-                next_boot_patch.number
-            );
-            Ok(())
-        })
-        .unwrap();
-
         super::report_launch_failure().unwrap();
 
         with_config(|config| {

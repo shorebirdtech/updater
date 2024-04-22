@@ -133,6 +133,11 @@ impl UpdaterState {
 
 /// Patch management. All patch management is done via the patch manager.
 impl UpdaterState {
+    /// Records that we are attempting to boot the patch with patch_number.
+    pub fn record_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.patch_manager.record_boot_start_for_patch(patch_number)
+    }
+
     /// Records that the patch with patch_number failed to boot, uninstalls the patch.
     pub fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patch_manager
@@ -143,6 +148,11 @@ impl UpdaterState {
     pub fn record_boot_success_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patch_manager
             .record_boot_success_for_patch(patch_number)
+    }
+
+    /// The patch we most recently attempted to boot.
+    pub fn last_attempted_boot_patch(&self) -> Option<PatchInfo> {
+        self.patch_manager.last_attempted_boot_patch()
     }
 
     /// This is the current patch that is running.
