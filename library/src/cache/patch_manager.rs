@@ -198,7 +198,8 @@ impl PatchManager {
                 Some(last_successful_patch_number)
                     if last_successful_patch_number == patch.number =>
                 {
-                    // We have successfully booted from this patch before.
+                    // Our last boot attempt was this patch, and we've successfully booted from this
+                    // patch before.  This patch is safe to boot from.
                 }
                 _ => {
                     // We've tried to boot from this patch before and didn't
