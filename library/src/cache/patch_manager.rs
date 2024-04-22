@@ -190,7 +190,7 @@ impl PatchManager {
             );
         }
 
-        // Verify that we haven't tried and failed to boot this patch.
+        // If the last boot we tried was this patch, make sure we succeeded or the patch is bad.
         if self.is_patch_last_attempted_patch(patch.number) {
             // We are trying to boot from the same patch that we tried to boot from last time.
 
