@@ -191,7 +191,7 @@ impl PatchManager {
         }
 
         // Verify that this patch isn't known bad.
-        // Have we booted from any patch before?
+        // Have we attempted to boot from any patch before?
         if let Some(last_attempted_patch) = self.patches_state.last_attempted_patch {
             // We would ideally perform the last_attempted_patch.number == patch.number
             // check as part of the if statement above, but Rust does not like that, at least for
