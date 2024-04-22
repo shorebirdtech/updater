@@ -193,8 +193,9 @@ impl PatchManager {
         // Verify that this patch isn't known bad.
         // Have we booted from any patch before?
         if let Some(last_attempted_patch) = self.patches_state.last_attempted_patch {
-            // This would ideally be part of the if statement above, but
-            // Rust does not like that, at least for the time being.
+            // We would ideally perform the last_attempted_patch.number == patch.number
+            // check as part of the if statement above, but Rust does not like that, at least for
+            // the time being. The following error is produced:
             // error[E0658]: `let` expressions in this position are unstable
             // https://github.com/rust-lang/rust/issues/53667
 
