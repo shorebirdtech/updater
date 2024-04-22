@@ -837,6 +837,7 @@ mod fall_back_tests {
         manager.add_patch_for_test(&temp_dir, 1)?;
 
         // Start booting from patch 1.
+        manager.record_boot_start_for_patch(1)?;
 
         // Download patch 2 before patch 1 finishes booting.
         manager.add_patch_for_test(&temp_dir, 2)?;
