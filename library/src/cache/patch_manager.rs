@@ -195,25 +195,30 @@ impl PatchManager {
             .with_context(|| format!("Failed to delete patch dir {}", &patch_dir.display()))
     }
 
-    /// Attempts to use the last successfully booted patch as the next boot patch. If the last successfully
-    /// booted patch is not bootable or has the same number as the patch we're falling back from, we clear it.
-    fn try_fall_back_to_last_booted_patch(&mut self) {
-        if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
-            // If we have a next_boot_patch that we're falling back from, delete its artifacts.
-            let _ = self.delete_patch_artifacts(next_boot_patch.number);
-            self.patches_state.next_boot_patch = None;
+    /// Deletes artifacts for the provided bad_patch_number and attempts to set the next_boot_patch to the last
+    /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
+    /// as the patch we're falling back from, we clear it as well.
+    fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) {
+        let _ = self.delete_patch_artifacts(bad_patch_number);
 
-            if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
-                if last_boot_patch.number == next_boot_patch.number {
-                    // If the last booted patch is the same as the next boot patch, clear it.
-                    self.patches_state.last_booted_patch = None;
+        if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
+            // If our next boot patch is bad_patch_number, clear it.
+            if next_boot_patch.number == bad_patch_number {
+                self.patches_state.next_boot_patch = None;
+
+                // If the last booted patch is the same as the next boot patch, clear it.
+                if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
+                    if last_boot_patch.number == bad_patch_number {
+                        self.patches_state.last_booted_patch = None;
+                    }
                 }
             }
         }
 
+        // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
+        // If something happened to render the last boot patch unbootable, clear it and delete its artifacts.
         if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
             if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
-                // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
                 self.patches_state.next_boot_patch = Some(last_boot_patch);
             } else {
                 self.patches_state.last_booted_patch = None;
@@ -276,7 +281,7 @@ impl ManagePatches for PatchManager {
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
             error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
 
-            self.try_fall_back_to_last_booted_patch();
+            self.try_fall_back_from_patch(next_boot_patch.number);
 
             if let Err(e) = self.save_patches_state() {
                 error!("Failed to save patches state: {}", e);
@@ -316,21 +321,7 @@ impl ManagePatches for PatchManager {
     }
 
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
-        let next_boot_patch = self
-            .patches_state
-            .next_boot_patch
-            .context("No next_boot_patch")?;
-
-        if next_boot_patch.number != patch_number {
-            bail!(
-                "Attempted to record boot failure for patch {} but should have booted from {}",
-                patch_number,
-                next_boot_patch.number
-            );
-        }
-
-        self.try_fall_back_to_last_booted_patch();
-
+        self.try_fall_back_from_patch(patch_number);
         self.save_patches_state()
     }
 
@@ -619,7 +610,7 @@ mod fall_back_tests {
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
 
-        manager.try_fall_back_to_last_booted_patch();
+        manager.try_fall_back_from_patch(1);
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
@@ -635,7 +626,7 @@ mod fall_back_tests {
         assert!(manager.patches_state.next_boot_patch.is_none());
 
         manager.patches_state.last_booted_patch = Some(PatchMetadata { number: 1, size: 1 });
-        manager.try_fall_back_to_last_booted_patch();
+        manager.try_fall_back_from_patch(1);
 
         assert_eq!(
             manager.patches_state.next_boot_patch,
@@ -650,11 +641,14 @@ mod fall_back_tests {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
 
+        // Download and successfully boot from patch 1
         manager.add_patch_for_test(&temp_dir, 1)?;
         manager.record_boot_success_for_patch(1)?;
+
+        // Download and fall back from patch 2
         manager.add_patch_for_test(&temp_dir, 2)?;
 
-        manager.try_fall_back_to_last_booted_patch();
+        manager.try_fall_back_from_patch(2);
 
         assert_eq!(manager.patches_state.last_booted_patch.unwrap().number, 1);
         assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 1);
@@ -667,17 +661,43 @@ mod fall_back_tests {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
 
+        // Download and successfully boot from patch 1, and then corrupt it on disk.
         manager.add_patch_for_test(&temp_dir, 1)?;
         manager.record_boot_success_for_patch(1)?;
         let patch_1_path = manager.patch_artifact_path(1);
         std::fs::write(patch_1_path, "junkjunkjunk")?;
 
+        // Download and fall back from patch 2
         manager.add_patch_for_test(&temp_dir, 2)?;
 
-        manager.try_fall_back_to_last_booted_patch();
+        manager.try_fall_back_from_patch(2);
 
+        // Neither patch should exist.
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_clear_next_patch_if_changed_since_boot_start() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        // Simulate a situation where we download both patches 1 and 2.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+
+        // Start booting from patch 1.
+
+        // Download patch 2 before patch 1 finishes booting.
+        manager.add_patch_for_test(&temp_dir, 2)?;
+
+        manager.record_boot_failure_for_patch(1)?;
+
+        manager.try_fall_back_from_patch(1);
+
+        assert!(manager.patches_state.last_booted_patch.is_none());
+        assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 2);
 
         Ok(())
     }
@@ -687,17 +707,20 @@ mod fall_back_tests {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
 
+        // Download and successfully boot from patch 1, and then corrupt it on disk.
         manager.add_patch_for_test(&temp_dir, 1)?;
         manager.record_boot_success_for_patch(1)?;
 
+        // Download patch 2.
         manager.add_patch_for_test(&temp_dir, 2)?;
 
+        // Remove all data for both patches.
         let patch_dir = manager.patch_dir(1);
         std::fs::remove_dir_all(patch_dir)?;
         let patch_dir = manager.patch_dir(2);
         std::fs::remove_dir_all(patch_dir)?;
 
-        manager.try_fall_back_to_last_booted_patch();
+        manager.try_fall_back_from_patch(2);
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
@@ -795,26 +818,6 @@ mod record_boot_failure_for_patch_tests {
     use super::*;
     use anyhow::{Ok, Result};
     use tempdir::TempDir;
-
-    #[test]
-    fn errs_if_no_next_boot_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-        assert!(manager.record_boot_failure_for_patch(1).is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn errs_if_patch_number_does_not_match_next_boot_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-        manager.add_patch_for_test(&temp_dir, 1)?;
-
-        assert!(manager.record_boot_failure_for_patch(2).is_err());
-
-        Ok(())
-    }
 
     #[test]
     fn deletes_failed_patch_artifacts() -> Result<()> {
