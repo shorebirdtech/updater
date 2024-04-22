@@ -199,7 +199,8 @@ impl PatchManager {
             // error[E0658]: `let` expressions in this position are unstable
             // https://github.com/rust-lang/rust/issues/53667
 
-            // Was it this patch?
+            // If the last patch we tried to boot from was this patch, that's OK so long as
+            // it was successful.
             if last_attempted_patch.number == patch.number {
                 // Have we successfully booted from any patch before?
                 if let Some(last_successful_patch) = self.patches_state.last_booted_patch {
