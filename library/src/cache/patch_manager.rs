@@ -192,27 +192,21 @@ impl PatchManager {
 
         // Verify that we haven't tried and failed to boot this patch.
         if self.is_patch_last_attempted_patch(patch.number) {
+            // We are trying to boot from the same patch that we tried to boot from last time.
+
             match self.last_successful_boot_patch_number() {
                 Some(last_successful_patch_number)
-                    if last_successful_patch_number != patch.number =>
+                    if last_successful_patch_number == patch.number =>
                 {
-                    // We've tried to boot this patch before and weren't successful,
-                    // so don't try again.
-                    bail!(
-                        "Already attempted and failed to boot patch {}",
-                        patch.number
-                    )
+                    // We have successfully booted from this patch before.
                 }
-                None => {
+                _ => {
                     // We've tried to boot from this patch before and didn't
                     // succeed. Don't try again.
                     bail!(
                         "Already attempted and failed to boot patch {}",
                         patch.number
                     )
-                }
-                Some(_) => {
-                    // This is a known-good patch.
                 }
             }
         }
