@@ -285,9 +285,21 @@ impl PatchManager {
     fn delete_patch_artifacts_older_than(&mut self, patch_number: usize) -> Result<()> {
         for entry in std::fs::read_dir(self.patches_dir())? {
             let entry = entry?;
-            let number = entry.file_name().to_string_lossy().parse::<usize>()?;
-            if number < patch_number {
-                let _ = self.delete_patch_artifacts(number);
+            match entry.file_name().to_string_lossy().parse::<usize>() {
+                Ok(number) if number < patch_number => {
+                    // delete_patch_artifacts logs for us, no need to log here.
+                    let _ = self.delete_patch_artifacts(number);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!(
+                        "Failed to parse patch number from patches directory entry, deleting: {}",
+                        e
+                    );
+                    // Attempt to delete the unrecognized directory, but don't stop
+                    // the artifact deletion process if it fails.
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
             }
         }
 
@@ -995,6 +1007,26 @@ mod record_boot_success_for_patch_tests {
             .collect::<Vec<_>>();
         patch_dir_names.sort();
         assert_eq!(patch_dir_names, vec!["3", "4"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn deletes_unrecognized_directories_in_patches_dir() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+
+        // Add a junk directory to the patches directory.
+        let junk_dir = manager.patches_dir().join("junk");
+        std::fs::create_dir_all(&junk_dir)?;
+
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+        manager.record_boot_success()?;
+
+        assert!(!junk_dir.exists());
+        assert!(!manager.patch_dir(1).exists());
 
         Ok(())
     }
