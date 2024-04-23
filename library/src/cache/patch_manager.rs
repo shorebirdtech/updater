@@ -255,20 +255,15 @@ impl PatchManager {
             // If our next boot patch is bad_patch_number, clear it.
             if next_boot_patch.number == bad_patch_number {
                 self.patches_state.next_boot_patch = None;
-
-                // If the last booted patch is the same as the next boot patch, clear it.
-                if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
-                    if last_boot_patch.number == bad_patch_number {
-                        self.patches_state.last_booted_patch = None;
-                    }
-                }
             }
         }
 
         // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
         // If something happened to render the last boot patch unbootable, clear it and delete its artifacts.
         if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
-            if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
+            if last_boot_patch.number != bad_patch_number
+                && self.validate_patch_is_bootable(&last_boot_patch).is_ok()
+            {
                 self.patches_state.next_boot_patch = Some(last_boot_patch);
             } else {
                 self.patches_state.last_booted_patch = None;
