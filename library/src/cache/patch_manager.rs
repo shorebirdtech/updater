@@ -279,6 +279,14 @@ impl PatchManager {
     }
 
     /// Deletes all patch artifacts with numbers less than patch_number.
+    /// We intentionally only delete older patch artifacts. Consider the case:
+    ///
+    /// 1. We start booting patch 2
+    /// 2. While booting (i.e., in between boot start and boot success), we download and inflate patch 3
+    /// 3. We finish booting patch 2
+    ///
+    /// Deleting all other patch artifacts would delete patch 3, and because we've "seen" patch 3,
+    /// we would never try to download it again (it would be considered "bad").
     fn delete_patch_artifacts_older_than(&mut self, patch_number: usize) -> Result<()> {
         for entry in std::fs::read_dir(self.patches_dir())? {
             let entry = entry?;
