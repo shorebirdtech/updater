@@ -451,7 +451,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         let maybe_previous_boot_patch = state.current_boot_patch();
 
-        state.record_boot_success_for_patch(last_attempted_boot_patch.number)?;
+        state.record_boot_success()?;
 
         if let (Some(previous_boot_patch), Some(current_boot_patch)) =
             (maybe_previous_boot_patch, state.current_boot_patch())
