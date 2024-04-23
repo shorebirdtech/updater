@@ -404,7 +404,12 @@ impl ManagePatches for PatchManager {
             .context("No last_attempted_patch")?;
 
         self.patches_state.last_booted_patch = Some(boot_patch);
-        let _ = self.delete_patch_artifacts_older_than(boot_patch.number);
+        if let Err(e) = self.delete_patch_artifacts_older_than(boot_patch.number) {
+            error!(
+                "Failed to delete patch artifacts older than {}: {}",
+                boot_patch.number, e
+            );
+        }
         self.save_patches_state()
     }
 
