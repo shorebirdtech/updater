@@ -61,15 +61,15 @@ pub trait ManagePatches {
 
     /// Returns the next patch to boot, or None if:
     /// - no patches have been downloaded
-    /// - the patch on disk is not bootable
+    /// - we cannot boot from the patch(es) on disk
     fn next_boot_patch(&mut self) -> Option<PatchInfo>;
 
     /// Record that we're booting. If we have a next path, updates the last
     /// attempted patch to be the next boot patch.
     fn record_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()>;
 
-    /// Records that the patch with number patch_number booted successfully and is
-    /// safe to use for future boots.
+    /// Marks last_attempted_patch as "good", updates last_booted_patch to be the same,
+    /// and deletes all patch artifacts older than the last_booted_patch.
     fn record_boot_success(&mut self) -> Result<()>;
 
     /// Records that the patch with number patch_number failed to boot, and ensures
