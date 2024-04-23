@@ -256,7 +256,9 @@ impl PatchManager {
             if next_boot_patch.number == bad_patch_number {
                 self.patches_state.next_boot_patch = None;
 
-                // If the last booted patch is the same as the next boot patch, clear it.
+                // If the last booted patch also the bad patch (i.e., if we had
+                // previously booted from this patch and it is now failing validation),
+                // clear it as well.
                 if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
                     if last_boot_patch.number == bad_patch_number {
                         self.patches_state.last_booted_patch = None;
