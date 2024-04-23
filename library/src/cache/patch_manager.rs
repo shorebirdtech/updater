@@ -248,6 +248,7 @@ impl PatchManager {
     /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
     /// as the patch we're falling back from, we clear it as well.
     fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) {
+        // No need to log failure – delete_patch_artifacts logs for us.
         let _ = self.delete_patch_artifacts(bad_patch_number);
 
         if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
@@ -271,6 +272,7 @@ impl PatchManager {
                 self.patches_state.next_boot_patch = Some(last_boot_patch);
             } else {
                 self.patches_state.last_booted_patch = None;
+                // No need to log failure – delete_patch_artifacts logs for us.
                 let _ = self.delete_patch_artifacts(last_boot_patch.number);
             }
         }
