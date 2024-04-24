@@ -202,7 +202,7 @@ Changes in this state can be triggered by:
 
 - Network and Disk are untrusted.
 - Running software (including apk service) is trusted.
-- Patch contents are signed, public key is included in the APK.
+- Patch contents are signed, public key is included in the APK. (not yet implemented)
 
 ## TODO:
 
