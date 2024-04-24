@@ -145,9 +145,8 @@ impl UpdaterState {
     }
 
     /// Records that the patch with patch_number was successfully booted, marks the patch as "good".
-    pub fn record_boot_success_for_patch(&mut self, patch_number: usize) -> Result<()> {
-        self.patch_manager
-            .record_boot_success_for_patch(patch_number)
+    pub fn record_boot_success(&mut self) -> Result<()> {
+        self.patch_manager.record_boot_success()
     }
 
     /// The patch we most recently attempted to boot.
@@ -315,16 +314,14 @@ mod tests {
 
     #[test]
     fn record_boot_success_for_patch_forwards_to_patch_manager() {
-        let patch_number = 1;
         let tmp_dir = TempDir::new("example").unwrap();
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
-            .expect_record_boot_success_for_patch()
-            .with(eq(patch_number))
-            .returning(|_| Ok(()));
+            .expect_record_boot_success()
+            .returning(|| Ok(()));
         let mut state = test_state(&tmp_dir, mock_manage_patches);
 
-        assert!(state.record_boot_success_for_patch(patch_number).is_ok());
+        assert!(state.record_boot_success().is_ok());
     }
 
     #[test]
