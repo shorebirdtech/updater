@@ -193,7 +193,7 @@ Changes in this state can be triggered by:
 - Server is authoritative, regarding current update/patch state. Client can
   cache state in memory. Not written to disk.
 - Patches are downloaded to a temporary location on disk.
-- Client keeps on disk:
+- Client keeps on disk (in state.json):
   - Current release version. Set when the app launches. If the app is updated to
     a new release version, all state is invalidated.
   - Queue of PatchEvents. This is cleared once events are sent to our servers.
