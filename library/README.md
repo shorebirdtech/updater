@@ -119,29 +119,84 @@ NDK_HOME=$HOME/Documents/GitHub/engine/src/third_party/android_tools/ndk cargo n
 - Updates must be applied in order.
 - Updates are applied in a single transaction.
 
-### Update State Machine
+### State Machines
+
+#### Boot State Machine
+
+This state machine tracks the process of the engine starting up, with or without
+a patch. These state transitions happen with or without a patch, but in the
+context of the updater, we only care about the case where we are booting from
+a patch.
+
+The patch boot state is internal to the PatchManager and stored on disk in
+`patches_state.json`. It contains three fields, all of which are Optional
+PatchMetadata structs:
+
+- last_boot_patch: The last patch that was successfully booted.
+- last_attempted_patch: The last patch that we attempted to boot.
+- next_boot_patch: The next patch that we will attempt to boot.
+
+This state machine has the following states. It can only move forward through
+them.
+
+1. Ready - The engine is initialized but has not started booting yet.
+2. Booting - The engine has started booting.
+3. Success - The engine successfully booted.
+4. Failure - The engine failed to boot.
+
+State is advanced through calls to the following methods of the `ManagePatches`
+trait, which PatchManager implements:
+
+- `record_launch_start`: Moves from Ready to Booting
+  - next_boot_patch is the patch that we will attempt to boot, i.e., the "current" patch.
+  - last_attempted_patch is set to next_boot_patch.
+- `record_launch_success`: Moves from Booting to Success
+  - last_boot_patch is set to next_boot_patch.
+  - Artifacts for patches older than last_boot_patch are deleted.
+- `record_launch_failure`: Moves from Booting to Failure
+  - next_boot_patch artifacts are deleted.
+  - next_boot_patch is set to either:
+    - last_boot_patch if it is still valid, or
+    - None, if last_boot_patch is None or invalid.
+
+These are effectively no-ops if we are not booting from a patch.
+
+We assume that this state machine will have advanced at least as far as the
+Booting state before the Patch Check State Machine (below) is started.
+
+#### Patch Check/Update State Machine
+
+This state machine tracks the process of checking for new patches. It is managed
+by the code in `updater.rs` and does not have any on-disk state. It has the
+following states:
+
+1. Ready - Ready to check for udpates.
+2. Send queued events (e.g., report that a patch succeeded or failed to boot)
+   a. Move to checking once events, if any, have been reported.
+3. Checking for new patches - A PatchCheckRequest is issued but not completed.
+   a. If no patch is available, move back to Ready.
+   b. If a new patch is is available, move to Downloading Patch.
+4. Downloading Patch - A patch is available, we're downloading it.
+   a. If the download fails, move back to Ready.
+   b. If the download succeeds, move to Inflating Patch.
+5. Inflating Patch - A patch has been downloaded, we're inflating it.
+   a. Attempt to inflate the patch (apply a bidiff to the current release).
+   b. If the patch is valid, queue a PatchInstallSuccess event and move to Ready.
+   c. If the patch is invalid, queue a PatchInstallFailure event and move to Ready.
+
+Changes in this state can be triggered by:
+
+1. The engine via the C API.
+2. The user via the C API (using the `shorebird_code_push` package).
+3. Network activity.
 
 - Server is authoritative, regarding current update/patch state. Client can
   cache state in memory. Not written to disk.
 - Patches are downloaded to a temporary location on disk.
-- Update State Machine:
-  - `ready`: Just woke up, ready to check for updates.
-  - `checking`: Checking for updates.
-  - `update_available`: Update or rollback is available.
-  - `no_update_available`: No update is available.
-  - `downloading`: Downloading an update.
-  - `downloaded`: Downloaded an update.
 - Client keeps on disk:
-  - Cache of patches in numbered directories. Only last good patch and next patch artifacts are kept.
-  - Cache of in-progress download state.
-  - Highest seen patch (may not have been booted yet, or may have been rolled back from).
-  - Last attempted boot patch (may not have been successful).
-  - Last successful boot patch (never rolled back from unless becomes invalid).
-  - Next patch to boot (may be the same as last successful patch)
-- Boot State Machine:
-  - `ready`: Just woke up, ready to boot.
-  - `booting`: Booting a patch.
-  - `booted`: Patch is booted, we will not go back from here.
+  - Current release version. Set when the app launches. If the app is updated to
+    a new release version, all state is invalidated.
+  - Queue of PatchEvents. This is cleared once events are sent to our servers.
 
 ### Trust model
 
