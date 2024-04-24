@@ -40,9 +40,18 @@ Thread safety is handled by a global configuration object that is locked
 when accessed. It's possible I've missed cases where this is not sufficient,
 and there could be thread safety issues in the library.
 
-- src/c_api.rs - C-compatible API
+- c_api (module) - C-compatible API
+  - c_file.rs - a read-seek interface usable by the engine (used to provide access
+    to iOS patch files)
+  - mod.rs - the implementation of the C API.
 - src/lib.rs - Rust API (and crate root)
-- src/update.rs - Core updater logic
+- src/updater.rs - Core updater logic
+- cache (module) - On-disk state management
+  - disk-io.rs - Manages reading and writing serializable state to disk
+  - mod.rs - Cache management
+  - patch_manager.rs - Patch file state management. Owned by UpdaterState.
+  - updater_state.rs - Public API for this module. Provides functions that
+    trigger updates to the internal Boot State Machine (detailed below).
 - src/config.rs - In memory configuration and thread locking
 - src/cache.rs - On-disk state management
 - src/logging.rs - Logging configuration (for platforms that need it)
