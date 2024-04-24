@@ -61,9 +61,9 @@ and there could be thread safety issues in the library.
 
 We use normal rust idioms (e.g. Result) inside the library and then bridge those
 to C via an explicit stable C API (explicit enums, null pointers for optional
-arguments, etc). The reason for this is that it lets the Rust code feel natural
-and also gives us maximum flexibility in the future for exposing more in the C
-API without having to refactor the internals of the library.
+arguments, etc). This lets the Rust code feel natural and also gives us maximum
+flexibility in the future for exposing more in the C API without having to
+refactor the internals of the library.
 
 https://docs.rust-embedded.org/book/interoperability/rust-with-c.html
 are docs on how to use Rust from C (what we're doing).
@@ -76,9 +76,6 @@ and exposing it with a C api.
 The updater library is built as a static library, and is linked into the
 libflutter.so as part of a custom build of Flutter. We also link libflutter.so
 with the correct flags such that updater symbols are exposed to Dart.
-
-The `dart_bindings` directory contains the Dart bindings for the updater
-library.
 
 ## Building for Android
 
