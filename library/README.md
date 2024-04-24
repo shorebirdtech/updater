@@ -124,9 +124,9 @@ NDK_HOME=$HOME/Documents/GitHub/engine/src/third_party/android_tools/ndk cargo n
 #### Boot State Machine
 
 This state machine tracks the process of the engine starting up, with or without
-a patch. These state transitions happen with or without a patch, but in the
-context of the updater, we only care about the case where we are booting from
-a patch.
+a patch. These state transitions happen whether or not a new patch is available,
+but in the context of the updater, we only care about the case where we are
+booting from a patch.
 
 The patch boot state is internal to the PatchManager and stored on disk in
 `patches_state.json`. It contains three fields, all of which are Optional
