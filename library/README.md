@@ -167,8 +167,14 @@ trait, which PatchManager implements:
 
 These are effectively no-ops if we are not booting from a patch.
 
-We assume that this state machine will have advanced at least as far as the
-Booting state before the Patch Check State Machine (below) is started.
+Assumptions (not currently enforced, but should as possible):
+
+- This state machine will have advanced at least as far as the
+  Booting state before the Patch Check State Machine (below) is started.
+- Calls to mutate state will not come out-of-order. For example,
+  `record_launch_failure` will not be called before `record_launch_start`. This
+  is important because PatchManager state is implicit - it does not track which
+  state it is in.
 
 #### Patch Check/Update State Machine
 
