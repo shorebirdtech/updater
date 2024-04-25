@@ -40,9 +40,18 @@ Thread safety is handled by a global configuration object that is locked
 when accessed. It's possible I've missed cases where this is not sufficient,
 and there could be thread safety issues in the library.
 
-- src/c_api.rs - C-compatible API
+- c_api (module) - C-compatible API
+  - c_file.rs - a read-seek interface usable by the engine (used to provide access
+    to iOS patch files)
+  - mod.rs - the implementation of the C API.
 - src/lib.rs - Rust API (and crate root)
-- src/update.rs - Core updater logic
+- src/updater.rs - Core updater logic
+- cache (module) - On-disk state management
+  - disk-io.rs - Manages reading and writing serializable state to disk
+  - mod.rs - Cache management
+  - patch_manager.rs - Patch file state management. Owned by UpdaterState.
+  - updater_state.rs - Public API for this module. Provides functions that
+    trigger updates to the internal Boot State Machine (detailed below).
 - src/config.rs - In memory configuration and thread locking
 - src/cache.rs - On-disk state management
 - src/logging.rs - Logging configuration (for platforms that need it)
@@ -52,9 +61,9 @@ and there could be thread safety issues in the library.
 
 We use normal rust idioms (e.g. Result) inside the library and then bridge those
 to C via an explicit stable C API (explicit enums, null pointers for optional
-arguments, etc). The reason for this is that it lets the Rust code feel natural
-and also gives us maximum flexibility in the future for exposing more in the C
-API without having to refactor the internals of the library.
+arguments, etc). This lets the Rust code feel natural and also gives us maximum
+flexibility in the future for exposing more in the C API without having to
+refactor the internals of the library.
 
 https://docs.rust-embedded.org/book/interoperability/rust-with-c.html
 are docs on how to use Rust from C (what we're doing).
@@ -67,9 +76,6 @@ and exposing it with a C api.
 The updater library is built as a static library, and is linked into the
 libflutter.so as part of a custom build of Flutter. We also link libflutter.so
 with the correct flags such that updater symbols are exposed to Dart.
-
-The `dart_bindings` directory contains the Dart bindings for the updater
-library.
 
 ## Building for Android
 
@@ -119,35 +125,96 @@ NDK_HOME=$HOME/Documents/GitHub/engine/src/third_party/android_tools/ndk cargo n
 - Updates must be applied in order.
 - Updates are applied in a single transaction.
 
-### Update State Machine
+### State Machines
+
+#### Boot State Machine
+
+This state machine tracks the process of the engine starting up, with or without
+a patch. These state transitions happen whether or not a new patch is available,
+but in the context of the updater, we only care about the case where we are
+booting from a patch.
+
+The patch boot state is internal to the PatchManager and stored on disk in
+`patches_state.json`. It contains three fields, all of which are Optional
+PatchMetadata structs:
+
+- last_boot_patch: The last patch that was successfully booted.
+- last_attempted_patch: The last patch that we attempted to boot.
+- next_boot_patch: The next patch that we will attempt to boot.
+
+This state machine has the following states. It can only move forward through
+them.
+
+1. Ready - The engine is initialized but has not started booting yet.
+2. Booting - The engine has started booting.
+3. Success - The engine successfully booted.
+4. Failure - The engine failed to boot.
+
+State is advanced through calls to the following methods of the `ManagePatches`
+trait, which PatchManager implements:
+
+- `record_launch_start`: Moves from Ready to Booting
+  - next_boot_patch is the patch that we will attempt to boot, i.e., the "current" patch.
+  - last_attempted_patch is set to next_boot_patch.
+- `record_launch_success`: Moves from Booting to Success
+  - last_boot_patch is set to next_boot_patch.
+  - Artifacts for patches older than last_boot_patch are deleted.
+- `record_launch_failure`: Moves from Booting to Failure
+  - next_boot_patch artifacts are deleted.
+  - next_boot_patch is set to either:
+    - last_boot_patch if it is still valid, or
+    - None, if last_boot_patch is None or invalid.
+
+These are effectively no-ops if we are not booting from a patch.
+
+Assumptions (not currently enforced, but should as possible):
+
+- This state machine will have advanced at least as far as the
+  Booting state before the Patch Check State Machine (below) is started.
+- Calls to mutate state will not come out-of-order. For example,
+  `record_launch_failure` will not be called before `record_launch_start`. This
+  is important because PatchManager state is implicit - it does not track which
+  state it is in.
+
+#### Patch Check/Update State Machine
+
+This state machine tracks the process of checking for new patches. It is managed
+by the code in `updater.rs` and does not have any on-disk state. It has the
+following states:
+
+1. Ready - Ready to check for udpates.
+2. Send queued events (e.g., report that a patch succeeded or failed to boot)
+   a. Move to checking once events, if any, have been reported.
+3. Checking for new patches - A PatchCheckRequest is issued but not completed.
+   a. If no patch is available, move back to Ready.
+   b. If a new patch is is available, move to Downloading Patch.
+4. Downloading Patch - A patch is available, we're downloading it.
+   a. If the download fails, move back to Ready.
+   b. If the download succeeds, move to Inflating Patch.
+5. Inflating Patch - A patch has been downloaded, we're inflating it.
+   a. Attempt to inflate the patch (apply a bidiff to the current release).
+   b. If the patch is valid, queue a PatchInstallSuccess event and move to Ready.
+   c. If the patch is invalid, queue a PatchInstallFailure event and move to Ready.
+
+Changes in this state can be triggered by:
+
+1. The engine via the C API.
+2. The user via the C API (using the `shorebird_code_push` package).
+3. Network activity.
 
 - Server is authoritative, regarding current update/patch state. Client can
   cache state in memory. Not written to disk.
 - Patches are downloaded to a temporary location on disk.
-- Update State Machine:
-  - `ready`: Just woke up, ready to check for updates.
-  - `checking`: Checking for updates.
-  - `update_available`: Update or rollback is available.
-  - `no_update_available`: No update is available.
-  - `downloading`: Downloading an update.
-  - `downloaded`: Downloaded an update.
-- Client keeps on disk:
-  - Cache of patches in numbered directories. Only last good patch and next patch artifacts are kept.
-  - Cache of in-progress download state.
-  - Highest seen patch (may not have been booted yet, or may have been rolled back from).
-  - Last attempted boot patch (may not have been successful).
-  - Last successful boot patch (never rolled back from unless becomes invalid).
-  - Next patch to boot (may be the same as last successful patch)
-- Boot State Machine:
-  - `ready`: Just woke up, ready to boot.
-  - `booting`: Booting a patch.
-  - `booted`: Patch is booted, we will not go back from here.
+- Client keeps on disk (in state.json):
+  - Current release version. Set when the app launches. If the app is updated to
+    a new release version, all state is invalidated.
+  - Queue of PatchEvents. This is cleared once events are sent to our servers.
 
 ### Trust model
 
 - Network and Disk are untrusted.
 - Running software (including apk service) is trusted.
-- Patch contents are signed, public key is included in the APK.
+- Patch contents are signed, public key is included in the APK. (not yet implemented)
 
 ## TODO:
 
