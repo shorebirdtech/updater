@@ -19,7 +19,9 @@ const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
 const PATCH_ARTIFACT_FILENAME: &str = "dlc.vmcode";
 
-// This is no longer Copy-able because of the hash and signature fields.
+// This is no longer Copy-able because of the hash and signature fields. This
+// change results in us adding clone() calls to PatchMetadata in a several
+// places below.
 // #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 struct PatchMetadata {
