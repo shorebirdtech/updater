@@ -363,10 +363,14 @@ where
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
+    let now = std::time::Instant::now();
+    info!("start next boot patch.");
     with_config(|config| {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        Ok(state.next_boot_patch())
+        let next_patch = state.next_boot_patch();
+        info!("took {:?} to validate next boot patch.", now.elapsed());
+        Ok(next_patch)
     })
 }
 
