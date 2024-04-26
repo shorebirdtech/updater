@@ -212,6 +212,16 @@ impl PatchManager {
             }
         }
 
+        use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
+
+        let path = self.patch_artifact_path(patch.number);
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        // Check that the length from copy is the same as the file size?
+        let hash = hasher.finalize();
+        info!("hash digest is {}", hex::encode(hash));
+
         Ok(())
     }
 
