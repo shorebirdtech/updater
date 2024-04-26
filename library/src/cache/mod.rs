@@ -9,4 +9,5 @@ pub use updater_state::UpdaterState;
 pub struct PatchInfo {
     pub path: std::path::PathBuf,
     pub number: usize,
+    pub hash: String,
 }

@@ -292,6 +292,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         let patch_info = PatchInfo {
             path: output_path,
             number: patch.number,
+            hash: patch.hash,
         };
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
@@ -563,6 +564,7 @@ mod tests {
                 .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: 1,
+                    hash: "hash".to_string(),
                 })
                 .expect("move failed");
             state.save().expect("save failed");
@@ -680,6 +682,7 @@ mod tests {
                 .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: patch_number,
+                    hash: "hash".to_string(),
                 })
                 .expect("move failed");
             state.save().expect("save failed");
@@ -721,6 +724,7 @@ mod tests {
                 .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: 1,
+                    hash: "hash".to_string(),
                 })
                 .expect("move failed");
             state.save().expect("save failed");

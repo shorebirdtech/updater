@@ -173,7 +173,8 @@ impl UpdaterState {
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
     pub fn install_patch(&mut self, patch: &PatchInfo) -> anyhow::Result<()> {
-        self.patch_manager.add_patch(patch.number, &patch.path)
+        self.patch_manager
+            .add_patch(patch.number, &patch.path, &patch.hash)
     }
 
     /// Returns highest patch number that has been installed for this release.
@@ -240,7 +241,11 @@ mod tests {
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
         let path = tmp_dir.path().join(format!("patch_{}", number));
         std::fs::write(&path, "fake patch").unwrap();
-        PatchInfo { number, path }
+        PatchInfo {
+            number,
+            path,
+            hash: "asdf".to_owned(),
+        }
     }
 
     #[test]
@@ -249,7 +254,7 @@ mod tests {
         let mut patch_manager = PatchManager::with_root_dir(tmp_dir.path().to_path_buf());
         let file_path = &tmp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, "patch file contents").unwrap();
-        assert!(patch_manager.add_patch(1, file_path).is_ok());
+        assert!(patch_manager.add_patch(1, file_path, "asdf").is_ok());
 
         let state = test_state(&tmp_dir, patch_manager);
         let release_version = state.serialized_state.release_version.clone();
@@ -357,8 +362,8 @@ mod tests {
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
             .expect_add_patch()
-            .with(eq(patch.number), eq(patch.path.clone()))
-            .returning(|_, __| Ok(()));
+            .with(eq(patch.number), eq(patch.path.clone()), eq("asdf"))
+            .returning(|_, __, ___| Ok(()));
         let mut state = test_state(&tmp_dir, mock_manage_patches);
 
         assert!(state.install_patch(&patch).is_ok());
