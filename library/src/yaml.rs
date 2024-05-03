@@ -12,7 +12,7 @@ pub struct YamlConfig {
     pub base_url: Option<String>,
     /// Update behavior. Defaults to true if not set.
     pub auto_update: Option<bool>,
-    /// Path for the public key to verify the patch.
+    /// Path to a public key that will be used to verify patch hash signatures.
     pub patch_public_key_path: Option<String>,
 }
 
