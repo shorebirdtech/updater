@@ -1,3 +1,5 @@
+use crate::config::with_config;
+
 use super::{disk_io, PatchInfo};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -184,6 +186,7 @@ impl PatchManager {
     ///
     /// Returns Ok if the patch is bootable, or an error if it is not.
     fn validate_patch_is_bootable(&self, patch: &PatchMetadata) -> Result<()> {
+
         let artifact_path = self.patch_artifact_path(patch.number);
         if !Path::exists(&artifact_path) {
             bail!(
@@ -225,54 +228,67 @@ impl PatchManager {
             }
         }
 
-        // Ensure patch signature is valid for recorded hash
+        let result = with_config(|config| {
+          // Ensure patch signature is valid for recorded hash
+          // public.pem
+          if let Some(public_key_path) = config.patch_public_key_path.as_ref() {
 
-        // public.pem
-        let public_key_base_64_str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
-        let public_key_str = base64::prelude::BASE64_STANDARD
-            .decode(public_key_base_64_str)
-            .unwrap();
+            let public_key_str = match std::fs::read_to_string(public_key_path) {
+                Ok(value) => value,
+                Err(e) => {
+                    bail!("Failed read key: {:?}", e);
+                }
+            };
 
-        info!("generating public key from {:?}", public_key_str);
-        let public_key = signature::UnparsedPublicKey::new(
-            &signature::RSA_PKCS1_2048_8192_SHA256,
-            public_key_str,
-        );
-        info!("public key is {:?}", public_key);
-        info!("signature is {}", patch.signature);
-        let decoded_sig = match base64::prelude::BASE64_STANDARD.decode(patch.signature.clone()) {
-            Ok(sig) => sig,
-            Err(e) => {
-                error!("Failed to decode signature: {:?}", e);
-                vec![]
-            }
-        };
+            info!("generating public key from {:?}", public_key_str);
+            let public_key = signature::UnparsedPublicKey::new(
+                &signature::RSA_PKCS1_2048_8192_SHA256,
+                public_key_str,
+            );
 
-        info!("decoded signature is {:?}", decoded_sig);
-        info!("verifying signature...");
-        match public_key.verify(patch.hash.as_bytes(), &decoded_sig) {
-            Ok(_) => {
-                info!("Signature is valid");
+            info!("public key is {:?}", public_key);
+            info!("signature is {}", patch.signature);
+            let decoded_sig = match base64::prelude::BASE64_STANDARD.decode(patch.signature.clone()) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    error!("Failed to decode signature: {:?}", e);
+                    vec![]
+                }
+            };
+
+            info!("decoded signature is {:?}", decoded_sig);
+            info!("verifying signature...");
+            match public_key.verify(patch.hash.as_bytes(), &decoded_sig) {
+                Ok(_) => {
+                    info!("Signature is valid");
+                }
+                Err(e) => {
+                    error!("Signature is invalid: {:?}", e);
+                }
             }
-            Err(e) => {
-                error!("Signature is invalid: {:?}", e);
-            }
+
+            use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
+
+            let path = self.patch_artifact_path(patch.number);
+            let mut file = std::fs::File::open(path)?;
+            let mut hasher = Sha256::new();
+            std::io::copy(&mut file, &mut hasher)?;
+            // Check that the length from copy is the same as the file size?
+            let hash = hasher.finalize();
+            info!("patch hash is {}", patch.hash);
+            info!("hash digest is {}", hex::encode(hash));
+
+            info!("hashes match? {}", hex::encode(hash) == patch.hash);
+          }
+
+          Ok(())
+        });
+
+        // Idk why this is needed
+        match result {
+            Ok(_) => { Ok(()) }
+            Err(e) => bail!(e)
         }
-
-        use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
-
-        let path = self.patch_artifact_path(patch.number);
-        let mut file = std::fs::File::open(path)?;
-        let mut hasher = Sha256::new();
-        std::io::copy(&mut file, &mut hasher)?;
-        // Check that the length from copy is the same as the file size?
-        let hash = hasher.finalize();
-        info!("patch hash is {}", patch.hash);
-        info!("hash digest is {}", hex::encode(hash));
-
-        info!("hashes match? {}", hex::encode(hash) == patch.hash);
-
-        Ok(())
     }
 
     /// Whether the given patch number is the last one we attempted to boot
