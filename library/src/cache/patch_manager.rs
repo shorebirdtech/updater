@@ -186,7 +186,6 @@ impl PatchManager {
     ///
     /// Returns Ok if the patch is bootable, or an error if it is not.
     fn validate_patch_is_bootable(&self, patch: &PatchMetadata) -> Result<()> {
-
         let artifact_path = self.patch_artifact_path(patch.number);
         if !Path::exists(&artifact_path) {
             bail!(
