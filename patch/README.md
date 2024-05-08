@@ -10,13 +10,13 @@ file for uploading to Shorebird's servers.
 
 ## Context, design and future thoughts.
 
-Originally this was written on top of the `bsdiff` and `bspatch` tools, but
-really no longer needs to be.  For expediency we used the `comde` crate to
-have a generic api across multiple compression algorithms.  However, we've
-since decided to use the `zstd` crate for compression and decompression and
-could remove our `comde` and `bsdiff` dependencies eventually.
+Originally this was written on top of the `bidiff` tool, but really no longer
+needs to be.  For expediency we used the `comde` crate to have a generic api
+across multiple compression algorithms.  However, we've since decided to use the
+`zstd` crate for compression and decompression and could remove our `comde` and
+`bidiff` dependencies eventually.
 
-Because `bsdiff` does not check what it's patching, it's possible to apply a
+Because `bidiff` does not check what it's patching, it's possible to apply a
 patch to the wrong file. To avoid this we currently have a separate hash
 which we save in Shorebird's database and then `library` validates that the
 patched file matches what we expected after inflation.  This is the wrong design
@@ -29,7 +29,7 @@ the original file (both are equivalent).  Both of these hashes could be stored
 inside the patch container (.vmcode) and validated by the `library` code.
 
 We should also probably rename `patch` to `packager` or similar since it should
-do more than just bsdiff.  Also some of the apply/inflate code in library might
+do more than just bidiff.  Also some of the apply/inflate code in library might
 want to move into this directory to be more of the same place.
 
 ## Generating test expectations
