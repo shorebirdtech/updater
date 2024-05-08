@@ -1,4 +1,4 @@
-name: build_patch_artifacts
+name: build_packager_artifacts
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          bin: "patch"
+          bin: "packager"
           target: ${{ matrix.target }}
           tar: none
           zip: all

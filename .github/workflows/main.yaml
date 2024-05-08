@@ -45,9 +45,9 @@ jobs:
             library:
               - ./.github/actions/rust_crate/action.yaml
               - library/**
-            patch:
+            packager:
               - ./.github/actions/rust_crate/action.yaml
-              - patch/**
+              - packager/**
 
   build_rust_crates:
     needs: changes
