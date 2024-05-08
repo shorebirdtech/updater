@@ -17,15 +17,15 @@ into the Flutter engine during build time.
 ## Parts
 
 - `library`: Runtime library linked into Flutter Engine to unpack and apply
-  updates.  Build into libupdater.a and linked into libflutter.so.
+  updates. Build into libupdater.a and linked into libflutter.so.
 - `patch`: Developer tooling to package Shorebird updates ("patches"). Built
   into `patch.exe` and downloaded and run by `shorebird` command line tool:
   https://github.com/shorebirdtech/shorebird/tree/main/packages/shorebird_cli.
 - `shorebird_code_push`: The Dart bindings for communicating with the updater
-  library from within a Flutter app.  Published to pub.dev, usage is optional by
+  library from within a Flutter app. Published to pub.dev, usage is optional by
   developers.
 
-Mos interesting code is in the `library` directory. There is also
+Most interesting code is in the `library` directory. There is also
 a [README.md](library/README.md) in that directory explaining the design.
 
 ## Developing
