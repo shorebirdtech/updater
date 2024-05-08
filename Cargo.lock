@@ -994,6 +994,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "packager"
+version = "0.2.1"
+dependencies = [
+ "bidiff",
+ "comde",
+ "hex",
+ "pipe",
+ "sha2",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1014,17 +1025,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-targets 0.48.5",
-]
-
-[[package]]
-name = "patch"
-version = "0.2.1"
-dependencies = [
- "bidiff",
- "comde",
- "hex",
- "pipe",
- "sha2",
 ]
 
 [[package]]

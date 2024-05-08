@@ -1,12 +1,12 @@
 [package]
-name = "patch"
+name = "packager"
 version = "0.2.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# Compression and decompression of patch files.
+# Compression and decompression of package files.
 bidiff = "1.0.0"
 # Pipe is a simple in-memory pipe implementation, there might be a std way too?
 pipe = "0.4.0"
@@ -16,11 +16,11 @@ comde = { version = "0.2.3", default-features = false, features = [
   "zstandard",
 ] }
 
-# Only used by string_patch tool:
+# Only used by string_packager tool:
 # I don't know how to make them per-target dependencies.
 
-# For computing hashes of patch files for validation.
-# Only used by the string_patch tool for now.
+# For computing hashes of package files for validation.
+# Only used by the string_packager tool for now.
 sha2 = "0.10.6"
 # For encoding hashes for Patch network responses.
 hex = "0.4.3"

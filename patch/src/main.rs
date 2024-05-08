@@ -22,7 +22,7 @@ fn main() {
         );
         eprintln!("  base:   Path to the base file");
         eprintln!("  new:    Path to the new file");
-        eprintln!("  output: Path to the output patch file");
+        eprintln!("  output: Path to the output package file");
         eprintln!("");
         eprintln!(" This is an internal tool for creating binary diffs.");
         std::process::exit(1);
@@ -31,14 +31,14 @@ fn main() {
     args.next(); // skip program name
     let older = args.next().expect("path to base file");
     let newer = args.next().expect("path to new file");
-    let patch = args.next().expect("path to output file");
+    let package = args.next().expect("path to output file");
 
     let start = Instant::now();
 
     let older_contents = fs::read(older).expect("read base file");
     let newer_contents = fs::read(newer).expect("read new file");
-    let mut patch_file = File::create(patch).expect("create patch file");
-    patch::make_patch(older_contents, newer_contents, &mut patch_file);
+    let mut package_file = File::create(package).expect("create package file");
+    packager::make_package(older_contents, newer_contents, &mut package_file);
 
     println!("Completed in {:?}", start.elapsed());
 }
