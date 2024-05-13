@@ -162,9 +162,22 @@ pub fn current_platform() -> &'static str {
 }
 
 #[cfg(test)]
+pub fn fake_yaml() -> crate::yaml::YamlConfig {
+    crate::yaml::YamlConfig {
+        app_id: "fake_app_id".to_string(),
+        channel: Some("fake_channel".to_string()),
+        auto_update: Some(true),
+        base_url: Some("fake_base_url".to_string()),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::set_config;
-    use crate::{network::NetworkHooks, testing_reset_config, AppConfig, ExternalFileProvider};
+    use crate::{
+        config::fake_yaml, network::NetworkHooks, testing_reset_config, AppConfig,
+        ExternalFileProvider,
+    };
     use serial_test::serial;
 
     #[derive(Debug, Clone)]
@@ -181,15 +194,6 @@ mod tests {
             code_cache_dir: "/tmp".to_string(),
             release_version: "1.0.0".to_string(),
             original_libapp_paths: vec!["libapp.so".to_string()],
-        }
-    }
-
-    fn fake_yaml() -> crate::yaml::YamlConfig {
-        crate::yaml::YamlConfig {
-            app_id: "fake_app_id".to_string(),
-            channel: Some("fake_channel".to_string()),
-            auto_update: Some(true),
-            base_url: Some("fake_base_url".to_string()),
         }
     }
 

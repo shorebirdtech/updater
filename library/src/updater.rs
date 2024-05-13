@@ -506,7 +506,11 @@ mod tests {
     use std::fs;
     use tempdir::TempDir;
 
-    use crate::{config::testing_reset_config, ExternalFileProvider};
+    use crate::{
+        config::{fake_yaml, set_config, testing_reset_config},
+        network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
+        ExternalFileProvider,
+    };
 
     #[derive(Debug, Clone)]
     struct FakeExternalFileProvider {}
@@ -804,5 +808,64 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn deadlocks_when_initing_and_checking_for_patch() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        // Set up the network hooks to sleep for 10 seconds on a patch check request
+        let hooks = NetworkHooks {
+            patch_check_request_fn: |_url, _request| {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                })
+            },
+            download_file_fn: |_url| Ok([].to_vec()),
+            report_event_fn: |_url, _event| Ok(()),
+        };
+
+        testing_set_network_hooks(
+            hooks.patch_check_request_fn,
+            hooks.download_file_fn,
+            hooks.report_event_fn,
+        );
+
+        let update_thread = std::thread::spawn(move || {
+            crate::check_for_update().unwrap();
+        });
+
+        let set_config_thread = std::thread::spawn(move || {
+            let tmp_dir = TempDir::new("example").unwrap();
+            for _ in 0..1000 {
+                set_config(
+                    crate::AppConfig {
+                        app_storage_dir: tmp_dir.path().display().to_string(),
+                        code_cache_dir: tmp_dir.path().display().to_string(),
+                        release_version: "1.0.0+1".to_string(),
+                        original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
+                    },
+                    Box::new(FakeExternalFileProvider {}),
+                    "/dir/lib/arch/libapp.so".into(),
+                    &fake_yaml(),
+                    NetworkHooks {
+                        patch_check_request_fn: |_url, _request| {
+                            Ok(PatchCheckResponse {
+                                patch_available: false,
+                                patch: None,
+                            })
+                        },
+                        download_file_fn: |_url| Ok([].to_vec()),
+                        report_event_fn: |_url, _event| Ok(()),
+                    },
+                );
+            }
+        });
+
+        update_thread.join().unwrap();
+        set_config_thread.join().unwrap();
     }
 }
