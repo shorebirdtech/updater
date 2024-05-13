@@ -532,8 +532,8 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
-        config::{fake_yaml, set_config, testing_reset_config},
-        network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
+        config::{testing_reset_config, with_config},
+        network::{testing_set_network_hooks, NetworkHooks},
         ExternalFileProvider,
     };
 
@@ -836,19 +836,17 @@ mod tests {
     }
 
     #[test]
-    fn no_lock_contention_when_initing_during_patch_check() {
+    fn no_config_lock_contention_when_waiting_for_patch_check() {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Set up the network hooks to sleep for 10 seconds on a patch check request
         let hooks = NetworkHooks {
             patch_check_request_fn: |_url, _request| {
-                let patch_check_delay = std::time::Duration::from_secs(10);
+                let patch_check_delay = std::time::Duration::from_secs(2);
                 std::thread::sleep(patch_check_delay);
-                Ok(PatchCheckResponse {
-                    patch_available: false,
-                    patch: None,
-                })
+                // If we get here, the test has failed.
+                unreachable!("If the test has not terminated before this, set_config is likely being blocked by a patch check request, which should not happen");
             },
             download_file_fn: |_url| Ok([].to_vec()),
             report_event_fn: |_url, _event| Ok(()),
@@ -860,42 +858,21 @@ mod tests {
             hooks.report_event_fn,
         );
 
-        let _ = std::thread::spawn(move || {
+        // Invoke check_for_update to kick off a patch check request
+        let _ = std::thread::spawn(|| {
             crate::check_for_update().unwrap();
         });
 
-        let set_config_thread = std::thread::spawn(move || {
-            let tmp_dir = TempDir::new("example").unwrap();
-            for _ in 0..10 {
-                set_config(
-                    crate::AppConfig {
-                        app_storage_dir: tmp_dir.path().display().to_string(),
-                        code_cache_dir: tmp_dir.path().display().to_string(),
-                        release_version: "1.0.0+1".to_string(),
-                        original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
-                    },
-                    Box::new(FakeExternalFileProvider {}),
-                    "/dir/lib/arch/libapp.so".into(),
-                    &fake_yaml(),
-                    NetworkHooks {
-                        patch_check_request_fn: |_url, _request| {
-                            Ok(PatchCheckResponse {
-                                patch_available: false,
-                                patch: None,
-                            })
-                        },
-                        download_file_fn: |_url| Ok([].to_vec()),
-                        report_event_fn: |_url, _event| Ok(()),
-                    },
-                );
-            }
+        // Call with_config to get the config lock. This should complete before the patch check request is resolved.
+        let config_thread = std::thread::spawn(|| {
+            let _ = with_config(|_| Ok(()));
         });
 
-        set_config_thread.join().unwrap();
+        config_thread.join().unwrap();
 
         // Don't wait for the patch check thread. This test should finish more or less immediately
-        // if set_config isn't waiting for the patch check thread. If set_config is waiting for
-        // the patch check thread, this test will not finish for the duration of patch_check_delay
-        // (defined in patch_check_request_fn above).
+        // if with_config isn't waiting for the patch check thread. If it is waiting, this test will
+        // take patch_check_delay (defined above) to complete and fail due to the unreachable!() in
+        // the patch check callback.
     }
 }
