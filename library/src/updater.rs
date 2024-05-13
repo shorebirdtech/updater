@@ -846,7 +846,7 @@ mod tests {
         // Set up the network hooks to sleep for 10 seconds on a patch check request
         let hooks = NetworkHooks {
             patch_check_request_fn: |_url, _request| {
-                let patch_check_delay = std::time::Duration::from_secs(2);
+                let patch_check_delay = std::time::Duration::from_secs(1);
                 std::thread::sleep(patch_check_delay);
 
                 // If we've obtained and released the config lock, this test has passed.
