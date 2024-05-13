@@ -14,7 +14,8 @@ use crate::config::{current_arch, current_platform, set_config, with_config, Upd
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
+    download_to_path, patches_check_url, send_patch_check_request, NetworkHooks, PatchCheckRequest,
+    PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
@@ -27,7 +28,7 @@ use std::{println as info, println as error, println as debug}; // Workaround to
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn};
+pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequestFn};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -144,14 +145,38 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
+fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchCheckRequest {
+    let latest_patch_number = state.latest_seen_patch_number();
+
+    // Send the request to the server.
+    PatchCheckRequest {
+        app_id: config.app_id.clone(),
+        channel: config.channel.clone(),
+        release_version: config.release_version.clone(),
+        patch_number: latest_patch_number,
+        platform: current_platform().to_string(),
+        arch: current_arch().to_string(),
+    }
+}
+
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
-    with_config(|config| {
+    let (request, url, request_fn) = with_config(|config| {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
         let state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        send_patch_check_request(config, &state)
-    })
+
+        // Get the required info to make the request.
+        Ok((
+            patch_check_request(config, &state),
+            patches_check_url(&config.base_url),
+            config.network_hooks.patch_check_request_fn,
+        ))
+    })?;
+
+    let response = request_fn(&url, request)?;
+    debug!("Patch check response: {:?}", response);
+    Ok(response)
 }
 
 /// Synchronously checks for an update and returns true if an update is available.
@@ -811,14 +836,15 @@ mod tests {
     }
 
     #[test]
-    fn deadlocks_when_initing_and_checking_for_patch() {
+    fn no_lock_contention_when_initing_during_patch_check() {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Set up the network hooks to sleep for 10 seconds on a patch check request
         let hooks = NetworkHooks {
             patch_check_request_fn: |_url, _request| {
-                std::thread::sleep(std::time::Duration::from_secs(10));
+                let patch_check_delay = std::time::Duration::from_secs(10);
+                std::thread::sleep(patch_check_delay);
                 Ok(PatchCheckResponse {
                     patch_available: false,
                     patch: None,
@@ -834,13 +860,13 @@ mod tests {
             hooks.report_event_fn,
         );
 
-        let update_thread = std::thread::spawn(move || {
+        let _ = std::thread::spawn(move || {
             crate::check_for_update().unwrap();
         });
 
         let set_config_thread = std::thread::spawn(move || {
             let tmp_dir = TempDir::new("example").unwrap();
-            for _ in 0..1000 {
+            for _ in 0..10 {
                 set_config(
                     crate::AppConfig {
                         app_storage_dir: tmp_dir.path().display().to_string(),
@@ -865,7 +891,11 @@ mod tests {
             }
         });
 
-        update_thread.join().unwrap();
         set_config_thread.join().unwrap();
+
+        // Don't wait for the patch check thread. This test should finish more or less immediately
+        // if set_config isn't waiting for the patch check thread. If set_config is waiting for
+        // the patch check thread, this test will not finish for the duration of patch_check_delay
+        // (defined in patch_check_request_fn above).
     }
 }
