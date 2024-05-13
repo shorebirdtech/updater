@@ -533,7 +533,7 @@ mod tests {
 
     use crate::{
         config::{testing_reset_config, with_config},
-        network::{testing_set_network_hooks, NetworkHooks},
+        network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
         ExternalFileProvider,
     };
 
@@ -835,8 +835,11 @@ mod tests {
         .unwrap();
     }
 
+    #[serial]
     #[test]
     fn no_config_lock_contention_when_waiting_for_patch_check() {
+        static mut HAS_FINISHED_CONFIG: bool = false;
+
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
@@ -845,7 +848,16 @@ mod tests {
             patch_check_request_fn: |_url, _request| {
                 let patch_check_delay = std::time::Duration::from_secs(2);
                 std::thread::sleep(patch_check_delay);
-                // If we get here, the test has failed.
+
+                // If we've obtained and released the config lock, this test has passed.
+                if unsafe { HAS_FINISHED_CONFIG } {
+                    return Ok(PatchCheckResponse {
+                        patch_available: false,
+                        patch: None,
+                    });
+                }
+
+                // If we have not yet finished with the config lock, this test has failed.
                 unreachable!("If the test has not terminated before this, set_config is likely being blocked by a patch check request, which should not happen");
             },
             download_file_fn: |_url| Ok([].to_vec()),
@@ -859,16 +871,14 @@ mod tests {
         );
 
         // Invoke check_for_update to kick off a patch check request
-        let _ = std::thread::spawn(|| {
-            crate::check_for_update().unwrap();
-        });
+        let _ = std::thread::spawn(crate::check_for_update);
 
         // Call with_config to get the config lock. This should complete before the patch check request is resolved.
-        let config_thread = std::thread::spawn(|| {
-            let _ = with_config(|_| Ok(()));
-        });
+        let config_thread = std::thread::spawn(|| with_config(|_| Ok(())));
 
-        config_thread.join().unwrap();
+        assert!(config_thread.join().is_ok());
+
+        unsafe { HAS_FINISHED_CONFIG = true };
 
         // Don't wait for the patch check thread. This test should finish more or less immediately
         // if with_config isn't waiting for the patch check thread. If it is waiting, this test will
