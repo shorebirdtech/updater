@@ -23,7 +23,7 @@ fn main() {
         eprintln!("  base:   Path to the base file");
         eprintln!("  new:    Path to the new file");
         eprintln!("  output: Path to the output patch file");
-        eprintln!("");
+        eprintln!();
         eprintln!(" This is an internal tool for creating binary diffs.");
         std::process::exit(1);
     }
