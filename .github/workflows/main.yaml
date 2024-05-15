@@ -36,6 +36,10 @@ jobs:
               - ./.github/workflows/main.yaml
               - ./.github/actions/flutter_package/action.yaml
               - shorebird_code_push/**
+            patch_packager:
+              - ./.github/workflows/main.yaml
+              - ./.github/actions/flutter_package/action.yaml
+              - patch_packager/**
 
       - uses: dorny/paths-filter@v3
         name: Build Detection
