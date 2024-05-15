@@ -1,11 +1,11 @@
 // ignore_for_file: prefer_const_constructors
-import 'package:patch_packager/patch_packager.dart';
 import 'package:test/test.dart';
+import 'package:updater_tools/updater_tools.dart';
 
 void main() {
-  group('PatchPackager', () {
+  group('UpdaterTools', () {
     test('can be instantiated', () {
-      expect(PatchPackager(), isNotNull);
+      expect(UpdaterTools(), isNotNull);
     });
   });
 }

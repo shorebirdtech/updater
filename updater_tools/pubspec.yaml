@@ -1,5 +1,5 @@
-name: patch_packager
-description: A tool to create Shorebid patch artifacts
+name: updater_tools
+description: Tools to create artifacts used by the Updater
 version: 0.1.0+1
 publish_to: none
 
