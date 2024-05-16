@@ -66,6 +66,13 @@ class PatchPackager {
     required File releaseAab,
     required File patchAab,
   }) async {
+    // Extract the release and patch aabs to temporary directories.
+    //
+    // temp_dir
+    //  └── release
+    //     └── [release aab contents]
+    //  └── patch
+    //     └── [patch aab contents]
     final extractionDir = Directory.systemTemp.createTempSync();
     final extractedReleaseDir =
         Directory(p.join(extractionDir.path, 'release'));
@@ -74,6 +81,9 @@ class PatchPackager {
     final extractedPatchDir = Directory(p.join(extractionDir.path, 'patch'));
     await patchAab.extractZip(outputDirectory: extractedPatchDir);
 
+    // The base/lib directory in the extracted aab contains a directory for
+    // each architecture in the aab. Each of these directories contains a
+    // libapp.so file.
     final releaseArchsDir = Directory(
       p.join(extractedReleaseDir.path, 'base', 'lib'),
     );
@@ -106,9 +116,9 @@ class PatchPackager {
       }
 
       // Create a diff file in an output directory named [archName]
-      final diffDir = Directory(p.join(outDir.path, archName))
+      final diffArchDir = Directory(p.join(outDir.path, archName))
         ..createSync(recursive: true);
-      final diffFile = File(p.join(diffDir.path, 'dlc.vmcode'));
+      final diffFile = File(p.join(diffArchDir.path, 'dlc.vmcode'));
       await _makeDiff(
         base: releaseElf,
         patch: patchElf,
@@ -116,14 +126,15 @@ class PatchPackager {
       );
       logger.detail('Diff file created at ${diffFile.path}');
 
-      final zippedDiff = await diffDir.zipToTempFile();
-
+      // Zip the directory containing the diff file and move it to the output
+      // directory.
+      final zippedDiff = await diffArchDir.zipToTempFile();
       final zipTargetPath = p.join(outDir.path, '$archName.zip');
       logger.detail('Moving packaged patch to $zipTargetPath');
       zippedDiff.renameSync(zipTargetPath);
 
       // Clean up
-      diffDir.deleteSync(recursive: true);
+      diffArchDir.deleteSync(recursive: true);
     }
 
     return outDir;
