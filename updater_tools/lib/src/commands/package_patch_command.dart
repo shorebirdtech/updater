@@ -81,12 +81,12 @@ This should be a directory, and will contain patch archives for each architectur
 
   @override
   Future<int> run() async {
-    final releaseFile = File(results['release'] as String);
-    final patchFile = File(results['patch'] as String);
-    final patchExecutable = File(results['patch-executable'] as String);
-    final outputDirectory = Directory(results['output'] as String);
+    final releaseFile = File(results[releaseCliArg] as String);
+    final patchFile = File(results[patchCliArg] as String);
+    final patchExecutable = File(results[patchExecutableCliArg] as String);
+    final outputDirectory = Directory(results[outputCliArg] as String);
     final archiveType = ArchiveType.values.byName(
-      results['archive-type'] as String,
+      results[archiveTypeCliArg] as String,
     );
 
     try {
