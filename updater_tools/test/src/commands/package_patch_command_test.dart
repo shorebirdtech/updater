@@ -86,6 +86,14 @@ void main() {
       )..testArgResults = argResults;
     });
 
+    test('has a non-empty name', () {
+      expect(command.name, isNotEmpty);
+    });
+
+    test('has a non-empty description', () {
+      expect(command.description, isNotEmpty);
+    });
+
     group('arg validation', () {
       group('when release file does not exist', () {
         setUp(() {

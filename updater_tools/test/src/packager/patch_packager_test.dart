@@ -19,6 +19,16 @@ class _MockLogger extends Mock implements Logger {}
 class _MockProcessManager extends Mock implements ProcessManager {}
 
 void main() {
+  group(PackagingException, () {
+    group('toString()', () {
+      test('returns a string with the message', () {
+        const message = 'message';
+        const exception = PackagingException(message);
+        expect(exception.toString(), equals('PackagingException: $message'));
+      });
+    });
+  });
+
   group(PatchPackager, () {
     late Logger logger;
     late ProcessManager processManager;
@@ -49,9 +59,11 @@ void main() {
       return zippedAab.renameSync('$name.aab');
     }
 
+    late File patchExecutable;
+
     setUp(() {
       final tempDir = Directory.systemTemp.createTempSync();
-      final patchExecutable = File(p.join(tempDir.path, 'patch'))
+      patchExecutable = File(p.join(tempDir.path, 'patch'))
         ..createSync(recursive: true);
 
       logger = _MockLogger();
@@ -76,6 +88,28 @@ void main() {
       );
 
       packager = PatchPackager(patchExecutable: patchExecutable);
+    });
+
+    group('initialization', () {
+      test('throws exception when patchExecutable does not exist', () {
+        final patchExecutable = File('nonexistent');
+        expect(
+          () => PatchPackager(patchExecutable: patchExecutable),
+          throwsA(
+            isA<FileSystemException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'Patch executable does not exist',
+                )
+                .having(
+                  (e) => e.path,
+                  'path',
+                  patchExecutable.path,
+                ),
+          ),
+        );
+      });
     });
 
     group('packagePatch with .aabs', () {
@@ -163,6 +197,81 @@ void main() {
           expect(p.basename(patchFile.path), equals('dlc.vmcode'));
           expect((patchFile as File).readAsStringSync(), equals('contents'));
         }
+      });
+    });
+
+    group('when patch executable fails', () {
+      late File releaseAab;
+      late File patchAab;
+
+      setUp(() async {
+        releaseAab = await createAab(name: 'release', archs: ['arch1']);
+        patchAab = await createAab(name: 'patch', archs: ['arch1']);
+      });
+
+      group('when process exits with nonzero code', () {
+        setUp(() {
+          when(
+            () => processManager.run(
+              any(that: hasPrefix([patchExecutable.path])),
+            ),
+          ).thenAnswer(
+            (_) async => ProcessResult(0, ExitCode.software.code, '', ''),
+          );
+        });
+
+        test('throws ProcessException', () async {
+          await expectLater(
+            () => runWithOverrides(
+              () => packager.packagePatch(
+                releaseArchive: releaseAab,
+                patchArchive: patchAab,
+                archiveType: ArchiveType.aab,
+                outputDirectory: Directory.systemTemp,
+              ),
+            ),
+            throwsA(
+              isA<ProcessException>().having(
+                (e) => e.message,
+                'message',
+                'Failed to create diff',
+              ),
+            ),
+          );
+        });
+      });
+
+      group('when output file is not created', () {
+        setUp(() {
+          when(
+            () => processManager.run(
+              any(that: hasPrefix([patchExecutable.path])),
+            ),
+          ).thenAnswer(
+            // Don't create the output file specified by the command.
+            (_) async => ProcessResult(0, ExitCode.success.code, '', ''),
+          );
+        });
+
+        test('throws FileSystemException', () async {
+          await expectLater(
+            () => runWithOverrides(
+              () => packager.packagePatch(
+                releaseArchive: releaseAab,
+                patchArchive: patchAab,
+                archiveType: ArchiveType.aab,
+                outputDirectory: Directory.systemTemp,
+              ),
+            ),
+            throwsA(
+              isA<FileSystemException>().having(
+                (e) => e.message,
+                'message',
+                'patch completed successfully but diff file does not exist',
+              ),
+            ),
+          );
+        });
       });
     });
   });
