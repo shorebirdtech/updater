@@ -113,8 +113,46 @@ void main() {
     });
 
     group('packagePatch with .aabs', () {
+      group('when release aab has arch folder missing libapp.so', () {
+        const archName = 'arm64';
+        late File releaseAab;
+        late File patchAab;
+
+        setUp(() async {
+          final tempDir = Directory.systemTemp.createTempSync();
+          // Create a directory for an arch named 'arm64' with an incorrectly-
+          // named .so file.
+          File(
+            p.join(tempDir.path, 'base', 'lib', archName, 'not_a_libapp.so'),
+          ).createSync(recursive: true);
+          releaseAab = await tempDir.zipToTempFile();
+
+          patchAab = await createAab(name: 'patch', archs: [archName]);
+        });
+
+        test('throws a PackagingException', () async {
+          await expectLater(
+            () => runWithOverrides(
+              () => packager.packagePatch(
+                releaseArchive: releaseAab,
+                patchArchive: patchAab,
+                archiveType: ArchiveType.aab,
+                outputDirectory: Directory.systemTemp,
+              ),
+            ),
+            throwsA(
+              isA<PackagingException>().having(
+                (e) => e.message,
+                'message',
+                'Release aab missing libapp.so for $archName',
+              ),
+            ),
+          );
+        });
+      });
+
       group('when patch aab is missing archs present in release aab', () {
-        test('throws an exception', () async {
+        test('throws a PackagingException', () async {
           final outDir = Directory(
             p.join(
               Directory.systemTemp.createTempSync().path,
