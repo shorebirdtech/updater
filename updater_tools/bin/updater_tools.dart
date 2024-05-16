@@ -2,7 +2,8 @@ import 'dart:io';
 
 import 'package:scoped_deps/scoped_deps.dart';
 import 'package:updater_tools/src/logger.dart';
-import 'package:updater_tools/src/updater_tools_command_runnder.dart';
+import 'package:updater_tools/src/process.dart';
+import 'package:updater_tools/src/updater_tools_command_runner.dart';
 
 Future<void> main(List<String> args) async {
   await _flushThenExit(
@@ -10,6 +11,7 @@ Future<void> main(List<String> args) async {
       () async => UpdaterToolsCommandRunner().run(args),
       values: {
         loggerRef,
+        processManagerRef,
       },
     ),
   );

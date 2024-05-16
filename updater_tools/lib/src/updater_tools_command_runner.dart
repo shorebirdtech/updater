@@ -2,9 +2,13 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:updater_tools/src/commands/commands.dart';
+import 'package:updater_tools/src/logger.dart';
 import 'package:updater_tools/version.dart';
 
+/// The name of this executable.
 const executableName = 'updater_tools';
+
+/// The description of this executable.
 const description = 'Tools to create artifacts to be consumed by the Updater.';
 
 /// {@template updater_tools_command_runner}
@@ -12,10 +16,7 @@ const description = 'Tools to create artifacts to be consumed by the Updater.';
 /// {@endtemplate}
 class UpdaterToolsCommandRunner extends CommandRunner<int> {
   /// {@macro updater_tools_command_runner}
-  UpdaterToolsCommandRunner({
-    Logger? logger,
-  })  : _logger = logger ?? Logger(),
-        super(executableName, description) {
+  UpdaterToolsCommandRunner() : super(executableName, description) {
     // Add root options and flags
     argParser
       ..addFlag(
@@ -34,22 +35,20 @@ class UpdaterToolsCommandRunner extends CommandRunner<int> {
   }
 
   @override
-  void printUsage() => _logger.info(usage);
-
-  final Logger _logger;
+  void printUsage() => logger.info(usage);
 
   @override
   Future<int> run(Iterable<String> args) async {
     try {
       final topLevelResults = parse(args);
       if (topLevelResults['verbose'] == true) {
-        _logger.level = Level.verbose;
+        logger.level = Level.verbose;
       }
       return await runCommand(topLevelResults) ?? ExitCode.success.code;
     } on FormatException catch (e, stackTrace) {
       // On format errors, show the commands error message, root usage and
       // exit with an error code
-      _logger
+      logger
         ..err(e.message)
         ..err('$stackTrace')
         ..info('')
@@ -58,7 +57,7 @@ class UpdaterToolsCommandRunner extends CommandRunner<int> {
     } on UsageException catch (e) {
       // On usage errors, show the commands usage message and
       // exit with an error code
-      _logger
+      logger
         ..err(e.message)
         ..info('')
         ..info(e.usage);
@@ -69,22 +68,22 @@ class UpdaterToolsCommandRunner extends CommandRunner<int> {
   @override
   Future<int?> runCommand(ArgResults topLevelResults) async {
     // Verbose logs
-    _logger
+    logger
       ..detail('Argument information:')
       ..detail('  Top level options:');
     for (final option in topLevelResults.options) {
       if (topLevelResults.wasParsed(option)) {
-        _logger.detail('  - $option: ${topLevelResults[option]}');
+        logger.detail('  - $option: ${topLevelResults[option]}');
       }
     }
     if (topLevelResults.command != null) {
       final commandResult = topLevelResults.command!;
-      _logger
+      logger
         ..detail('  Command: ${commandResult.name}')
         ..detail('    Command options:');
       for (final option in commandResult.options) {
         if (commandResult.wasParsed(option)) {
-          _logger.detail('    - $option: ${commandResult[option]}');
+          logger.detail('    - $option: ${commandResult[option]}');
         }
       }
     }
@@ -92,7 +91,7 @@ class UpdaterToolsCommandRunner extends CommandRunner<int> {
     // Run the command or show version
     final int? exitCode;
     if (topLevelResults['version'] == true) {
-      _logger.info(packageVersion);
+      logger.info(packageVersion);
       exitCode = ExitCode.success.code;
     } else {
       exitCode = await super.runCommand(topLevelResults);

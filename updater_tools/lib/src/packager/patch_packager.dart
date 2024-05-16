@@ -1,17 +1,34 @@
 import 'dart:io';
-import 'dart:isolate';
 
-import 'package:archive/archive_io.dart';
+import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
+import 'package:updater_tools/src/artifact_type.dart';
+import 'package:updater_tools/src/extensions/extensions.dart';
 import 'package:updater_tools/src/logger.dart';
+import 'package:updater_tools/src/process.dart';
+
+/// {@template packaging_exception}
+/// An exception thrown when creating a patch package fails.
+/// {@endtemplate}
+class PackagingException implements Exception {
+  /// {@macro packaging_exception}
+  const PackagingException(this.message);
+
+  /// The message describing the exception.
+  final String message;
+
+  @override
+  String toString() => 'PackagingException: $message';
+}
 
 /// {@template patch_packager}
+/// Creates and packages patch artifacts.
 /// {@endtemplate }
 class PatchPackager {
   /// {@macro patch_packager}
   PatchPackager({
-    required this.patchExecutable,
-  }) {
+    required File patchExecutable,
+  }) : _patchExecutable = patchExecutable {
     if (!patchExecutable.existsSync()) {
       throw FileSystemException(
         'Patch executable does not exist',
@@ -20,93 +37,92 @@ class PatchPackager {
     }
   }
 
-  final File patchExecutable;
+  final File _patchExecutable;
 
+  /// Create and package a patch of [patchArchive] onto [releaseArchive].
   Future<Directory> packagePatch({
     required File releaseArchive,
     required File patchArchive,
+    required ArchiveType archiveType,
+    required Directory outputDirectory,
   }) async {
-    if (!releaseArchive.existsSync()) {
-      throw FileSystemException(
-        'Release archive not exist',
-        releaseArchive.path,
-      );
-    }
-
-    if (!patchArchive.existsSync()) {
-      throw FileSystemException(
-        'Patch archive not exist',
-        patchArchive.path,
-      );
-    }
-
-    final releaseExtension = p.extension(releaseArchive.path);
-    final patchExtension = p.extension(releaseArchive.path);
-    if (releaseExtension != patchExtension) {
-      throw FileSystemException(
-        '''Release and patch archives must have the same extension (found $releaseExtension and $patchExtension)''',
-        releaseArchive.path,
-      );
-    }
-
-    switch (releaseExtension) {
-      case '.aab':
-        return packageAndroidAabPatch(
+    final directory = switch (archiveType) {
+      ArchiveType.aab => await _packageAndroidAabPatch(
           releaseAab: releaseArchive,
           patchAab: patchArchive,
-        );
-      default:
-        throw Exception('Unsupported archive extension: $releaseExtension');
-    }
+        ),
+    };
+
+    return directory.renameSync(outputDirectory.path);
   }
 
+  /// Create and package a patch of [patchAab] onto [releaseAab]. The returned
+  /// directory will contain a zip file for each architecture in the release
+  /// aab.
   ///
-  Future<Directory> packageAndroidAabPatch({
+  /// If a libapp.so exists for an architecture in [releaseAab] but not in
+  /// [patchAab], a [PackagingException] will be thrown.
+  Future<Directory> _packageAndroidAabPatch({
     required File releaseAab,
     required File patchAab,
   }) async {
-    if (!releaseAab.existsSync()) {
-      throw FileSystemException('Release aab does not exist', releaseAab.path);
-    }
+    final extractionDir = Directory.systemTemp.createTempSync();
+    final extractedReleaseDir =
+        Directory(p.join(extractionDir.path, 'release'));
+    await releaseAab.extractZip(outputDirectory: extractedReleaseDir);
 
-    if (!patchAab.existsSync()) {
-      throw FileSystemException('Patch aab does not exist', patchAab.path);
-    }
-
-    final extractedReleaseDir = Directory.systemTemp.createTempSync();
-    await extractZip(zipFile: releaseAab, outputDirectory: extractedReleaseDir);
-
-    final extractedPatchDir = Directory.systemTemp.createTempSync();
-    await extractZip(zipFile: patchAab, outputDirectory: extractedPatchDir);
+    final extractedPatchDir = Directory(p.join(extractionDir.path, 'patch'));
+    await patchAab.extractZip(outputDirectory: extractedPatchDir);
 
     final releaseArchsDir = Directory(
       p.join(extractedReleaseDir.path, 'base', 'lib'),
     );
 
     final outDir = Directory.systemTemp.createTempSync();
+    // For every architecture in the release aab, create a diff and zip it.
+    // If a libapp.so exists for an architecture in the release aab but not in
+    // the patch aab, throw an exception.
     for (final archDir in releaseArchsDir.listSync().whereType<Directory>()) {
       final archName = p.basename(archDir.path);
-      // Path to the arch directory within the aab. The patch aab should have
-      // the same directory structure.
+      logger.detail('Creating diff for $archName');
+
+      // Get the elf files for the release and patch aabs.
       final relativeArchPath =
           p.relative(archDir.path, from: extractedReleaseDir.path);
       final releaseElf = File(p.join(archDir.path, 'libapp.so'));
       final patchElf = File(
         p.join(extractedPatchDir.path, relativeArchPath, 'libapp.so'),
       );
-      if (!patchElf.existsSync()) {
-        logger.err('Patch elf does not exist at ${patchElf.path}');
-        continue;
+
+      // If the release aab is missing a libapp.so, this is likely not a Flutter
+      // app. Throw an exception.
+      if (!releaseElf.existsSync()) {
+        throw PackagingException('Release aab missing libapp.so for $archName');
       }
 
+      // Make sure the patch aab has a libapp.so for this architecture.
+      if (!patchElf.existsSync()) {
+        throw PackagingException('Patch aab missing libapp.so for $archName');
+      }
+
+      // Create a diff file in an output directory named [archName]
       final diffDir = Directory(p.join(outDir.path, archName))
         ..createSync(recursive: true);
+      final diffFile = File(p.join(diffDir.path, 'dlc.vmcode'));
+      await _makeDiff(
+        base: releaseElf,
+        patch: patchElf,
+        outFile: diffFile,
+      );
+      logger.detail('Diff file created at ${diffFile.path}');
 
-      final diffFile = await _makeDiff(base: releaseElf, patch: patchElf);
-      Directory(p.join(diffDir.path, archName)).createSync(recursive: true);
-      diffFile.renameSync(p.join(diffDir.path, archName, 'dlc.vmcode'));
       final zippedDiff = await diffDir.zipToTempFile();
-      zippedDiff.renameSync(p.join(outDir.path, '$archName.zip'));
+
+      final zipTargetPath = p.join(outDir.path, '$archName.zip');
+      logger.detail('Moving packaged patch to $zipTargetPath');
+      zippedDiff.renameSync(zipTargetPath);
+
+      // Clean up
       diffDir.deleteSync(recursive: true);
     }
 
@@ -115,25 +131,24 @@ class PatchPackager {
 
   /// Create a binary diff between [base] and [patch]. Returns the path to the
   /// diff file.
-  Future<File> _makeDiff({
+  Future<void> _makeDiff({
     required File base,
     required File patch,
+    required File outFile,
   }) async {
     logger.detail('Creating diff between ${base.path} and ${patch.path}');
-    final outFile =
-        File(p.join(Directory.systemTemp.createTempSync().path, 'diff'))
-          ..createSync(recursive: true);
     final args = [
+      _patchExecutable.path,
       base.path,
       patch.path,
       outFile.path,
     ];
-    final result = await Process.run(patchExecutable.path, args);
+    final result = await processManager.run(args);
 
-    if (result.exitCode != 0) {
+    if (result.exitCode != ExitCode.success.code) {
       throw ProcessException(
-        patchExecutable.path,
-        args,
+        args.first,
+        args.sublist(1),
         'Failed to create diff',
         result.exitCode,
       );
@@ -145,33 +160,5 @@ class PatchPackager {
         outFile.path,
       );
     }
-
-    return outFile;
-  }
-
-  /// Extracts the [zipFile] to the [outputDirectory] directory in a separate
-  /// isolate.
-  Future<void> extractZip({
-    required File zipFile,
-    required Directory outputDirectory,
-  }) async {
-    await Isolate.run(() async {
-      final inputStream = InputFileStream(zipFile.path);
-      final archive = ZipDecoder().decodeBuffer(inputStream);
-      await extractArchiveToDisk(archive, outputDirectory.path);
-      inputStream.closeSync();
-    });
-  }
-}
-
-extension DirectoryArchive on Directory {
-  /// Copies this directory to a temporary directory and zips it.
-  Future<File> zipToTempFile() async {
-    final tempDir = await Directory.systemTemp.createTemp();
-    final outFile = File(p.join(tempDir.path, '${p.basename(path)}.zip'));
-    await Isolate.run(() {
-      ZipFileEncoder().zipDirectory(this, filename: outFile.path);
-    });
-    return outFile;
   }
 }
