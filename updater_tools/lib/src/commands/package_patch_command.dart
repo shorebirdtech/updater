@@ -114,31 +114,22 @@ This should be a directory, and will contain patch archives for each architectur
   /// Verifies that CLI arguments point to existing files. Throws an
   /// [ArgumentError] if any of the args are not valid.
   void _assertCliArgsValid() {
-    final releaseFilePath = results['release'] as String;
-    final patchFilePath = results['patch'] as String;
-    final patchExecutablePath = results['patch-executable'] as String;
+    final releaseFilePath = results[releaseCliArg] as String;
+    final patchFilePath = results[patchCliArg] as String;
+    final patchExecutablePath = results[patchExecutableCliArg] as String;
 
-    if (!File(releaseFilePath).existsSync()) {
-      throw ArgumentError.value(
-        releaseFilePath,
-        'release',
-        'The release file does not exist',
-      );
-    }
+    _verifyFileExists(releaseFilePath, releaseCliArg);
+    _verifyFileExists(patchFilePath, patchCliArg);
+    _verifyFileExists(patchExecutablePath, patchExecutableCliArg);
+  }
 
-    if (!File(patchFilePath).existsSync()) {
+  /// Throws an [ArgumentError] if a file at [path] does not exist.
+  void _verifyFileExists(String path, String name) {
+    if (!File(path).existsSync()) {
       throw ArgumentError.value(
-        patchFilePath,
-        'patch',
-        'The patch file does not exist',
-      );
-    }
-
-    if (!File(patchExecutablePath).existsSync()) {
-      throw ArgumentError.value(
-        patchExecutablePath,
-        'patch-executable',
-        'The patch executable does not exist',
+        path,
+        name,
+        'The $name file does not exist',
       );
     }
   }

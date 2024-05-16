@@ -146,7 +146,7 @@ void main() {
 
           verify(
             () => logger.err(
-              any(that: contains('The patch executable does not exist')),
+              any(that: contains('The patch-executable file does not exist')),
             ),
           );
         });
