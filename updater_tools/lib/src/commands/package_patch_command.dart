@@ -6,6 +6,12 @@ import 'package:updater_tools/src/commands/updater_tool_command.dart';
 import 'package:updater_tools/src/logger.dart';
 import 'package:updater_tools/src/packager/patch_packager.dart';
 
+const aotToolsCliArg = 'aot-tools';
+
+const genSnapshotCliArg = 'aot-tools';
+
+const appDillCliArg = 'app-dill';
+
 /// The arg name to specify the release and patch archive type.
 const archiveTypeCliArg = 'archive-type';
 
@@ -53,6 +59,12 @@ class PackagePatchCommand extends UpdaterToolCommand {
         mandatory: true,
         help: 'The path to the patch artifact which will be packaged',
       )
+      ..addOption(aotToolsCliArg, help: 'The path to the aot_tools dill file')
+      ..addOption(genSnapshotCliArg, help: 'The path to gen_snapshot')
+      ..addOption(
+        appDillCliArg,
+        help: 'The path to the app.dill file',
+      )
       ..addOption(
         patchExecutableCliArg,
         mandatory: true,
@@ -88,6 +100,9 @@ This should be a directory, and will contain patch archives for each architectur
     final archiveType = ArchiveType.values.byName(
       results[archiveTypeCliArg] as String,
     );
+    final appDill = File(results[appDillCliArg] as String? ?? '');
+    final genSnapshot = File(results[genSnapshotCliArg] as String);
+    final aotTools = File(results[aotToolsCliArg] as String);
 
     try {
       _assertCliArgsValid();

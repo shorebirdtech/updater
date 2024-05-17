@@ -4,4 +4,7 @@
 enum ArchiveType {
   /// Android App Bundle
   aab,
+
+  /// Apple xcarchive
+  xcarchive,
 }
