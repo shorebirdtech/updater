@@ -39,9 +39,18 @@ the `patch_output` directory:
 ```
 patch_output/
   ├── arm64-v8a.zip
+  │   ├── dlc.vmcode
+  │   └── hash
   ├── armeabi-v7a.zip
+  │   ├── dlc.vmcode
+  │   └── hash
   └── x86_64.zip
+      ├── dlc.vmcode
+      └── hash
 ```
 
-Unzipping any one of these will yield the dlc.vmcode file produced by the
-`patch` executable.
+In each .zip:
+
+- dlc.vmcode: the bidiff file produced by the `patch` executable
+- hash: the sha256 digest of the fully constituted (aka pre-diff) patch file
+  (libapp.so on Android).

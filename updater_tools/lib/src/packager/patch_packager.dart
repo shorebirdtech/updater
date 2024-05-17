@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:updater_tools/src/artifact_type.dart';
@@ -115,7 +116,7 @@ class PatchPackager {
         throw PackagingException('Patch aab missing libapp.so for $archName');
       }
 
-      // Create a diff file in an output directory named [archName]
+      // Create a diff file in an output directory named [archName].
       final diffArchDir = Directory(p.join(outDir.path, archName))
         ..createSync(recursive: true);
       final diffFile = File(p.join(diffArchDir.path, 'dlc.vmcode'));
@@ -126,6 +127,12 @@ class PatchPackager {
       );
       logger.detail('Diff file created at ${diffFile.path}');
 
+      // Write the hash of the pre-diffed patch elf to a file.
+      final hash = sha256.convert(await patchElf.readAsBytes()).toString();
+      File(p.join(diffArchDir.path, 'hash'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync(hash);
+
       // Zip the directory containing the diff file and move it to the output
       // directory.
       final zippedDiff = await diffArchDir.zipToTempFile();
@@ -133,7 +140,7 @@ class PatchPackager {
       logger.detail('Moving packaged patch to $zipTargetPath');
       zippedDiff.renameSync(zipTargetPath);
 
-      // Clean up
+      // Clean up.
       diffArchDir.deleteSync(recursive: true);
     }
 

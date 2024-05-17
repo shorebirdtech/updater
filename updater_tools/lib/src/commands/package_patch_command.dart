@@ -96,6 +96,11 @@ This should be a directory, and will contain patch archives for each architectur
       return ExitCode.usage.code;
     }
 
+    if (outputDirectory.existsSync()) {
+      logger.info('${outputDirectory.path} already exists. Deleting...');
+      outputDirectory.deleteSync(recursive: true);
+    }
+
     final packager = (_makePatchPackagerOverride ?? PatchPackager.new)(
       patchExecutable: patchExecutable,
     );

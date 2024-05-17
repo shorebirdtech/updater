@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:path/path.dart' as p;
@@ -30,6 +31,9 @@ void main() {
   });
 
   group(PatchPackager, () {
+    const dlcVmcodeContents = 'dlc.vmcode contents';
+    const libappSoContents = 'libapp.so contents';
+
     late Logger logger;
     late ProcessManager processManager;
     late PatchPackager packager;
@@ -53,7 +57,8 @@ void main() {
         ..createSync(recursive: true);
       for (final arch in archs) {
         File(p.join(libDir.path, arch, 'libapp.so'))
-            .createSync(recursive: true);
+          ..createSync(recursive: true)
+          ..writeAsStringSync(libappSoContents);
       }
       final zippedAab = await tempDir.zipToTempFile();
       return zippedAab.renameSync('$name.aab');
@@ -82,7 +87,7 @@ void main() {
           final outputFilePath = commandParts.last as String;
           File(outputFilePath)
             ..createSync()
-            ..writeAsStringSync('contents');
+            ..writeAsStringSync(dlcVmcodeContents);
           return ProcessResult(0, ExitCode.success.code, '', '');
         },
       );
@@ -227,13 +232,32 @@ void main() {
           await zipFile.extractZip(outputDirectory: tempDir);
           final extractedContents = tempDir.listSync();
 
-          // Contents of the zip file should be a single directory with the
-          // same name as the zip file (the arch of the patch file it contains).
-          expect(extractedContents, hasLength(1));
-          final patchFile = extractedContents.single;
+          // Contents of the zip file should be:
+          //  1. A dlc.vmcode file (a bidiff produced by the patch executable).
+          //  2. A hash file that is the sha256 hash of the patch libapp.so.
+          expect(extractedContents, hasLength(2));
+          expect(
+            extractedContents.map((e) => p.basename(e.path)),
+            containsAll(['dlc.vmcode', 'hash']),
+          );
+          final patchFile = extractedContents
+              .firstWhere((e) => p.basename(e.path) == 'dlc.vmcode');
           expect(patchFile, isA<File>());
           expect(p.basename(patchFile.path), equals('dlc.vmcode'));
-          expect((patchFile as File).readAsStringSync(), equals('contents'));
+          expect(
+            (patchFile as File).readAsStringSync(),
+            equals(dlcVmcodeContents),
+          );
+
+          // Contents of the hash file should be the sha256 hash of the patch
+          // libapp.so.
+          final hashFile =
+              extractedContents.firstWhere((e) => p.basename(e.path) == 'hash');
+          expect(hashFile, isA<File>());
+          expect(
+            (hashFile as File).readAsStringSync(),
+            equals(sha256.convert(libappSoContents.codeUnits).toString()),
+          );
         }
       });
     });

@@ -154,6 +154,21 @@ void main() {
     });
 
     group('run', () {
+      group('when output directory already exists', () {
+        test('deletes the existing output directory', () {
+          outputDirectory.createSync(recursive: true);
+          File(p.join(outputDirectory.path, 'file'))
+            ..createSync(recursive: true)
+            ..writeAsStringSync('should be deleted');
+          expect(outputDirectory.listSync(), hasLength(1));
+
+          expect(() => runWithOverrides(command.run), returnsNormally);
+
+          expect(outputDirectory.existsSync(), isTrue);
+          expect(outputDirectory.listSync(), isEmpty);
+        });
+      });
+
       test('forwards args to patch packager', () async {
         expect(await runWithOverrides(command.run), ExitCode.success.code);
 

@@ -10,6 +10,7 @@ dependencies:
   archive: ^3.5.1
   args: ^2.4.2
   collection: ^1.18.0
+  crypto: ^3.0.3
   mason_logger: ^0.2.12
   meta: ^1.15.0
   path: ^1.9.0
