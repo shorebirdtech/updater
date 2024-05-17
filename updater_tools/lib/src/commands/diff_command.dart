@@ -1,42 +1,32 @@
 import 'dart:io';
 
 import 'package:mason_logger/mason_logger.dart';
-import 'package:updater_tools/src/artifact_type.dart';
 import 'package:updater_tools/src/commands/updater_tool_command.dart';
 import 'package:updater_tools/src/extensions/arg_results.dart';
 import 'package:updater_tools/src/logger.dart';
 import 'package:updater_tools/src/packager/patch_packager.dart';
 
-/// The arg name to specify the release and patch archive type.
-const archiveTypeCliArg = 'archive-type';
-
-/// The arg name to specify the path to the release archive.
+/// The arg name to specify the path to the release binary.
 const releaseCliArg = 'release';
 
-/// The arg name to specify the path to the patch archive.
+/// The arg name to specify the path to the patch binary.
 const patchCliArg = 'patch';
 
 /// The arg name to specify the path to the patch executable.
 const patchExecutableCliArg = 'patch-executable';
 
-/// The arg name to specify the output directory.
+/// The arg name to specify the output file.
 const outputCliArg = 'output';
 
-/// {@template package_patch_command}
-/// A command to package patch artifacts.
+/// {@template diff_command}
+/// A wrapper around the patch executable
 /// {@endtemplate}
-class PackagePatchCommand extends UpdaterToolCommand {
-  /// {@macro package_patch_command}
-  PackagePatchCommand([MakePatchPackager? makePatchPackager])
+class DiffCommand extends UpdaterToolCommand {
+  /// {@macro diff_command}
+  DiffCommand([MakePatchPackager? makePatchPackager])
       : _makePatchPackagerOverride = makePatchPackager,
         super() {
     argParser
-      ..addOption(
-        archiveTypeCliArg,
-        help: 'The format of release and patch. These *must* be the same.',
-        allowed: ArchiveType.values.asNameMap().keys,
-        mandatory: true,
-      )
       ..addOption(
         releaseCliArg,
         abbr: 'r',
@@ -69,19 +59,14 @@ This should be a directory, and will contain patch archives for each architectur
   final MakePatchPackager? _makePatchPackagerOverride;
 
   @override
-  String get description =>
-      '''A command that turns two app archives (.aab, .xcarchive, etc.) into patch artifacts.''';
+  String get name => 'diff';
 
   @override
-  String get name => 'package_patch';
+  String get description =>
+      '''Outputs a binary diff of the provided release and patch files, using release as a base.''';
 
   @override
   Future<int> run() async {
-    final outputDirectory = Directory(results[outputCliArg] as String);
-    final archiveType = ArchiveType.values.byName(
-      results[archiveTypeCliArg] as String,
-    );
-
     final File releaseFile;
     final File patchFile;
     final File patchExecutable;
@@ -94,22 +79,14 @@ This should be a directory, and will contain patch archives for each architectur
       return ExitCode.usage.code;
     }
 
-    if (outputDirectory.existsSync()) {
-      logger.info('${outputDirectory.path} already exists. Deleting...');
-      outputDirectory.deleteSync(recursive: true);
-    }
-
-    final packager = (_makePatchPackagerOverride ?? PatchPackager.new)(
+    final patchPackager = (_makePatchPackagerOverride ?? PatchPackager.new)(
       patchExecutable: patchExecutable,
     );
-    await packager.packagePatch(
-      releaseArchive: releaseFile,
-      patchArchive: patchFile,
-      archiveType: archiveType,
-      outputDirectory: outputDirectory,
+    await patchPackager.makeDiff(
+      base: releaseFile,
+      patch: patchFile,
+      outFile: File(results[outputCliArg] as String),
     );
-
-    logger.info('Patch packaged to ${outputDirectory.path}');
 
     return ExitCode.success.code;
   }
