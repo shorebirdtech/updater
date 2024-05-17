@@ -2,6 +2,7 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:updater_tools/src/commands/commands.dart';
+import 'package:updater_tools/src/commands/diff_command.dart';
 import 'package:updater_tools/src/logger.dart';
 import 'package:updater_tools/version.dart';
 
@@ -30,7 +31,7 @@ class UpdaterToolsCommandRunner extends CommandRunner<int> {
         help: 'Noisy logging, including all shell commands executed.',
       );
 
-    // Add sub commands
+    addCommand(DiffCommand());
     addCommand(PackagePatchCommand());
   }
 
