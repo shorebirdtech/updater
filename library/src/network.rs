@@ -16,7 +16,7 @@ use crate::events::PatchEvent;
 #[cfg(test)]
 use std::{println as info, println as debug}; // Workaround to use println! for logs.
 
-fn patches_check_url(base_url: &str) -> String {
+pub fn patches_check_url(base_url: &str) -> String {
     format!("{base_url}/api/v1/patches/check")
 }
 

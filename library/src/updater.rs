@@ -14,7 +14,8 @@ use crate::config::{current_arch, current_platform, set_config, with_config, Upd
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, send_patch_check_request, NetworkHooks, PatchCheckResponse,
+    download_to_path, patches_check_url, send_patch_check_request, NetworkHooks, PatchCheckRequest,
+    PatchCheckResponse,
 };
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
@@ -27,7 +28,7 @@ use std::{println as info, println as error, println as debug}; // Workaround to
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequest, PatchCheckRequestFn};
+pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequestFn};
 
 pub enum UpdateStatus {
     NoUpdate,
@@ -144,14 +145,38 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
+fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchCheckRequest {
+    let latest_patch_number = state.latest_seen_patch_number();
+
+    // Send the request to the server.
+    PatchCheckRequest {
+        app_id: config.app_id.clone(),
+        channel: config.channel.clone(),
+        release_version: config.release_version.clone(),
+        patch_number: latest_patch_number,
+        platform: current_platform().to_string(),
+        arch: current_arch().to_string(),
+    }
+}
+
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
-    with_config(|config| {
+    let (request, url, request_fn) = with_config(|config| {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
         let state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
-        send_patch_check_request(config, &state)
-    })
+
+        // Get the required info to make the request.
+        Ok((
+            patch_check_request(config, &state),
+            patches_check_url(&config.base_url),
+            config.network_hooks.patch_check_request_fn,
+        ))
+    })?;
+
+    let response = request_fn(&url, request)?;
+    debug!("Patch check response: {:?}", response);
+    Ok(response)
 }
 
 /// Synchronously checks for an update and returns true if an update is available.
@@ -506,7 +531,11 @@ mod tests {
     use std::fs;
     use tempdir::TempDir;
 
-    use crate::{config::testing_reset_config, ExternalFileProvider};
+    use crate::{
+        config::{testing_reset_config, with_config},
+        network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
+        ExternalFileProvider,
+    };
 
     #[derive(Debug, Clone)]
     struct FakeExternalFileProvider {}
@@ -804,5 +833,56 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn no_config_lock_contention_when_waiting_for_patch_check() {
+        static mut HAS_FINISHED_CONFIG: bool = false;
+
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        // Set up the network hooks to sleep for 10 seconds on a patch check request
+        let hooks = NetworkHooks {
+            patch_check_request_fn: |_url, _request| {
+                let patch_check_delay = std::time::Duration::from_secs(1);
+                std::thread::sleep(patch_check_delay);
+
+                // If we've obtained and released the config lock, this test has passed.
+                if unsafe { HAS_FINISHED_CONFIG } {
+                    return Ok(PatchCheckResponse {
+                        patch_available: false,
+                        patch: None,
+                    });
+                }
+
+                // If we have not yet finished with the config lock, this test has failed.
+                unreachable!("If the test has not terminated before this, set_config is likely being blocked by a patch check request, which should not happen");
+            },
+            download_file_fn: |_url| Ok([].to_vec()),
+            report_event_fn: |_url, _event| Ok(()),
+        };
+
+        testing_set_network_hooks(
+            hooks.patch_check_request_fn,
+            hooks.download_file_fn,
+            hooks.report_event_fn,
+        );
+
+        // Invoke check_for_update to kick off a patch check request
+        let _ = std::thread::spawn(crate::check_for_update);
+
+        // Call with_config to get the config lock. This should complete before the patch check request is resolved.
+        let config_thread = std::thread::spawn(|| with_config(|_| Ok(())));
+
+        assert!(config_thread.join().is_ok());
+
+        unsafe { HAS_FINISHED_CONFIG = true };
+
+        // Don't wait for the patch check thread. This test should finish more or less immediately
+        // if with_config isn't waiting for the patch check thread. If it is waiting, this test will
+        // take patch_check_delay (defined above) to complete and fail due to the unreachable!() in
+        // the patch check callback.
     }
 }
