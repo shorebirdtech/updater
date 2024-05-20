@@ -3,14 +3,17 @@ import 'dart:io';
 import 'package:mason_logger/mason_logger.dart';
 import 'package:updater_tools/src/artifact_type.dart';
 import 'package:updater_tools/src/commands/updater_tool_command.dart';
+import 'package:updater_tools/src/extensions/arg_results.dart';
 import 'package:updater_tools/src/logger.dart';
 import 'package:updater_tools/src/packager/patch_packager.dart';
 
-const aotToolsCliArg = 'aot-tools';
+const aotToolsDillCliArg = 'aot-tools-dill';
 
-const genSnapshotCliArg = 'aot-tools';
+const genSnapshotCliArg = 'gen_snapshot';
 
 const appDillCliArg = 'app-dill';
+
+const analyzeSnapshotCliArg = 'analyze-snapshot';
 
 /// The arg name to specify the release and patch archive type.
 const archiveTypeCliArg = 'archive-type';
@@ -59,17 +62,27 @@ class PackagePatchCommand extends UpdaterToolCommand {
         mandatory: true,
         help: 'The path to the patch artifact which will be packaged',
       )
-      ..addOption(aotToolsCliArg, help: 'The path to the aot_tools dill file')
-      ..addOption(genSnapshotCliArg, help: 'The path to gen_snapshot')
-      ..addOption(
-        appDillCliArg,
-        help: 'The path to the app.dill file',
-      )
       ..addOption(
         patchExecutableCliArg,
         mandatory: true,
         help:
             '''The path to the patch executable that creates a binary diff between two files''',
+      )
+      ..addOption(
+        aotToolsDillCliArg,
+        help: 'The path to the aot_tools dill file (only required for iOS)',
+      )
+      ..addOption(
+        genSnapshotCliArg,
+        help: 'The path to the gen_snapshot executable (only required for iOS)',
+      )
+      ..addOption(
+        analyzeSnapshotCliArg,
+        help: 'The path to the gen_snapshot executable (only required for iOS)',
+      )
+      ..addOption(
+        appDillCliArg,
+        help: 'The path to the app.dill file (only required for iOS)',
       )
       ..addOption(
         outputCliArg,
@@ -93,19 +106,26 @@ This should be a directory, and will contain patch archives for each architectur
 
   @override
   Future<int> run() async {
-    final releaseFile = File(results[releaseCliArg] as String);
-    final patchFile = File(results[patchCliArg] as String);
-    final patchExecutable = File(results[patchExecutableCliArg] as String);
     final outputDirectory = Directory(results[outputCliArg] as String);
     final archiveType = ArchiveType.values.byName(
       results[archiveTypeCliArg] as String,
     );
-    final appDill = File(results[appDillCliArg] as String? ?? '');
-    final genSnapshot = File(results[genSnapshotCliArg] as String);
-    final aotTools = File(results[aotToolsCliArg] as String);
 
+    final File releaseFile;
+    final File patchFile;
+    final File patchExecutable;
+    final File? aotTools;
+    final File? appDill;
+    final File? genSnapshot;
+    final File? analyzeSnapshot;
     try {
-      _assertCliArgsValid();
+      releaseFile = results.asExistingFile(releaseCliArg);
+      patchFile = results.asExistingFile(patchCliArg);
+      patchExecutable = results.asExistingFile(patchExecutableCliArg);
+      aotTools = results.asExistingFileIfParsed('aot-tools');
+      appDill = results.asExistingFileIfParsed('app-dill');
+      genSnapshot = results.asExistingFileIfParsed('gen_snapshot');
+      analyzeSnapshot = results.asExistingFileIfParsed('analyze_snapshot');
     } catch (e) {
       logger.err('$e');
       return ExitCode.usage.code;
@@ -124,33 +144,14 @@ This should be a directory, and will contain patch archives for each architectur
       patchArchive: patchFile,
       archiveType: archiveType,
       outputDirectory: outputDirectory,
+      aotTools: aotTools,
+      appDill: appDill,
+      analyzeSnapshot: analyzeSnapshot,
+      genSnapshot: genSnapshot,
     );
 
     logger.info('Patch packaged to ${outputDirectory.path}');
 
     return ExitCode.success.code;
-  }
-
-  /// Verifies that CLI arguments point to existing files. Throws an
-  /// [ArgumentError] if any of the args are not valid.
-  void _assertCliArgsValid() {
-    final releaseFilePath = results[releaseCliArg] as String;
-    final patchFilePath = results[patchCliArg] as String;
-    final patchExecutablePath = results[patchExecutableCliArg] as String;
-
-    _verifyFileExists(releaseFilePath, releaseCliArg);
-    _verifyFileExists(patchFilePath, patchCliArg);
-    _verifyFileExists(patchExecutablePath, patchExecutableCliArg);
-  }
-
-  /// Throws an [ArgumentError] if a file at [path] does not exist.
-  void _verifyFileExists(String path, String name) {
-    if (!File(path).existsSync()) {
-      throw ArgumentError.value(
-        path,
-        name,
-        'The $name file does not exist',
-      );
-    }
   }
 }

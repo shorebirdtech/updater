@@ -47,6 +47,10 @@ class PatchPackager {
     required File patchArchive,
     required ArchiveType archiveType,
     required Directory outputDirectory,
+    File? aotTools,
+    File? appDill,
+    File? analyzeSnapshot,
+    File? genSnapshot,
   }) async {
     final directory = switch (archiveType) {
       ArchiveType.aab => await _packageAndroidAabPatch(
