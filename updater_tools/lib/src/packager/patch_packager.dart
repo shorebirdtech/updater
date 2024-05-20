@@ -23,6 +23,11 @@ class PackagingException implements Exception {
   String toString() => 'PackagingException: $message';
 }
 
+/// Function signature for the [PatchPackager] constructor.
+typedef MakePatchPackager = PatchPackager Function({
+  required File patchExecutable,
+});
+
 /// {@template patch_packager}
 /// Creates and packages patch artifacts.
 /// {@endtemplate }
@@ -126,7 +131,7 @@ class PatchPackager {
       final diffArchDir = Directory(p.join(outDir.path, archName))
         ..createSync(recursive: true);
       final diffFile = File(p.join(diffArchDir.path, 'dlc.vmcode'));
-      await _makeDiff(
+      await makeDiff(
         base: releaseElf,
         patch: patchElf,
         outFile: diffFile,
@@ -170,19 +175,19 @@ class PatchPackager {
     final patchAppDirectory =
         _getIosAppDirectory(xcarchiveDirectory: patchDirectory);
 
-    final File patchBaseFile;
-    try {
-      // If the aot_tools executable supports the dump_blobs command, we
-      // can generate a stable diff base and use that to create a patch.
-      patchBaseFile = await aotTools.generatePatchDiffBase(
-        analyzeSnapshotPath: analyzeSnapshotPath,
-        releaseSnapshot: releaseArtifactFile,
-      );
-      patchBaseProgress.complete();
-    } catch (error) {
-      patchBaseProgress.fail('$error');
-      return exit(ExitCode.software.code);
-    }
+    // final File patchBaseFile;
+    // try {
+    //   // If the aot_tools executable supports the dump_blobs command, we
+    //   // can generate a stable diff base and use that to create a patch.
+    //   patchBaseFile = await aotTools.generatePatchDiffBase(
+    //     analyzeSnapshotPath: analyzeSnapshotPath,
+    //     releaseSnapshot: releaseArtifactFile,
+    //   );
+    //   patchBaseProgress.complete();
+    // } catch (error) {
+    //   patchBaseProgress.fail('$error');
+    //   return exit(ExitCode.software.code);
+    // }
 
     // final releaseArtifactFile = File(
     //   p.join(
@@ -212,7 +217,7 @@ class PatchPackager {
 
   /// Create a binary diff between [base] and [patch]. Returns the path to the
   /// diff file.
-  Future<void> _makeDiff({
+  Future<void> makeDiff({
     required File base,
     required File patch,
     required File outFile,

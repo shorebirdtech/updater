@@ -30,11 +30,6 @@ const patchExecutableCliArg = 'patch-executable';
 /// The arg name to specify the output directory.
 const outputCliArg = 'output';
 
-/// Function signature for the [PatchPackager] constructor.
-typedef MakePatchPackager = PatchPackager Function({
-  required File patchExecutable,
-});
-
 /// {@template package_patch_command}
 /// A command to package patch artifacts.
 /// {@endtemplate}
