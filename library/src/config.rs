@@ -87,6 +87,7 @@ pub struct UpdateConfig {
     pub base_url: String,
     pub network_hooks: NetworkHooks,
     pub file_provider: Box<dyn ExternalFileProvider>,
+    pub patch_public_key: Option<String>,
 }
 
 pub fn set_config(
@@ -128,6 +129,7 @@ pub fn set_config(
                 .to_owned(),
             network_hooks,
             file_provider,
+            patch_public_key: yaml.patch_public_key.clone(),
         };
         debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
@@ -190,6 +192,7 @@ mod tests {
             channel: Some("fake_channel".to_string()),
             auto_update: Some(true),
             base_url: Some("fake_base_url".to_string()),
+            patch_public_key: None,
         }
     }
 
