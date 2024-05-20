@@ -1,0 +1,30 @@
+name: Updater Tools 💻
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - ".github/updater_tools.yaml"
+      - "updater_tools/lib/**"
+      - "updater_tools/test/**"
+      - "updater_tools/pubspec.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/updater_tools.yaml"
+      - "updater_tools/lib/**"
+      - "updater_tools/test/**"
+      - "updater_tools/pubspec.yaml"
+
+jobs:
+  semantic-pull-request:
+    uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/semantic_pull_request.yml@v1
+
+  build:
+    uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/dart_package.yml@v1
+    with:
+      working_directory: updater_tools
