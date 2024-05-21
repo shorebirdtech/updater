@@ -475,20 +475,11 @@ impl PatchManager {
     }
 
     pub fn add_patch_for_test(&mut self, temp_dir: &TempDir, patch_number: usize) -> Result<()> {
-        self.add_signed_patch_for_test(temp_dir, patch_number, None)
-    }
-
-    pub fn add_signed_patch_for_test(
-        &mut self,
-        temp_dir: &TempDir,
-        patch_number: usize,
-        signature: Option<&str>,
-    ) -> Result<()> {
         let file_path = &temp_dir
             .path()
             .join(format!("patch{}.vmcode", patch_number));
         std::fs::write(file_path, patch_number.to_string().repeat(patch_number)).unwrap();
-        self.add_patch(patch_number, file_path, "hash", signature)
+        self.add_patch(patch_number, file_path, "hash", None)
     }
 }
 
@@ -549,7 +540,12 @@ mod add_patch_tests {
         std::fs::write(file_path, patch_file_contents).unwrap();
 
         assert!(manager
-            .add_patch(patch_number, Path::new(file_path), "hash", None)
+            .add_patch(
+                patch_number,
+                Path::new(file_path),
+                "hash",
+                Some("my_signature")
+            )
             .is_ok());
 
         assert_eq!(
@@ -558,7 +554,7 @@ mod add_patch_tests {
                 number: patch_number,
                 size: patch_file_contents.len() as u64,
                 hash: "hash".to_string(),
-                signature: Some("signature".to_owned())
+                signature: Some("my_signature".to_owned())
             })
         );
         assert!(!file_path.exists());
