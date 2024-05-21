@@ -70,7 +70,7 @@ fn is_file_not_found(error: &anyhow::Error) -> bool {
 /// Lifecycle methods for the updater state.
 impl UpdaterState {
     /// Creates a new `UpdaterState`.
-    fn new(cache_dir: PathBuf, release_version: String, patch_public_key: Option<String>) -> Self {
+    fn new(cache_dir: PathBuf, release_version: String, patch_public_key: Option<&str>) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
             patch_manager: Box::new(PatchManager::new(cache_dir.clone(), patch_public_key)),
@@ -84,7 +84,7 @@ impl UpdaterState {
     /// Loads UpdaterState from disk.
     /// `patch_public_key` should come from the release artifact, NOT the cache directory,
     /// as the release artifact is a trusted source and the cache directory is not.
-    fn load(cache_dir: &Path, patch_public_key: &Option<String>) -> anyhow::Result<Self> {
+    fn load(cache_dir: &Path, patch_public_key: Option<&str>) -> anyhow::Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
         let serialized_state = disk_io::read(&path)?;
         Ok(UpdaterState {
@@ -101,7 +101,7 @@ impl UpdaterState {
     fn create_new_and_save(
         storage_dir: &Path,
         release_version: &str,
-        patch_public_key: Option<String>,
+        patch_public_key: Option<&str>,
     ) -> Self {
         let state = Self::new(
             storage_dir.to_owned(),
@@ -117,7 +117,7 @@ impl UpdaterState {
     pub fn load_or_new_on_error(
         storage_dir: &Path,
         release_version: &str,
-        patch_public_key: &Option<String>,
+        patch_public_key: Option<&str>,
     ) -> Self {
         let load_result = Self::load(storage_dir, patch_public_key);
         match load_result {
@@ -193,9 +193,14 @@ impl UpdaterState {
 
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
-    pub fn install_patch(&mut self, patch: &PatchInfo) -> anyhow::Result<()> {
+    pub fn install_patch(
+        &mut self,
+        patch: &PatchInfo,
+        hash: &str,
+        signature: Option<&str>,
+    ) -> anyhow::Result<()> {
         self.patch_manager
-            .add_patch(patch.number, &patch.path, &patch.hash)
+            .add_patch(patch.number, &patch.path, &hash, signature)
     }
 
     /// Returns highest patch number that has been installed for this release.
@@ -262,11 +267,7 @@ mod tests {
     fn fake_patch(tmp_dir: &TempDir, number: usize) -> super::PatchInfo {
         let path = tmp_dir.path().join(format!("patch_{}", number));
         std::fs::write(&path, "fake patch").unwrap();
-        PatchInfo {
-            number,
-            path,
-            hash: "asdf".to_owned(),
-        }
+        PatchInfo { number, path }
     }
 
     #[test]
@@ -275,7 +276,7 @@ mod tests {
         let mut patch_manager = PatchManager::new(tmp_dir.path().to_path_buf(), None);
         let file_path = &tmp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, "patch file contents").unwrap();
-        assert!(patch_manager.add_patch(1, file_path, "asdf").is_ok());
+        assert!(patch_manager.add_patch(1, file_path, "asdf", None).is_ok());
 
         let state = test_state(&tmp_dir, patch_manager);
         let release_version = state.serialized_state.release_version.clone();
@@ -385,11 +386,16 @@ mod tests {
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
             .expect_add_patch()
-            .with(eq(patch.number), eq(patch.path.clone()), eq("asdf"))
-            .returning(|_, __, ___| Ok(()));
+            .with(
+                eq(patch.number),
+                eq(patch.path.clone()),
+                eq("asdf"),
+                eq(None),
+            )
+            .returning(|_, __, ___, ____| Ok(()));
         let mut state = test_state(&tmp_dir, mock_manage_patches);
 
-        assert!(state.install_patch(&patch).is_ok());
+        assert!(state.install_patch(&patch, "asdf", None).is_ok());
     }
 
     #[test]

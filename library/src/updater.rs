@@ -166,7 +166,7 @@ fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
         let state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.release_version,
-            &config.patch_public_key,
+            config.patch_public_key.as_deref(),
         );
 
         // Get the required info to make the request.
@@ -264,7 +264,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     let read_only_state = UpdaterState::load_or_new_on_error(
         &config.storage_dir,
         &config.release_version,
-        &config.patch_public_key,
+        config.patch_public_key.as_deref(),
     );
 
     // We discard any events if we have more than 3 queued to make sure
@@ -281,7 +281,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.release_version,
-            &config.patch_public_key,
+            config.patch_public_key.as_deref(),
         );
         // This will clear any events which got queued between the time we
         // loaded the state now, but that's OK for now.
@@ -326,15 +326,14 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         let patch_info = PatchInfo {
             path: output_path,
             number: patch.number,
-            hash: patch.hash,
         };
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.release_version,
-            &config.patch_public_key,
+            config.patch_public_key.as_deref(),
         );
         // Move/state update should be "atomic" (it isn't today).
-        state.install_patch(&patch_info)?;
+        state.install_patch(&patch_info, &patch.hash, patch.signature.as_deref())?;
         info!("Patch {} successfully installed.", patch.number);
         // Should set some state to say the status is "update required" and that
         // we now have a different "next" version of the app from the current
@@ -623,7 +622,6 @@ mod tests {
                 .install_patch(&PatchInfo {
                     path: artifact_path,
                     number: 1,
-                    hash: "hash".to_string(),
                 })
                 .expect("move failed");
             state.save().expect("save failed");
@@ -729,7 +727,7 @@ mod tests {
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        with_config(|config| {
+        let with_config = with_config(|config| {
             let download_dir = std::path::PathBuf::from(&config.download_dir);
             let artifact_path = download_dir.join("1");
             fs::create_dir_all(&download_dir).unwrap();
@@ -738,14 +736,17 @@ mod tests {
             let mut state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
                 &config.release_version,
-                &config.patch_public_key,
+                config.patch_public_key.as_deref(),
             );
             state
-                .install_patch(&PatchInfo {
-                    path: artifact_path,
-                    number: patch_number,
-                    hash: "hash".to_string(),
-                })
+                .install_patch(
+                    &PatchInfo {
+                        path: artifact_path,
+                        number: patch_number,
+                    },
+                    "hash",
+                    None,
+                )
                 .expect("move failed");
             state.save().expect("save failed");
             Ok(())
@@ -760,7 +761,7 @@ mod tests {
             let state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
                 &config.release_version,
-                &config.patch_public_key,
+                config.patch_public_key.as_deref(),
             );
             assert_eq!(state.current_boot_patch().unwrap().number, patch_number);
             Ok(())
@@ -789,11 +790,14 @@ mod tests {
                 &config.patch_public_key,
             );
             state
-                .install_patch(&PatchInfo {
-                    path: artifact_path,
-                    number: 1,
-                    hash: "hash".to_string(),
-                })
+                .install_patch(
+                    &PatchInfo {
+                        path: artifact_path,
+                        number: 1,
+                    },
+                    "hash",
+                    &None,
+                )
                 .expect("move failed");
             state.save().expect("save failed");
             Ok(())
