@@ -776,7 +776,7 @@ mod next_boot_patch_tests {
     }
 
     #[test]
-    fn returns_null_patch_if_first_patch_failed_to_boot() -> Result<()> {
+    fn returns_none_patch_if_first_patch_failed_to_boot() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
@@ -813,7 +813,7 @@ mod next_boot_patch_tests {
     }
 
     #[test]
-    fn returns_null_if_first_patch_did_not_successfully_boot() -> Result<()> {
+    fn returns_none_if_first_patch_did_not_successfully_boot() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
@@ -827,7 +827,7 @@ mod next_boot_patch_tests {
     }
 
     #[test]
-    fn returns_null_if_next_patch_did_not_successfully_boot() -> Result<()> {
+    fn returns_none_if_next_patch_did_not_successfully_boot() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
