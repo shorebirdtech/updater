@@ -12,6 +12,8 @@ pub struct YamlConfig {
     pub base_url: Option<String>,
     /// Update behavior. Defaults to true if not set.
     pub auto_update: Option<bool>,
+    /// Base64-encoded public key for verifying patch hash signatures.
+    pub patch_public_key: Option<String>,
 }
 
 impl YamlConfig {
