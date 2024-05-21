@@ -172,9 +172,14 @@ impl UpdaterState {
 
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
-    pub fn install_patch(&mut self, patch: &PatchInfo, hash: &str) -> anyhow::Result<()> {
+    pub fn install_patch(
+        &mut self,
+        patch: &PatchInfo,
+        hash: &str,
+        signature: Option<&str>,
+    ) -> anyhow::Result<()> {
         self.patch_manager
-            .add_patch(patch.number, &patch.path, hash)
+            .add_patch(patch.number, &patch.path, hash, signature)
     }
 
     /// Returns highest patch number that has been installed for this release.
@@ -250,7 +255,7 @@ mod tests {
         let mut patch_manager = PatchManager::with_root_dir(tmp_dir.path().to_path_buf());
         let file_path = &tmp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, "patch file contents").unwrap();
-        assert!(patch_manager.add_patch(1, file_path, "hash").is_ok());
+        assert!(patch_manager.add_patch(1, file_path, "hash", None).is_ok());
 
         let state = test_state(&tmp_dir, patch_manager);
         let release_version = state.serialized_state.release_version.clone();
@@ -356,13 +361,21 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         let patch = fake_patch(&tmp_dir, patch_number);
         let mut mock_manage_patches = MockManagePatches::new();
+        let cloned_patch = patch.clone();
         mock_manage_patches
             .expect_add_patch()
-            .with(eq(patch.number), eq(patch.path.clone()), eq("hash"))
-            .returning(|_, __, ___| Ok(()));
+            .withf(move |number, path, hash, signature| {
+                number == &cloned_patch.number
+                    && path == cloned_patch.path
+                    && hash == "hash"
+                    && signature == &Some("signature")
+            })
+            .returning(|_, __, ___, ____| Ok(()));
         let mut state = test_state(&tmp_dir, mock_manage_patches);
 
-        assert!(state.install_patch(&patch, "hash").is_ok());
+        assert!(state
+            .install_patch(&patch, "hash", Some("signature"))
+            .is_ok());
     }
 
     #[test]
