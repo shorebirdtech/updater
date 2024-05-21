@@ -245,10 +245,7 @@ impl PatchManager {
             let patch_hash = signing::hash_file(&artifact_path)?;
             signing::check_signature(&patch_hash, &patch_signature, public_key)?;
         } else {
-            info!(
-                "No public key provided, skipping signature verification for patch {}",
-                patch.number
-            );
+            info!("No public key provided, skipping signature verification");
         }
 
         Ok(())
