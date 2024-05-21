@@ -56,6 +56,10 @@ struct PatchesState {
 pub trait ManagePatches {
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
+    ///
+    /// The explicit lifetime is required for automock to work with Options.
+    /// See https://github.com/asomers/mockall/issues/61.
+    #[allow(clippy::needless_lifetimes)]
     fn add_patch<'a>(
         &mut self,
         number: usize,
@@ -323,6 +327,9 @@ impl PatchManager {
 }
 
 impl ManagePatches for PatchManager {
+    // The explicit lifetime is required for automock to work with Options.
+    // See https://github.com/asomers/mockall/issues/61.
+    #[allow(clippy::needless_lifetimes)]
     fn add_patch<'a>(
         &mut self,
         patch_number: usize,
