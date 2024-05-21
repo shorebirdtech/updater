@@ -860,7 +860,7 @@ mod next_boot_patch_tests {
     const SIGNATURE: &str = "ZGccldv01XqHQ76bXuKV/9EQnNK0Q+reQ9bJHVnGfLldF+BLRx0divgPfKP5Df9BJPA3dw1Z1VortfepmMGebP3kS593l5zoktu9MIepxvRAFWNKE5PDTIIvCL/ddTPEHt6NNCeD6HLOMLzbEX3cFZa+lq3UymGi0aqA5DlXirJBGtopojc9nOXZ22n/qHNZIHEkGcqKbSMSK9oC55whKHnlJTbCXdmSyDc65B4PcgseqJom1riVK3XGW1YMrSpuMAU+CDT7HhdESmI1UtH1bYeBITfRhQztdDTfti2vJTf2Y+lYC99CFiISgD7f1m0KUcC+VnEAMZSYtgxSk6AX2A==";
 
     #[test]
-    fn fails_if_public_key_is_invalid() -> Result<()> {
+    fn returns_none_if_public_key_is_invalid() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some("not a valid key"));
 
