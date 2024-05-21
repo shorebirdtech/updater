@@ -321,7 +321,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
         // Move/state update should be "atomic" (it isn't today).
-        state.install_patch(&patch_info)?;
+        state.install_patch(&patch_info, &patch.hash)?;
         info!("Patch {} successfully installed.", patch.number);
         // Should set some state to say the status is "update required" and that
         // we now have a different "next" version of the app from the current
@@ -585,10 +585,13 @@ mod tests {
             let mut state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
             state
-                .install_patch(&PatchInfo {
-                    path: artifact_path,
-                    number: 1,
-                })
+                .install_patch(
+                    &PatchInfo {
+                        path: artifact_path,
+                        number: 1,
+                    },
+                    "hash",
+                )
                 .expect("move failed");
             state.save().expect("save failed");
             Ok(())
@@ -702,10 +705,13 @@ mod tests {
             let mut state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
             state
-                .install_patch(&PatchInfo {
-                    path: artifact_path,
-                    number: patch_number,
-                })
+                .install_patch(
+                    &PatchInfo {
+                        path: artifact_path,
+                        number: patch_number,
+                    },
+                    "hash",
+                )
                 .expect("move failed");
             state.save().expect("save failed");
             Ok(())
@@ -743,10 +749,13 @@ mod tests {
             let mut state =
                 UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
             state
-                .install_patch(&PatchInfo {
-                    path: artifact_path,
-                    number: 1,
-                })
+                .install_patch(
+                    &PatchInfo {
+                        path: artifact_path,
+                        number: 1,
+                    },
+                    "hash",
+                )
                 .expect("move failed");
             state.save().expect("save failed");
             Ok(())
