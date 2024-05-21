@@ -235,15 +235,15 @@ impl PatchManager {
         }
 
         if let Some(public_key) = &self.patch_public_key {
-            // If we have a public key, verify that the patch has a signature
-            let patch_signature = patch
+            // If we have a public key, verify that the patch's hash has a signature.
+            let signature = patch
                 .signature
                 .clone()
                 .context("Patch signature is missing")?;
 
             // Check that the signature is valid.
             let patch_hash = signing::hash_file(&artifact_path)?;
-            signing::check_signature(&patch_hash, &patch_signature, public_key)?;
+            signing::check_signature(&patch_hash, &signature, public_key)?;
         } else {
             info!("No public key provided, skipping signature verification");
         }
