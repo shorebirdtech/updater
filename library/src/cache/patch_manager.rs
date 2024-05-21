@@ -244,6 +244,11 @@ impl PatchManager {
             // Check that the signature is valid.
             let patch_hash = signing::hash_file(&artifact_path)?;
             signing::check_signature(&patch_hash, &patch_signature, public_key)?;
+        } else {
+            info!(
+                "No public key provided, skipping signature verification for patch {}",
+                patch.number
+            );
         }
 
         Ok(())
