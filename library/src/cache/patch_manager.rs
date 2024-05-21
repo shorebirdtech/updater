@@ -238,11 +238,8 @@ impl PatchManager {
                 .clone()
                 .context("Patch signature is missing")?;
 
-            // and that the signature is valid.
+            // Check that the signature is valid.
             let patch_hash = hash_file(&artifact_path)?;
-            // info!("patch hash is {}", patch.hash);
-            // info!("hash digest is {}", hex::encode(hash));
-            // info!("hashes match? {}", hex::encode(hash) == patch.hash);
             check_signature(&patch_hash, &patch_signature, public_key)?;
         }
 
