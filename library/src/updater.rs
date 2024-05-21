@@ -163,8 +163,11 @@ fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     let (request, url, request_fn) = with_config(|config| {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
-        let state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
 
         // Get the required info to make the request.
         Ok((
@@ -258,8 +261,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // We should never try to write this state as some other writer may be
     // racing with us, we should get a new state inside a lock if we want
     // to write.
-    let read_only_state =
-        UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+    let read_only_state = UpdaterState::load_or_new_on_error(
+        &config.storage_dir,
+        &config.release_version,
+        config.patch_public_key.as_deref(),
+    );
 
     // We discard any events if we have more than 3 queued to make sure
     // we don't stall the client.
@@ -272,8 +278,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     }
     // We're abusing the config lock as a UpdateState lock for now.
     let read_only_state = with_config(|_| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
         // This will clear any events which got queued between the time we
         // loaded the state now, but that's OK for now.
         let result = state.clear_events();
@@ -318,8 +327,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             path: output_path,
             number: patch.number,
         };
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
         // Move/state update should be "atomic" (it isn't today).
         state.install_patch(&patch_info, &patch.hash, patch.signature.as_deref())?;
         info!("Patch {} successfully installed.", patch.number);
@@ -389,8 +401,11 @@ where
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
         Ok(state.next_boot_patch())
     })
 }
@@ -400,8 +415,11 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 /// `next_boot_patch`.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_config(|config| {
-        let state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
         Ok(state.current_boot_patch())
     })
 }
@@ -414,8 +432,11 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     info!("Reporting launch start.");
 
     with_config(|config| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
 
         let next_boot_patch = match state.next_boot_patch() {
             Some(patch) => patch,
@@ -432,8 +453,11 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     info!("Reporting failed launch.");
 
     with_config(|config| {
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
 
         let patch = state
             .last_attempted_boot_patch()
@@ -464,8 +488,11 @@ pub fn report_launch_success() -> anyhow::Result<()> {
     with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
-        let mut state =
-            UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
 
         let last_attempted_boot_patch = match state.last_attempted_boot_patch() {
             Some(patch) => patch,
@@ -582,8 +609,11 @@ mod tests {
             fs::create_dir_all(&download_dir).unwrap();
             fs::write(&artifact_path, "hello").unwrap();
 
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             state
                 .install_patch(
                     &PatchInfo {
@@ -703,8 +733,11 @@ mod tests {
             fs::create_dir_all(&download_dir).unwrap();
             fs::write(&artifact_path, "hello").unwrap();
 
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             state
                 .install_patch(
                     &PatchInfo {
@@ -725,8 +758,11 @@ mod tests {
         super::report_launch_success().unwrap();
 
         with_config(|config| {
-            let state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             assert_eq!(state.current_boot_patch().unwrap().number, patch_number);
             Ok(())
         })
@@ -748,8 +784,11 @@ mod tests {
             fs::create_dir_all(&download_dir).unwrap();
             fs::write(&artifact_path, "hello").unwrap();
 
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             state
                 .install_patch(
                     &PatchInfo {
@@ -770,8 +809,11 @@ mod tests {
         super::report_launch_failure().unwrap();
 
         with_config(|config| {
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
             // And we've queued an event.
@@ -813,8 +855,11 @@ mod tests {
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         with_config(|config| {
-            let mut state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
                 arch: current_arch().to_string(),
@@ -838,8 +883,11 @@ mod tests {
         event_mock.expect(3);
 
         with_config(|config| {
-            let state =
-                UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
+            let state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
             // All 5 events should be cleared, even though only 3 were sent.
             assert_eq!(state.copy_events(10).len(), 0);
             Ok(())

@@ -1,4 +1,4 @@
-use super::{disk_io, PatchInfo};
+use super::{disk_io, signing, PatchInfo};
 use anyhow::{bail, Context, Result};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
@@ -124,18 +124,23 @@ pub struct PatchManager {
 
     /// Metadata about the patches we have downloaded that is persisted to disk.
     patches_state: PatchesState,
+
+    /// The key used to sign patch hashes for the current release, if any. If this is
+    /// not None, all patches must have a signature that can be verified with this key.
+    patch_public_key: Option<String>,
 }
 
 impl PatchManager {
     /// Creates a new PatchManager with the given root directory. This directory is
     /// assumed to exist. The PatchManager will use this directory to store its
     /// state and patch binaries.
-    pub fn with_root_dir(root_dir: PathBuf) -> Self {
+    pub fn new(root_dir: PathBuf, patch_public_key: Option<&str>) -> Self {
         let patches_state = Self::load_patches_state(&root_dir).unwrap_or_default();
 
         Self {
             root_dir,
             patches_state,
+            patch_public_key: patch_public_key.map(|s| s.to_owned()),
         }
     }
 
@@ -227,6 +232,18 @@ impl PatchManager {
                     )
                 }
             }
+        }
+
+        if let Some(public_key) = &self.patch_public_key {
+            // If we have a public key, verify that the patch has a signature
+            let patch_signature = patch
+                .signature
+                .clone()
+                .context("Patch signature is missing")?;
+
+            // Check that the signature is valid.
+            let patch_hash = signing::hash_file(&artifact_path)?;
+            signing::check_signature(&patch_hash, &patch_signature, public_key)?;
         }
 
         Ok(())
@@ -471,15 +488,32 @@ impl ManagePatches for PatchManager {
 #[cfg(test)]
 impl PatchManager {
     pub fn manager_for_test(temp_dir: &TempDir) -> PatchManager {
-        PatchManager::with_root_dir(temp_dir.path().to_owned())
+        PatchManager::new(temp_dir.path().to_owned(), None)
     }
 
     pub fn add_patch_for_test(&mut self, temp_dir: &TempDir, patch_number: usize) -> Result<()> {
+        self.add_signed_patch_for_test(temp_dir, patch_number, "hash", None)
+    }
+
+    pub fn add_signed_patch_for_test(
+        &mut self,
+        temp_dir: &TempDir,
+        patch_number: usize,
+        hash: &str,
+        signature: Option<&str>,
+    ) -> Result<()> {
         let file_path = &temp_dir
             .path()
             .join(format!("patch{}.vmcode", patch_number));
         std::fs::write(file_path, patch_number.to_string().repeat(patch_number)).unwrap();
-        self.add_patch(patch_number, file_path, "hash", None)
+        info!(
+            "Adding patch {} with contents {} hash {} at {}",
+            patch_number,
+            patch_number.to_string().repeat(patch_number),
+            hash,
+            file_path.display()
+        );
+        self.add_patch(patch_number, file_path, hash, signature)
     }
 }
 
@@ -492,16 +526,15 @@ mod debug_tests {
     #[test]
     fn manage_patches_is_debug() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let patch_manager: Box<dyn super::ManagePatches> = Box::new(
-            super::PatchManager::with_root_dir(temp_dir.path().to_owned()),
-        );
+        let patch_manager: Box<dyn super::ManagePatches> =
+            Box::new(PatchManager::manager_for_test(&temp_dir));
         assert_eq!(format!("{:?}", patch_manager), "ManagePatches");
     }
 
     #[test]
     fn patch_manager_is_debug() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let patch_manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let patch_manager = PatchManager::manager_for_test(&temp_dir);
         let expected_str = format!(
             "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, highest_seen_patch_number: None }} }}",
             temp_dir.path().display()
@@ -534,7 +567,7 @@ mod add_patch_tests {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents).unwrap();
@@ -632,7 +665,7 @@ mod next_boot_patch_tests {
     #[test]
     fn returns_none_if_no_next_boot_patch() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         assert!(manager.next_boot_patch().is_none());
     }
 
@@ -662,7 +695,7 @@ mod next_boot_patch_tests {
     fn clears_current_and_next_on_boot_failure_if_they_are_the_same() -> Result<()> {
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
         assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
@@ -688,7 +721,7 @@ mod next_boot_patch_tests {
     fn falls_back_to_last_booted_patch_if_still_bootable() -> Result<()> {
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
 
@@ -714,7 +747,7 @@ mod next_boot_patch_tests {
     fn does_not_fall_back_to_last_booted_patch_if_corrupted() -> Result<()> {
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
 
@@ -810,6 +843,95 @@ mod next_boot_patch_tests {
 
         Ok(())
     }
+
+    // The constant values below were generated by taking the hash of the patch file
+    // using openssl to sign it with a private key.
+
+    // The base64-encoded public half of the key pair used to sign `MESSAGE`.
+    const PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
+
+    // The message that was signed.
+    const INFLATED_PATCH_HASH: &str =
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
+
+    // The base64-encoded signature of `MESSAGE` using the private key corresponding to `PUBLIC_KEY`.
+    const SIGNATURE: &str = "ZGccldv01XqHQ76bXuKV/9EQnNK0Q+reQ9bJHVnGfLldF+BLRx0divgPfKP5Df9BJPA3dw1Z1VortfepmMGebP3kS593l5zoktu9MIepxvRAFWNKE5PDTIIvCL/ddTPEHt6NNCeD6HLOMLzbEX3cFZa+lq3UymGi0aqA5DlXirJBGtopojc9nOXZ22n/qHNZIHEkGcqKbSMSK9oC55whKHnlJTbCXdmSyDc65B4PcgseqJom1riVK3XGW1YMrSpuMAU+CDT7HhdESmI1UtH1bYeBITfRhQztdDTfti2vJTf2Y+lYC99CFiISgD7f1m0KUcC+VnEAMZSYtgxSk6AX2A==";
+
+    #[test]
+    fn fails_if_public_key_is_invalid() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some("not a valid key"));
+
+        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
+
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_none_if_patch_is_missing_expected_signature() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some(PUBLIC_KEY));
+
+        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, None)?;
+
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_none_if_patch_has_invalid_signature() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some(PUBLIC_KEY));
+
+        // Using MESSAGE as a signature because it is valid base64, but not a valid signature.
+        manager.add_signed_patch_for_test(
+            &temp_dir,
+            1,
+            INFLATED_PATCH_HASH,
+            Some(INFLATED_PATCH_HASH),
+        )?;
+
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_patch_if_patch_has_valid_signature() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some(PUBLIC_KEY));
+
+        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
+
+        assert!(manager.next_boot_patch().is_some());
+        let patch = manager.next_boot_patch().unwrap();
+        assert_eq!(patch.number, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_patch_with_arbitrary_signature_if_no_public_key() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        // Create a PatchManager without a public key.
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        manager.add_signed_patch_for_test(
+            &temp_dir,
+            1,
+            INFLATED_PATCH_HASH,
+            Some("not a valid signature"),
+        )?;
+
+        assert!(manager.next_boot_patch().is_some());
+        let patch = manager.next_boot_patch().unwrap();
+        assert_eq!(patch.number, 1);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -819,7 +941,7 @@ mod fall_back_tests {
     #[test]
     fn does_nothing_if_no_patch_exists() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
@@ -835,7 +957,7 @@ mod fall_back_tests {
     #[test]
     fn sets_next_patch_to_latest_patch_if_no_next_patch_exists() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         assert!(manager.patches_state.next_boot_patch.is_none());
 
@@ -858,7 +980,7 @@ mod fall_back_tests {
     #[test]
     fn sets_next_patch_to_latest_patch_if_both_are_present() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download and successfully boot from patch 1
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -879,7 +1001,7 @@ mod fall_back_tests {
     #[test]
     fn clears_next_and_last_patches_if_both_fail_validation() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download and successfully boot from patch 1, and then corrupt it on disk.
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -903,7 +1025,7 @@ mod fall_back_tests {
     #[test]
     fn does_not_clear_next_patch_if_changed_since_boot_start() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Simulate a situation where we download both patches 1 and 2.
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -927,7 +1049,7 @@ mod fall_back_tests {
     #[test]
     fn succeeds_if_deleting_artifacts_fails() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download and successfully boot from patch 1, and then corrupt it on disk.
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -961,7 +1083,7 @@ mod record_boot_success_for_patch_tests {
     #[test]
     fn errs_if_no_next_boot_patch() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // This should fail because no patches have been added.
         assert!(manager.record_boot_success().is_err());
@@ -974,7 +1096,7 @@ mod record_boot_success_for_patch_tests {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
         assert!(manager
@@ -990,7 +1112,7 @@ mod record_boot_success_for_patch_tests {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
         assert!(manager
@@ -1008,7 +1130,7 @@ mod record_boot_success_for_patch_tests {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
 
@@ -1044,7 +1166,7 @@ mod record_boot_success_for_patch_tests {
     #[test]
     fn deletes_other_patch_artifacts() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download patches 1, 2, and 3 before we start booting from patch 2.
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -1076,7 +1198,7 @@ mod record_boot_success_for_patch_tests {
     #[test]
     fn deletes_unrecognized_directories_in_patches_dir() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Add a junk directory to the patches directory.
         let junk_dir = manager.patches_dir().join("junk");
