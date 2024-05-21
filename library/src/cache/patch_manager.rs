@@ -534,9 +534,9 @@ mod debug_tests {
     #[test]
     fn patch_manager_is_debug() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let patch_manager = PatchManager::manager_for_test(&temp_dir);
+        let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
         let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, highest_seen_patch_number: None }} }}",
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
