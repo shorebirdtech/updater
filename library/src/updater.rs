@@ -333,7 +333,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             config.patch_public_key.as_deref(),
         );
         // Move/state update should be "atomic" (it isn't today).
-        state.install_patch(&patch_info, &patch.hash, patch.signature.as_deref())?;
+        state.install_patch(&patch_info, &patch.hash, patch.hash_signature.as_deref())?;
         info!("Patch {} successfully installed.", patch.number);
         // Should set some state to say the status is "update required" and that
         // we now have a different "next" version of the app from the current

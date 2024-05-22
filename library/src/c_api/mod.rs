@@ -480,7 +480,7 @@ mod test {
                         number: 1,
                         hash: hash.to_owned(),
                         download_url: "ignored".to_owned(),
-                        signature: None,
+                        hash_signature: None,
                     }),
                 })
             },
@@ -583,7 +583,7 @@ mod test {
                         number: 1,
                         hash: "ignored".to_owned(),
                         download_url: "ignored".to_owned(),
-                        signature: None,
+                        hash_signature: None,
                     }),
                 })
             },
