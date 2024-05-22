@@ -321,7 +321,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         let mut state =
             UpdaterState::load_or_new_on_error(&config.storage_dir, &config.release_version);
         // Move/state update should be "atomic" (it isn't today).
-        state.install_patch(&patch_info, &patch.hash)?;
+        state.install_patch(&patch_info, &patch.hash, patch.signature.as_deref())?;
         info!("Patch {} successfully installed.", patch.number);
         // Should set some state to say the status is "update required" and that
         // we now have a different "next" version of the app from the current
@@ -591,6 +591,7 @@ mod tests {
                         number: 1,
                     },
                     "hash",
+                    None,
                 )
                 .expect("move failed");
             state.save().expect("save failed");
@@ -711,6 +712,7 @@ mod tests {
                         number: patch_number,
                     },
                     "hash",
+                    None,
                 )
                 .expect("move failed");
             state.save().expect("save failed");
@@ -755,6 +757,7 @@ mod tests {
                         number: 1,
                     },
                     "hash",
+                    None,
                 )
                 .expect("move failed");
             state.save().expect("save failed");
