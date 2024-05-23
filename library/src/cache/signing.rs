@@ -1,6 +1,5 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use ring::signature;
 use std::path::Path;
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
@@ -18,30 +17,32 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
 }
 
 /// `public_key` is a DER base64-encoded RSA public key.
+///
+/// Given a public_key.pem file, this can be generated with the following command:
 ///   openssl rsa -pubin \
 ///     -in public_key.pem \
 ///     -inform PEM \
 ///     -RSAPublicKey_out \
 ///     -outform DER \
 ///     -out public_key.der
+///
+/// See https://docs.rs/ring/latest/ring/signature/index.html#signing-and-verifying-with-rsa-pkcs1-15-padding
+/// for more information.
 pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Result<()> {
     debug!("Message is {}", message);
     debug!("Public key is {:?}", public_key);
     debug!("Signature is {}", signature);
 
-    // public.der
     let public_key_bytes = base64::prelude::BASE64_STANDARD
         .decode(public_key)
         .with_context(|| format!("Failed to decode public_key: {}", public_key))?;
-
-    let public_key =
-        signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, public_key_bytes);
-    let decoded_sig = match base64::prelude::BASE64_STANDARD.decode(signature) {
-        Ok(sig) => sig,
-        Err(e) => {
-            bail!("Failed to decode signature: {:?}", e);
-        }
-    };
+    let public_key = ring::signature::UnparsedPublicKey::new(
+        &ring::signature::RSA_PKCS1_2048_8192_SHA256,
+        public_key_bytes,
+    );
+    let decoded_sig = base64::prelude::BASE64_STANDARD
+        .decode(signature)
+        .map_err(|e| anyhow::Error::msg(format!("Failed to decode signature: {:?}", e)))?;
 
     info!("Verifying patch signature...");
     match public_key.verify(message.as_bytes(), &decoded_sig) {
