@@ -148,7 +148,7 @@ pub struct Patch {
     pub download_url: String,
     /// The signature of `hash`, if this patch is signed. None otherwise.
     #[serde(default)]
-    pub signature: Option<String>,
+    pub hash_signature: Option<String>,
 }
 
 /// Any edits to this struct should be made carefully and in accordance

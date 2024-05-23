@@ -14,6 +14,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [dependencies]
 # Used for error handling for now.
 anyhow = { version = "1.0.69", features = ["backtrace"] }
+base64 = "0.22.0"
 # For inflating compressed patch files.
 bipatch = "1.0.0"
 # Used for exposing C API
@@ -41,6 +42,7 @@ reqwest = { version = "0.11", default-features = false, features = [
     "json",
     "rustls-tls",
 ] }
+ring = "0.17.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.93"
 # For reading shorebird.yaml

@@ -1,5 +1,6 @@
 mod disk_io;
 mod patch_manager;
+mod signing;
 pub mod updater_state;
 
 pub use updater_state::UpdaterState;

@@ -70,10 +70,10 @@ fn is_file_not_found(error: &anyhow::Error) -> bool {
 /// Lifecycle methods for the updater state.
 impl UpdaterState {
     /// Creates a new `UpdaterState`.
-    fn new(cache_dir: PathBuf, release_version: String) -> Self {
+    fn new(cache_dir: PathBuf, release_version: String, patch_public_key: Option<&str>) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
-            patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.clone())),
+            patch_manager: Box::new(PatchManager::new(cache_dir.clone(), patch_public_key)),
             serialized_state: SerializedState {
                 release_version,
                 queued_events: Vec::new(),
@@ -82,27 +82,39 @@ impl UpdaterState {
     }
 
     /// Loads UpdaterState from disk
-    fn load(cache_dir: &Path) -> anyhow::Result<Self> {
+    fn load(cache_dir: &Path, patch_public_key: Option<&str>) -> anyhow::Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
         let serialized_state = disk_io::read(&path)?;
         Ok(UpdaterState {
             cache_dir: cache_dir.to_path_buf(),
-            patch_manager: Box::new(PatchManager::with_root_dir(cache_dir.to_path_buf())),
+            patch_manager: Box::new(PatchManager::new(cache_dir.to_path_buf(), patch_public_key)),
             serialized_state,
         })
     }
 
     /// Initializes a new UpdaterState and saves it to disk.
-    fn create_new_and_save(storage_dir: &Path, release_version: &str) -> Self {
-        let state = Self::new(storage_dir.to_owned(), release_version.to_owned());
+    fn create_new_and_save(
+        storage_dir: &Path,
+        release_version: &str,
+        patch_public_key: Option<&str>,
+    ) -> Self {
+        let state = Self::new(
+            storage_dir.to_owned(),
+            release_version.to_owned(),
+            patch_public_key,
+        );
         if let Err(e) = state.save() {
             warn!("Error saving state {:?}, ignoring.", e);
         }
         state
     }
 
-    pub fn load_or_new_on_error(storage_dir: &Path, release_version: &str) -> Self {
-        let load_result = Self::load(storage_dir);
+    pub fn load_or_new_on_error(
+        storage_dir: &Path,
+        release_version: &str,
+        patch_public_key: Option<&str>,
+    ) -> Self {
+        let load_result = Self::load(storage_dir, patch_public_key);
         match load_result {
             Ok(mut loaded) => {
                 if loaded.serialized_state.release_version != release_version {
@@ -111,7 +123,11 @@ impl UpdaterState {
                         loaded.serialized_state.release_version, release_version
                     );
                     let _ = loaded.patch_manager.reset();
-                    return Self::create_new_and_save(storage_dir, release_version);
+                    return Self::create_new_and_save(
+                        storage_dir,
+                        release_version,
+                        patch_public_key,
+                    );
                 }
                 loaded
             }
@@ -119,7 +135,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     info!("No existing state file found: {:#}, creating new state.", e);
                 }
-                Self::create_new_and_save(storage_dir, release_version)
+                Self::create_new_and_save(storage_dir, release_version, patch_public_key)
             }
         }
     }
@@ -252,7 +268,7 @@ mod tests {
     #[test]
     fn release_version_changed_resets_patches() {
         let tmp_dir = TempDir::new("example").unwrap();
-        let mut patch_manager = PatchManager::with_root_dir(tmp_dir.path().to_path_buf());
+        let mut patch_manager = PatchManager::manager_for_test(&tmp_dir);
         let file_path = &tmp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, "patch file contents").unwrap();
         assert!(patch_manager.add_patch(1, file_path, "hash", None).is_ok());
@@ -261,11 +277,12 @@ mod tests {
         let release_version = state.serialized_state.release_version.clone();
         assert!(state.save().is_ok());
 
-        let mut state = UpdaterState::load_or_new_on_error(&state.cache_dir, &release_version);
+        let mut state =
+            UpdaterState::load_or_new_on_error(&state.cache_dir, &release_version, None);
         assert_eq!(state.next_boot_patch().unwrap().number, 1);
 
         let mut next_version_state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2");
+            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None);
         assert!(next_version_state.next_boot_patch().is_none());
         assert!(next_version_state.latest_seen_patch_number().is_none());
     }
@@ -286,9 +303,7 @@ mod tests {
         let original_tmp_dir = TempDir::new("example").unwrap();
         let original_state = UpdaterState {
             cache_dir: original_tmp_dir.path().to_path_buf(),
-            patch_manager: Box::new(PatchManager::with_root_dir(
-                original_tmp_dir.path().to_path_buf(),
-            )),
+            patch_manager: Box::new(PatchManager::manager_for_test(&original_tmp_dir)),
             serialized_state: SerializedState {
                 release_version: "1.0.0+1".to_string(),
                 queued_events: Vec::new(),
@@ -301,7 +316,7 @@ mod tests {
         let new_state_path = new_tmp_dir.path().join(STATE_FILE_NAME);
         std::fs::rename(original_state_path, new_state_path).unwrap();
 
-        let new_state = UpdaterState::load(new_tmp_dir.path()).unwrap();
+        let new_state = UpdaterState::load(new_tmp_dir.path(), None).unwrap();
         assert_eq!(new_state.cache_dir, new_tmp_dir.path());
     }
 
