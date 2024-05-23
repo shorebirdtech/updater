@@ -122,7 +122,7 @@ mod tests {
         let result = super::check_signature(MESSAGE, PUBLIC_KEY, PUBLIC_KEY);
         assert!(result.is_err());
         let error = result.unwrap_err().to_string();
-        assert!(error.starts_with("Signature is invalid"));
+        assert!(error.starts_with("Patch signature is invalid"));
     }
 
     #[test]
