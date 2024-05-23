@@ -16,7 +16,7 @@ use crate::events::PatchEvent;
 #[cfg(test)]
 use std::{println as info, println as debug}; // Workaround to use println! for logs.
 
-fn patches_check_url(base_url: &str) -> String {
+pub fn patches_check_url(base_url: &str) -> String {
     format!("{base_url}/api/v1/patches/check")
 }
 
@@ -146,6 +146,9 @@ pub struct Patch {
     pub hash: String,
     /// The URL to download the patch file from.
     pub download_url: String,
+    /// The signature of `hash`, if this patch is signed. None otherwise.
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// Any edits to this struct should be made carefully and in accordance

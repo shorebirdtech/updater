@@ -87,6 +87,7 @@ pub struct UpdateConfig {
     pub base_url: String,
     pub network_hooks: NetworkHooks,
     pub file_provider: Box<dyn ExternalFileProvider>,
+    pub patch_public_key: Option<String>,
 }
 
 pub fn set_config(
@@ -128,6 +129,7 @@ pub fn set_config(
                 .to_owned(),
             network_hooks,
             file_provider,
+            patch_public_key: yaml.patch_public_key.to_owned(),
         };
         debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
@@ -190,7 +192,49 @@ mod tests {
             channel: Some("fake_channel".to_string()),
             auto_update: Some(true),
             base_url: Some("fake_base_url".to_string()),
+            patch_public_key: None,
         }
+    }
+
+    // These tests are serial because they modify global state.
+    #[serial]
+    #[test]
+    fn set_config_correctly_sets_values() {
+        testing_reset_config();
+
+        set_config(
+            AppConfig {
+                app_storage_dir: "/app_storage".to_string(),
+                code_cache_dir: "/code_cache".to_string(),
+                release_version: "1.0.0".to_string(),
+                original_libapp_paths: vec!["libapp.so".to_string()],
+            },
+            Box::new(FakeExternalFileProvider {}),
+            "first_path".into(),
+            &crate::yaml::YamlConfig {
+                app_id: "fake_app_id".to_string(),
+                channel: Some("fake_channel".to_string()),
+                auto_update: Some(true),
+                base_url: Some("fake_base_url".to_string()),
+                patch_public_key: Some("patch_public_key".to_string()),
+            },
+            NetworkHooks::default(),
+        );
+
+        let config = super::with_config(|config| Ok(config.clone())).unwrap();
+        assert_eq!(config.storage_dir.to_str(), Some("/app_storage"));
+        assert_eq!(config.download_dir.to_str(), Some("/code_cache/downloads"));
+        assert!(config.auto_update);
+        assert_eq!(config.channel, "fake_channel");
+        assert_eq!(config.app_id, "fake_app_id");
+        assert_eq!(config.release_version, "1.0.0");
+        assert_eq!(config.libapp_path.to_str(), Some("first_path"));
+        assert_eq!(config.base_url, "fake_base_url");
+        // We should also validate network hooks here
+        assert_eq!(
+            config.patch_public_key,
+            Some("patch_public_key".to_string())
+        );
     }
 
     // These tests are serial because they modify global state.

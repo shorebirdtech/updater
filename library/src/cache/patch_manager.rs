@@ -17,13 +17,20 @@ const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
 const PATCH_ARTIFACT_FILENAME: &str = "dlc.vmcode";
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+/// Information about a patch that is persisted to disk.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 struct PatchMetadata {
     /// The number of the patch.
     number: usize,
 
     /// The size of the patch artifact on disk.
     size: u64,
+
+    /// The hash of the patch artifact on disk.
+    hash: String,
+
+    /// The signature of `hash`.
+    signature: Option<String>,
 }
 
 /// What gets serialized to disk
@@ -49,7 +56,17 @@ struct PatchesState {
 pub trait ManagePatches {
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
-    fn add_patch(&mut self, number: usize, file_path: &Path) -> Result<()>;
+    ///
+    /// The explicit lifetime is required for automock to work with Options.
+    /// See https://github.com/asomers/mockall/issues/61.
+    #[allow(clippy::needless_lifetimes)]
+    fn add_patch<'a>(
+        &mut self,
+        number: usize,
+        file_path: &Path,
+        hash: &str,
+        signature: Option<&'a str>,
+    ) -> Result<()>;
 
     /// Returns the patch we most recently successfully booted from (usually the currently running patch),
     /// or None if no patch is installed.
@@ -220,6 +237,7 @@ impl PatchManager {
     fn is_patch_last_attempted_patch(&self, patch_number: usize) -> bool {
         self.patches_state
             .last_attempted_patch
+            .as_ref()
             .map(|patch| patch.number == patch_number)
             .unwrap_or(false)
     }
@@ -228,6 +246,7 @@ impl PatchManager {
     fn last_successful_boot_patch_number(&self) -> Option<usize> {
         self.patches_state
             .last_booted_patch
+            .as_ref()
             .map(|patch| patch.number)
     }
 
@@ -251,7 +270,7 @@ impl PatchManager {
         // No need to log failure – delete_patch_artifacts logs for us.
         let _ = self.delete_patch_artifacts(bad_patch_number);
 
-        if let Some(next_boot_patch) = self.patches_state.next_boot_patch {
+        if let Some(ref next_boot_patch) = self.patches_state.next_boot_patch {
             // If our next boot patch is bad_patch_number, clear it.
             if next_boot_patch.number == bad_patch_number {
                 self.patches_state.next_boot_patch = None;
@@ -260,7 +279,7 @@ impl PatchManager {
 
         // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
         // If something happened to render the last boot patch unbootable, clear it and delete its artifacts.
-        if let Some(last_boot_patch) = self.patches_state.last_booted_patch {
+        if let Some(last_boot_patch) = self.patches_state.last_booted_patch.clone() {
             if last_boot_patch.number != bad_patch_number
                 && self.validate_patch_is_bootable(&last_boot_patch).is_ok()
             {
@@ -308,7 +327,16 @@ impl PatchManager {
 }
 
 impl ManagePatches for PatchManager {
-    fn add_patch(&mut self, patch_number: usize, file_path: &Path) -> Result<()> {
+    // The explicit lifetime is required for automock to work with Options.
+    // See https://github.com/asomers/mockall/issues/61.
+    #[allow(clippy::needless_lifetimes)]
+    fn add_patch<'a>(
+        &mut self,
+        patch_number: usize,
+        file_path: &Path,
+        hash: &str,
+        signature: Option<&'a str>,
+    ) -> Result<()> {
         if !file_path.exists() {
             bail!("Patch file {} does not exist", file_path.display());
         }
@@ -323,13 +351,15 @@ impl ManagePatches for PatchManager {
         let new_patch = PatchMetadata {
             number: patch_number,
             size: std::fs::metadata(&patch_path)?.len(),
+            hash: hash.to_owned(),
+            signature: signature.map(|s| s.to_owned()),
         };
 
         // If a patch was never booted (next_boot_patch != last_booted_patch), we should delete
         // it here before setting next_boot_patch to the new patch.
         if let (Some(last_boot_patch), Some(next_boot_patch)) = (
-            self.patches_state.next_boot_patch,
-            self.patches_state.last_booted_patch,
+            self.patches_state.next_boot_patch.clone(),
+            self.patches_state.last_booted_patch.clone(),
         ) {
             if last_boot_patch.number != next_boot_patch.number {
                 let _ = self.delete_patch_artifacts(next_boot_patch.number);
@@ -348,17 +378,19 @@ impl ManagePatches for PatchManager {
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo> {
         self.patches_state
             .last_booted_patch
+            .as_ref()
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
     fn last_attempted_boot_patch(&self) -> Option<PatchInfo> {
         self.patches_state
             .last_attempted_patch
+            .as_ref()
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
     fn next_boot_patch(&mut self) -> Option<PatchInfo> {
-        let next_boot_patch = match self.patches_state.next_boot_patch {
+        let next_boot_patch = match self.patches_state.next_boot_patch.clone() {
             Some(patch) => patch,
             None => return None,
         };
@@ -383,6 +415,7 @@ impl ManagePatches for PatchManager {
         let next_boot_patch = self
             .patches_state
             .next_boot_patch
+            .clone()
             .context("No next_boot_patch")?;
 
         if next_boot_patch.number != patch_number {
@@ -401,9 +434,10 @@ impl ManagePatches for PatchManager {
         let boot_patch = self
             .patches_state
             .last_attempted_patch
+            .clone()
             .context("No last_attempted_patch")?;
 
-        self.patches_state.last_booted_patch = Some(boot_patch);
+        self.patches_state.last_booted_patch = Some(boot_patch.clone());
         if let Err(e) = self.delete_patch_artifacts_older_than(boot_patch.number) {
             error!(
                 "Failed to delete patch artifacts older than {}: {}",
@@ -445,7 +479,7 @@ impl PatchManager {
             .path()
             .join(format!("patch{}.vmcode", patch_number));
         std::fs::write(file_path, patch_number.to_string().repeat(patch_number)).unwrap();
-        self.add_patch(patch_number, file_path)
+        self.add_patch(patch_number, file_path, "hash", None)
     }
 }
 
@@ -486,7 +520,12 @@ mod add_patch_tests {
     fn errs_if_file_path_does_not_exist() {
         let mut manager = PatchManager::manager_for_test(&TempDir::new("patch_manager").unwrap());
         assert!(manager
-            .add_patch(1, Path::new("/path/to/file/that/does/not/exist"))
+            .add_patch(
+                1,
+                Path::new("/path/to/file/that/does/not/exist"),
+                "hash",
+                None,
+            )
             .is_err());
     }
 
@@ -501,14 +540,21 @@ mod add_patch_tests {
         std::fs::write(file_path, patch_file_contents).unwrap();
 
         assert!(manager
-            .add_patch(patch_number, Path::new(file_path))
+            .add_patch(
+                patch_number,
+                Path::new(file_path),
+                "hash",
+                Some("my_signature")
+            )
             .is_ok());
 
         assert_eq!(
             manager.patches_state.next_boot_patch,
             Some(PatchMetadata {
                 number: patch_number,
-                size: patch_file_contents.len() as u64
+                size: patch_file_contents.len() as u64,
+                hash: "hash".to_string(),
+                signature: Some("my_signature".to_owned())
             })
         );
         assert!(!file_path.exists());
@@ -526,19 +572,19 @@ mod add_patch_tests {
         // Add patch 1
         let file_path = &temp_dir.path().join("patch.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(1, file_path).is_ok());
+        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
         assert_eq!(manager.highest_seen_patch_number(), Some(1));
 
         // Add patch 4, expect 4 to be the highest patch number we've seen
         let file_path = &temp_dir.path().join("patch.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(4, file_path).is_ok());
+        assert!(manager.add_patch(4, file_path, "hash", None).is_ok());
         assert_eq!(manager.highest_seen_patch_number(), Some(4));
 
         // Add patch 3, expect 4 to still be the highest patch number we've seen
         let file_path = &temp_dir.path().join("patch.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(3, file_path).is_ok());
+        assert!(manager.add_patch(3, file_path, "hash", None).is_ok());
         assert_eq!(manager.highest_seen_patch_number(), Some(4));
 
         Ok(())
@@ -570,7 +616,7 @@ mod last_successfully_booted_patch_tests {
             path: manager.patch_artifact_path(1),
             number: 1,
         };
-        manager.patches_state.last_booted_patch = manager.patches_state.next_boot_patch;
+        manager.patches_state.last_booted_patch = manager.patches_state.next_boot_patch.clone();
         assert_eq!(manager.last_successfully_booted_patch(), Some(expected));
 
         Ok(())
@@ -619,7 +665,7 @@ mod next_boot_patch_tests {
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(1, file_path).is_ok());
+        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
 
         // Write junk to the artifact, this should render the patch unbootable in the eyes
         // of the PatchManager.
@@ -647,14 +693,14 @@ mod next_boot_patch_tests {
         std::fs::write(file_path, patch_file_contents)?;
 
         // Add patch 1, pretend it booted successfully.
-        assert!(manager.add_patch(1, file_path).is_ok());
+        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
 
         // Add patch 2, pretend it failed to boot.
         let file_path = &temp_dir.path().join("patch2.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(2, file_path).is_ok());
+        assert!(manager.add_patch(2, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(2).is_ok());
         assert!(manager.record_boot_failure_for_patch(2).is_ok());
 
@@ -673,14 +719,14 @@ mod next_boot_patch_tests {
         std::fs::write(file_path, patch_file_contents)?;
 
         // Add patch 1, pretend it booted successfully.
-        assert!(manager.add_patch(1, file_path).is_ok());
+        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
 
         // Add patch 2, pretend it failed to boot.
         let file_path = &temp_dir.path().join("patch2.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(2, file_path).is_ok());
+        assert!(manager.add_patch(2, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(2).is_ok());
         assert!(manager.record_boot_failure_for_patch(2).is_ok());
 
@@ -793,7 +839,12 @@ mod fall_back_tests {
 
         assert!(manager.patches_state.next_boot_patch.is_none());
 
-        manager.patches_state.last_booted_patch = Some(PatchMetadata { number: 1, size: 1 });
+        manager.patches_state.last_booted_patch = Some(PatchMetadata {
+            number: 1,
+            size: 1,
+            hash: "hash".to_string(),
+            signature: Some("signature".to_owned()),
+        });
         manager.try_fall_back_from_patch(1);
 
         assert_eq!(
@@ -926,7 +977,9 @@ mod record_boot_success_for_patch_tests {
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(patch_number, file_path).is_ok());
+        assert!(manager
+            .add_patch(patch_number, file_path, "hash", None)
+            .is_ok());
         assert!(manager.record_boot_success().is_err());
 
         Ok(())
@@ -940,7 +993,9 @@ mod record_boot_success_for_patch_tests {
         let mut manager = PatchManager::with_root_dir(temp_dir.path().to_owned());
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(patch_number, file_path).is_ok());
+        assert!(manager
+            .add_patch(patch_number, file_path, "hash", None)
+            .is_ok());
 
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
@@ -958,7 +1013,9 @@ mod record_boot_success_for_patch_tests {
         std::fs::write(file_path, patch_file_contents)?;
 
         // Add the patch, make sure it has an artifact.
-        assert!(manager.add_patch(patch_number, file_path).is_ok());
+        assert!(manager
+            .add_patch(patch_number, file_path, "hash", None)
+            .is_ok());
         let patch_artifact_path = manager.patch_artifact_path(patch_number);
         assert!(patch_artifact_path.exists());
 
