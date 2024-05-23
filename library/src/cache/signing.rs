@@ -17,7 +17,13 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
     Ok(hex::encode(hash))
 }
 
-/// `public_key` is a base64-encoded RSA public key.
+/// `public_key` is a DER base64-encoded RSA public key.
+///   openssl rsa -pubin \
+///     -in public_key.pem \
+///     -inform PEM \
+///     -RSAPublicKey_out \
+///     -outform DER \
+///     -out public_key.der
 pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Result<()> {
     // public.pem
     let public_key_bytes = base64::prelude::BASE64_STANDARD
