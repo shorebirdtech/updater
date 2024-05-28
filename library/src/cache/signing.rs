@@ -3,7 +3,7 @@ use base64::Engine;
 use std::path::Path;
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as debug}; // Workaround to use println! for logs.
+use std::{println as info, println as debug, println as error}; // Workaround to use println! for logs.
 
 /// Reads the file at `path` and returns the SHA-256 hash of its contents as a String.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
@@ -53,6 +53,7 @@ pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Resu
         Err(_) => {
             // The error provided by `verify` is (by design) not helpful, so we ignore it.
             // See https://docs.rs/ring/latest/ring/error/struct.Unspecified.html
+            error!("Patch signature is invalid");
             bail!("Patch signature is invalid")
         }
     }
