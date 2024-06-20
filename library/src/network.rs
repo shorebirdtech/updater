@@ -295,13 +295,13 @@ mod tests {
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
             identifier: EventType::PatchInstallSuccess,
-            timestamp: time::unix_timestamp(),
+            timestamp: 1234,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
-            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version"}}"#
+            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234}}"#
         )
     }
 
