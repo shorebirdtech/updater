@@ -11,6 +11,7 @@ mod config;
 mod events;
 mod logging;
 mod network;
+mod time;
 mod updater;
 mod updater_lock;
 mod yaml;

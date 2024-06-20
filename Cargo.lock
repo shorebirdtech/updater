@@ -879,6 +879,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock_instant"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdcebb6db83796481097dedc7747809243cc81d9ed83e6a938b76d4ea0b249cf"
+
+[[package]]
 name = "mockall"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1772,6 +1778,7 @@ dependencies = [
  "libc",
  "log",
  "log-panics",
+ "mock_instant",
  "mockall",
  "mockito",
  "once_cell",
