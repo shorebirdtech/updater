@@ -258,7 +258,7 @@ pub fn download_to_path(
 
 #[cfg(test)]
 mod tests {
-    use crate::network::PatchCheckResponse;
+    use crate::{network::PatchCheckResponse, time};
 
     use super::{patches_events_url, PatchEvent};
     use crate::events::EventType;
@@ -295,6 +295,7 @@ mod tests {
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
             identifier: EventType::PatchInstallSuccess,
+            timestamp: time::unix_timestamp(),
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -375,6 +376,7 @@ mod tests {
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
             identifier: EventType::PatchInstallSuccess,
+            timestamp: time::unix_timestamp(),
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -402,6 +404,7 @@ mod tests {
                     platform: "platform".to_string(),
                     release_version: "release_version".to_string(),
                     identifier: EventType::PatchInstallSuccess,
+                    timestamp: time::unix_timestamp(),
                 },
             },
         );

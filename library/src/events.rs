@@ -58,4 +58,7 @@ pub struct PatchEvent {
 
     /// The release version from AndroidManifest.xml, Info.plist in the app.
     pub release_version: String,
+
+    /// When this event occurred as a Unix epoch timestamp in seconds.
+    pub timestamp: u64,
 }

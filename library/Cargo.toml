@@ -67,6 +67,7 @@ oslog = "0.2.0"
 [dev-dependencies]
 mockall = "0.12.1"
 mockito = "1.2.0"
+mock_instant = "0.5.1"
 # Gives #[serial] attribute for locking all of our shorebird_init
 # tests to a single thread so they don't conflict with each other.
 serial_test = "2.0.0"

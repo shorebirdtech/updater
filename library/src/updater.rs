@@ -17,6 +17,7 @@ use crate::network::{
     download_to_path, patches_check_url, send_patch_check_request, NetworkHooks, PatchCheckRequest,
     PatchCheckResponse,
 };
+use crate::time;
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -477,6 +478,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             patch_number: patch.number,
             platform: current_platform().to_string(),
             release_version: config.release_version.clone(),
+            timestamp: time::unix_timestamp(),
         };
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
@@ -524,6 +526,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                 platform: current_platform().to_string(),
                 release_version: config_copy.release_version.clone(),
                 identifier: EventType::PatchInstallSuccess,
+                timestamp: time::unix_timestamp(),
             };
             let report_result = crate::network::send_patch_event(event, &config_copy);
             if let Err(err) = report_result {
@@ -561,7 +564,7 @@ mod tests {
     use crate::{
         config::{testing_reset_config, with_config},
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
-        ExternalFileProvider,
+        time, ExternalFileProvider,
     };
 
     #[derive(Debug, Clone)]
@@ -867,6 +870,7 @@ mod tests {
                 patch_number: 1,
                 platform: current_platform().to_string(),
                 release_version: config.release_version.clone(),
+                timestamp: time::unix_timestamp(),
             };
             // Queue 5 events.
             assert!(state.queue_event(fail_event.clone()).is_ok());
