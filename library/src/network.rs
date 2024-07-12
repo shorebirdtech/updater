@@ -67,6 +67,7 @@ pub fn patch_check_request_default(
     let client = reqwest::blocking::Client::new();
     let result = client.post(url).json(&request).send();
     let response = handle_network_result(result)?.json()?;
+    debug!("Patch check response: {:?}", response);
     Ok(response)
 }
 
