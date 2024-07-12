@@ -1249,12 +1249,10 @@ mod record_boot_failure_for_patch_tests {
 
         assert!(manager.patches_state.known_bad_patches.is_empty());
         manager.record_boot_failure_for_patch(1)?;
-        let bad_patches_vec: Vec<usize> = manager
-            .patches_state
-            .known_bad_patches
-            .into_iter()
-            .collect();
-        assert_eq!(bad_patches_vec, vec![1]);
+        assert_eq!(
+            manager.patches_state.known_bad_patches,
+            HashSet::from_iter(vec![1])
+        );
 
         Ok(())
     }
