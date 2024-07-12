@@ -2,7 +2,10 @@ use super::{disk_io, signing, PatchInfo};
 use anyhow::{bail, Context, Result};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 #[cfg(test)]
 use mockall::automock;
@@ -49,7 +52,7 @@ struct PatchesState {
     /// A list of patch numbers that we have tried and failed to install.
     /// We should never attempt to download or install these again for the
     /// current release.
-    known_bad_patches: Vec<usize>,
+    known_bad_patches: HashSet<usize>,
 }
 
 /// Abstracts the process of managing patches.
@@ -462,7 +465,7 @@ impl ManagePatches for PatchManager {
     }
 
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
-        self.patches_state.known_bad_patches.push(patch_number);
+        self.patches_state.known_bad_patches.insert(patch_number);
         self.try_fall_back_from_patch(patch_number);
         self.save_patches_state()
     }
@@ -534,7 +537,7 @@ mod debug_tests {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
         let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, known_bad_patches: [] }}, patch_public_key: Some(\"public_key\") }}",
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, known_bad_patches: {{}} }}, patch_public_key: Some(\"public_key\") }}",
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
@@ -1246,7 +1249,12 @@ mod record_boot_failure_for_patch_tests {
 
         assert!(manager.patches_state.known_bad_patches.is_empty());
         manager.record_boot_failure_for_patch(1)?;
-        assert_eq!(manager.patches_state.known_bad_patches, vec![1]);
+        let bad_patches_vec: Vec<usize> = manager
+            .patches_state
+            .known_bad_patches
+            .into_iter()
+            .collect();
+        assert_eq!(bad_patches_vec, vec![1]);
 
         Ok(())
     }
