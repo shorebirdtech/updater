@@ -154,14 +154,11 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 }
 
 fn patch_check_request(config: &UpdateConfig, state: &mut UpdaterState) -> PatchCheckRequest {
-    let latest_patch_number = state.next_boot_patch().map(|p| p.number);
-
-    // Send the request to the server.
     PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
         release_version: config.release_version.clone(),
-        patch_number: latest_patch_number,
+        patch_number: state.next_boot_patch().map(|p| p.number),
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     }
