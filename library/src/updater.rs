@@ -30,10 +30,12 @@ pub use crate::config::testing_reset_config;
 #[cfg(test)]
 pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequestFn};
 
+#[derive(Debug, PartialEq)]
 pub enum UpdateStatus {
     NoUpdate,
     UpdateInstalled,
     UpdateHadError,
+    UpdateIsBadPatch,
 }
 
 impl Display for UpdateStatus {
@@ -42,6 +44,12 @@ impl Display for UpdateStatus {
             UpdateStatus::NoUpdate => write!(f, "No update"),
             UpdateStatus::UpdateInstalled => write!(f, "Update installed"),
             UpdateStatus::UpdateHadError => write!(f, "Update had error"),
+            UpdateStatus::UpdateIsBadPatch => {
+                write!(
+                    f,
+                    "Update available but previously failed to install. Not installing."
+                )
+            }
         }
     }
 }
@@ -145,8 +153,8 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
-fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchCheckRequest {
-    let latest_patch_number = state.latest_seen_patch_number();
+fn patch_check_request(config: &UpdateConfig, state: &mut UpdaterState) -> PatchCheckRequest {
+    let latest_patch_number = state.next_boot_patch().map(|p| p.number);
 
     // Send the request to the server.
     PatchCheckRequest {
@@ -163,7 +171,7 @@ fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     let (request, url, request_fn) = with_config(|config| {
         // Load UpdaterState from disk
         // If there is no state, make an empty state.
-        let state = UpdaterState::load_or_new_on_error(
+        let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
@@ -171,7 +179,7 @@ fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
 
         // Get the required info to make the request.
         Ok((
-            patch_check_request(config, &state),
+            patch_check_request(config, &mut state),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -277,7 +285,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         }
     }
     // We're abusing the config lock as a UpdateState lock for now.
-    let read_only_state = with_config(|_| {
+    let mut state = with_config(|_| {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.release_version,
@@ -294,7 +302,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     })?;
 
     // Check for update.
-    let request = patch_check_request(&config, &read_only_state);
+    let request = patch_check_request(&config, &mut state);
     let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
     if !response.patch_available {
@@ -302,6 +310,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     }
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
+
+    if state.is_known_bad_patch(patch.number) {
+        info!("Skipping known bad patch: {}", patch.number);
+        return Ok(UpdateStatus::UpdateIsBadPatch);
+    }
 
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
@@ -563,6 +576,7 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
+        cache::UpdaterState,
         config::{testing_reset_config, with_config},
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
         time, ExternalFileProvider,
@@ -819,6 +833,8 @@ mod tests {
                 config.patch_public_key.as_deref(),
             );
             // It's now bad.
+            assert!(state.is_known_bad_patch(1));
+            // We will not attempt to boot from it again.
             assert!(state.next_boot_patch().is_none());
             // And we've queued an event.
             let events = state.copy_events(1);
@@ -830,6 +846,52 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn does_not_download_known_bad_patch() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(crate::network::Patch {
+                number: 1,
+                download_url: "download_url".to_string(),
+                hash: "hash".to_string(),
+                hash_signature: None,
+            }),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let mut updater_state = with_config(|config| {
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
+
+            state.record_boot_failure_for_patch(1)?;
+
+            Ok(state)
+        })?;
+
+        // Make sure we're starting with no next boot patch.
+        assert!(updater_state.next_boot_patch().is_none());
+
+        let result = super::update()?;
+
+        // Ensure that we've skipped the known bad patch.
+        assert_eq!(result, crate::UpdateStatus::UpdateIsBadPatch);
+        assert!(updater_state.next_boot_patch().is_none());
+
+        Ok(())
     }
 
     #[serial]

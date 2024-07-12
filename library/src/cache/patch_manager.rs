@@ -46,9 +46,10 @@ struct PatchesState {
     /// as the last booted patch patch if no new patch has been downloaded.
     next_boot_patch: Option<PatchMetadata>,
 
-    /// The highest patch number we have seen. This may be higher than the last booted
-    /// patch or next patch if we downloaded a patch that failed to boot.
-    highest_seen_patch_number: Option<usize>,
+    /// A list of patch numbers that we have tried and failed to install.
+    /// We should never attempt to download or install these again for the
+    /// current release.
+    known_bad_patches: Vec<usize>,
 }
 
 /// Abstracts the process of managing patches.
@@ -93,9 +94,8 @@ pub trait ManagePatches {
     /// that it will never be returned as the next boot or last booted patch.
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()>;
 
-    /// The highest patch number that has been added. This may be higher than the
-    /// last booted or next boot patch if we downloaded a patch that failed to boot.
-    fn highest_seen_patch_number(&self) -> Option<usize>;
+    /// Whether we have failed to boot from the patch with `patch_number`.
+    fn is_known_bad_patch(&self, patch_number: usize) -> bool;
 
     /// Resets the patch manager to its initial state, removing all patches. This is
     /// intended to be used when a new release version is installed.
@@ -386,11 +386,6 @@ impl ManagePatches for PatchManager {
         }
 
         self.patches_state.next_boot_patch = Some(new_patch);
-        self.patches_state.highest_seen_patch_number = self
-            .patches_state
-            .highest_seen_patch_number
-            .map(|highest_patch_number: usize| highest_patch_number.max(patch_number))
-            .or(Some(patch_number));
         self.save_patches_state()
     }
 
@@ -467,12 +462,13 @@ impl ManagePatches for PatchManager {
     }
 
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.patches_state.known_bad_patches.push(patch_number);
         self.try_fall_back_from_patch(patch_number);
         self.save_patches_state()
     }
 
-    fn highest_seen_patch_number(&self) -> Option<usize> {
-        self.patches_state.highest_seen_patch_number
+    fn is_known_bad_patch(&self, patch_number: usize) -> bool {
+        self.patches_state.known_bad_patches.contains(&patch_number)
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -538,7 +534,7 @@ mod debug_tests {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
         let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, known_bad_patches: [] }}, patch_public_key: Some(\"public_key\") }}",
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
@@ -593,36 +589,6 @@ mod add_patch_tests {
             })
         );
         assert!(!file_path.exists());
-        assert_eq!(manager.highest_seen_patch_number(), Some(patch_number));
-    }
-
-    #[test]
-    fn does_not_set_higher_highest_seen_patch_number_if_added_patch_is_lower() -> Result<()> {
-        let patch_file_contents = "patch contents";
-
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-        assert!(manager.highest_seen_patch_number().is_none());
-
-        // Add patch 1
-        let file_path = &temp_dir.path().join("patch.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
-        assert_eq!(manager.highest_seen_patch_number(), Some(1));
-
-        // Add patch 4, expect 4 to be the highest patch number we've seen
-        let file_path = &temp_dir.path().join("patch.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(4, file_path, "hash", None).is_ok());
-        assert_eq!(manager.highest_seen_patch_number(), Some(4));
-
-        // Add patch 3, expect 4 to still be the highest patch number we've seen
-        let file_path = &temp_dir.path().join("patch.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(3, file_path, "hash", None).is_ok());
-        assert_eq!(manager.highest_seen_patch_number(), Some(4));
-
-        Ok(())
     }
 }
 
@@ -1272,24 +1238,15 @@ mod record_boot_failure_for_patch_tests {
 
         Ok(())
     }
-}
-
-#[cfg(test)]
-mod highest_seen_patch_number_tests {
-    use super::*;
-    use anyhow::{Ok, Result};
-    use tempdir::TempDir;
 
     #[test]
-    fn returns_value_from_internal_state() -> Result<()> {
+    fn adds_patch_number_to_known_bad_patches() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
-        assert!(manager.patches_state.highest_seen_patch_number.is_none());
-        assert!(manager.highest_seen_patch_number().is_none());
-
-        manager.patches_state.highest_seen_patch_number = Some(1);
-        assert_eq!(manager.highest_seen_patch_number(), Some(1));
+        assert!(manager.patches_state.known_bad_patches.is_empty());
+        manager.record_boot_failure_for_patch(1)?;
+        assert_eq!(manager.patches_state.known_bad_patches, vec![1]);
 
         Ok(())
     }
