@@ -8,8 +8,7 @@ use std::io::Write;
 use std::path::Path;
 use std::string::ToString;
 
-use crate::cache::UpdaterState;
-use crate::config::{current_arch, current_platform, UpdateConfig};
+use crate::config::UpdateConfig;
 use crate::events::PatchEvent;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
@@ -64,6 +63,7 @@ pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
+    info!("Sending patch check request: {:?}", request);
     let client = reqwest::blocking::Client::new();
     let result = client.post(url).json(&request).send();
     let response = handle_network_result(result)?.json()?;
@@ -196,34 +196,6 @@ pub struct PatchCheckResponse {
     pub patch_available: bool,
     #[serde(default)]
     pub patch: Option<Patch>,
-}
-
-pub fn send_patch_check_request(
-    config: &UpdateConfig,
-    state: &UpdaterState,
-) -> anyhow::Result<PatchCheckResponse> {
-    let latest_patch_number = state.latest_seen_patch_number();
-
-    // Send the request to the server.
-    let request = PatchCheckRequest {
-        app_id: config.app_id.clone(),
-        channel: config.channel.clone(),
-        release_version: config.release_version.clone(),
-        patch_number: latest_patch_number,
-        platform: current_platform().to_string(),
-        arch: current_arch().to_string(),
-    };
-    // Dumping the request should be info! since we direct users to look for it
-    // in the logs: https://docs.shorebird.dev/troubleshooting#how-to-fix-it-1
-    // Another option would be to make verbosity configurable via a key
-    // in shorebird.yaml.
-    info!("Sending patch check request: {:?}", request);
-    let url = &patches_check_url(&config.base_url);
-    let patch_check_request_fn = config.network_hooks.patch_check_request_fn;
-    let response = patch_check_request_fn(url, request)?;
-
-    debug!("Patch check response: {:?}", response);
-    Ok(response)
 }
 
 pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {

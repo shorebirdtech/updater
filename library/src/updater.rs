@@ -14,8 +14,7 @@ use crate::config::{current_arch, current_platform, set_config, with_config, Upd
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
-    download_to_path, patches_check_url, send_patch_check_request, NetworkHooks, PatchCheckRequest,
-    PatchCheckResponse,
+    download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest, PatchCheckResponse,
 };
 use crate::time;
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
@@ -295,7 +294,9 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     })?;
 
     // Check for update.
-    let response = send_patch_check_request(&config, &read_only_state)?;
+    let request = patch_check_request(&config, &read_only_state);
+    let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
+    let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
     if !response.patch_available {
         return Ok(UpdateStatus::NoUpdate);
     }
