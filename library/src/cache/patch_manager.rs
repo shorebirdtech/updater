@@ -582,6 +582,42 @@ mod debug_tests {
 }
 
 #[cfg(test)]
+mod on_init_tests {
+    use super::*;
+
+    #[test]
+    fn clears_currently_booting_patch() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a patch and start to boot from it.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+
+        assert_eq!(
+            manager
+                .patches_state
+                .currently_booting_patch
+                .as_ref()
+                .map(|p| p.number),
+            Some(1)
+        );
+        assert_eq!(
+            manager.next_boot_patch().as_ref().map(|p| p.number),
+            Some(1)
+        );
+
+        // Simulate a restart.
+        manager.on_init()?;
+
+        // Verify that we are no longer booting from patch 1.
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod add_patch_tests {
     use super::*;
     use std::path::Path;
