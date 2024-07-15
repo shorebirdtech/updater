@@ -139,21 +139,21 @@ pub fn init(
         NetworkHooks::default(),
     );
 
-    match set_config_result {
-        Err(err) => {
-            warn!("{}", err);
-        }
-        Ok(()) => {
-            let _ = with_config(|config| {
-                UpdaterState::load_or_new_on_error(
-                    &config.storage_dir,
-                    &config.release_version,
-                    config.patch_public_key.as_deref(),
-                )
-                .on_init()
-            });
-        }
+    // set_config will return an error if the config is already initialized. This should not cause
+    // init to fail.
+    if let Err(err) = set_config_result {
+        warn!("{}", err);
+        return Ok(());
     }
+
+    let _ = with_config(|config| {
+        UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        )
+        .on_init()
+    });
 
     Ok(())
 }
