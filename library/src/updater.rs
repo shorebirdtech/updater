@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 use anyhow::Context;
 use dyn_clone::DynClone;
+use log::warn;
 
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
@@ -130,7 +131,7 @@ pub fn init(
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     debug!("libapp_path: {:?}", libapp_path);
-    set_config(
+    let set_config_result = set_config(
         app_config,
         file_provider,
         libapp_path,
@@ -138,14 +139,21 @@ pub fn init(
         NetworkHooks::default(),
     );
 
-    let _ = with_config(|config| {
-        UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        )
-        .on_init()
-    });
+    match set_config_result {
+        Err(err) => {
+            warn!("{}", err);
+        }
+        Ok(()) => {
+            let _ = with_config(|config| {
+                UpdaterState::load_or_new_on_error(
+                    &config.storage_dir,
+                    &config.release_version,
+                    config.patch_public_key.as_deref(),
+                )
+                .on_init()
+            });
+        }
+    }
 
     Ok(())
 }

@@ -6,12 +6,13 @@ use crate::yaml::YamlConfig;
 use crate::{ExternalFileProvider, UpdateError};
 use std::path::PathBuf;
 
+use anyhow::{bail, Result};
 use once_cell::sync::OnceCell;
 use std::sync::Mutex;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as warn, println as debug}; // Workaround to use println! for logs.
+use std::println as debug; // Workaround to use println! for logs.
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -90,20 +91,20 @@ pub struct UpdateConfig {
     pub patch_public_key: Option<String>,
 }
 
+/// Returns Ok if the config was set successfully, Err if it was already set.
 pub fn set_config(
     app_config: AppConfig,
     file_provider: Box<dyn ExternalFileProvider>,
     libapp_path: PathBuf,
     yaml: &YamlConfig,
     network_hooks: NetworkHooks,
-) {
+) -> Result<()> {
     with_config_mut(|config: &mut Option<UpdateConfig>| {
         if config.is_some() {
             // This previously returned an error, but this happens regularly
             // with apps that use Firebase Messaging, and logging it as an error
             // has caused confusion.
-            warn!("Updater already initialized, ignoring second shorebird_init call.");
-            return;
+            bail!("Updater already initialized, ignoring second shorebird_init call.");
         }
 
         let mut code_cache_path = std::path::PathBuf::from(&app_config.code_cache_dir);
@@ -133,7 +134,9 @@ pub fn set_config(
         };
         debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
-    });
+
+        Ok(())
+    })
 }
 
 // Arch/Platform names need to be kept in sync with the shorebird cli.
@@ -167,6 +170,7 @@ pub fn current_platform() -> &'static str {
 mod tests {
     use super::set_config;
     use crate::{network::NetworkHooks, testing_reset_config, AppConfig, ExternalFileProvider};
+    use anyhow::Result;
     use serial_test::serial;
 
     #[derive(Debug, Clone)]
@@ -199,7 +203,7 @@ mod tests {
     // These tests are serial because they modify global state.
     #[serial]
     #[test]
-    fn set_config_correctly_sets_values() {
+    fn set_config_correctly_sets_values() -> Result<()> {
         testing_reset_config();
 
         set_config(
@@ -219,7 +223,7 @@ mod tests {
                 patch_public_key: Some("patch_public_key".to_string()),
             },
             NetworkHooks::default(),
-        );
+        )?;
 
         let config = super::with_config(|config| Ok(config.clone())).unwrap();
         assert_eq!(config.storage_dir.to_str(), Some("/app_storage"));
@@ -235,30 +239,37 @@ mod tests {
             config.patch_public_key,
             Some("patch_public_key".to_string())
         );
+
+        Ok(())
     }
 
     // These tests are serial because they modify global state.
     #[serial]
     #[test]
-    fn set_config_is_noop_on_subsequent_calls() {
+    fn set_config_returns_err_on_subsequent_calls() -> Result<()> {
         testing_reset_config();
 
-        set_config(
+        assert!(set_config(
             fake_app_config(),
             Box::new(FakeExternalFileProvider {}),
             "first_path".into(),
             &fake_yaml(),
             NetworkHooks::default(),
-        );
-        set_config(
+        )
+        .is_ok());
+
+        assert!(set_config(
             fake_app_config(),
             Box::new(FakeExternalFileProvider {}),
             "second_path".into(),
             &fake_yaml(),
             NetworkHooks::default(),
-        );
+        )
+        .is_err());
 
         let config = super::with_config(|config| Ok(config.clone())).unwrap();
         assert_eq!(config.libapp_path.to_str(), Some("first_path"));
+
+        Ok(())
     }
 }
