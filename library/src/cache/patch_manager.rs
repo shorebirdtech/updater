@@ -275,11 +275,10 @@ impl PatchManager {
 
     /// Whether this patch is in the process of booting.
     fn is_currently_booting_patch(&self, patch_number: usize) -> bool {
-        if let Some(currently_booting_patch) = &self.patches_state.currently_booting_patch {
-            return currently_booting_patch.number == patch_number;
+        match &self.patches_state.currently_booting_patch {
+            Some(currently_booting_patch) => currently_booting_patch.number == patch_number,
+            None => false,
         }
-
-        return false;
     }
 
     /// The number of the patch we last successfully booted, if any.
