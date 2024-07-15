@@ -724,7 +724,7 @@ mod tests {
                 .unwrap_err()
                 .downcast::<crate::UpdateError>()
                 .unwrap(),
-            crate::UpdateError::InvalidState("last_attempted_boot_patch is None".to_string())
+            crate::UpdateError::InvalidState("currently_booting_patch is None".to_string())
         );
         assert!(crate::report_launch_success().is_ok());
     }
