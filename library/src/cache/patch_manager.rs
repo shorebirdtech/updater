@@ -46,6 +46,10 @@ struct PatchesState {
     /// as the last booted patch patch if no new patch has been downloaded.
     next_boot_patch: Option<PatchMetadata>,
 
+    /// The patch that is currently booting, if any. If the system initializes and
+    /// this has a value, we will consider this patch to have failed to boot.
+    currently_booting_patch: Option<PatchMetadata>,
+
     /// The highest patch number we have seen. This may be higher than the last booted
     /// patch or next patch if we downloaded a patch that failed to boot.
     highest_seen_patch_number: Option<usize>,
@@ -54,6 +58,10 @@ struct PatchesState {
 /// Abstracts the process of managing patches.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
+    /// Triggers any initialization logic needed by the patch manager. This is intended
+    /// to be called when Shorebird is initialized by the Flutter engine.
+    fn on_init(&mut self) -> Result<()>;
+
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
     ///
@@ -213,7 +221,10 @@ impl PatchManager {
         }
 
         // If the last boot we tried was this patch, make sure we succeeded or the patch is bad.
-        if self.is_patch_last_attempted_patch(patch.number) {
+        // If we are currently booting this patch, skip this check, as
+        if !self.is_currently_booting_patch(patch.number)
+            && self.is_patch_last_attempted_patch(patch.number)
+        {
             // We are trying to boot from the same patch that we tried to boot from last time.
 
             match self.last_successful_boot_patch_number() {
@@ -259,6 +270,14 @@ impl PatchManager {
             .as_ref()
             .map(|patch| patch.number == patch_number)
             .unwrap_or(false)
+    }
+
+    fn is_currently_booting_patch(&self, patch_number: usize) -> bool {
+        if let Some(currently_booting_patch) = &self.patches_state.currently_booting_patch {
+            return currently_booting_patch.number == patch_number;
+        } else {
+            return false;
+        }
     }
 
     /// The number of the patch we last successfully booted, if any.
@@ -346,6 +365,18 @@ impl PatchManager {
 }
 
 impl ManagePatches for PatchManager {
+    fn on_init(&mut self) -> Result<()> {
+        // If we were booting a patch but never recorded a successful boot, we assume that
+        // the patch failed to boot. Attempt to fall back.
+        if let Some(failed_boot_patch) = self.patches_state.currently_booting_patch.clone() {
+            self.try_fall_back_from_patch(failed_boot_patch.number);
+            self.patches_state.currently_booting_patch = None;
+            self.save_patches_state()?;
+        }
+
+        Ok(())
+    }
+
     // The explicit lifetime is required for automock to work with Options.
     // See https://github.com/asomers/mockall/issues/61.
     #[allow(clippy::needless_lifetimes)]
@@ -445,7 +476,8 @@ impl ManagePatches for PatchManager {
             );
         }
 
-        self.patches_state.last_attempted_patch = Some(next_boot_patch);
+        self.patches_state.last_attempted_patch = Some(next_boot_patch.clone());
+        self.patches_state.currently_booting_patch = Some(next_boot_patch.clone());
         self.save_patches_state()
     }
 
@@ -456,6 +488,7 @@ impl ManagePatches for PatchManager {
             .clone()
             .context("No last_attempted_patch")?;
 
+        self.patches_state.currently_booting_patch = None;
         self.patches_state.last_booted_patch = Some(boot_patch.clone());
         if let Err(e) = self.delete_patch_artifacts_older_than(boot_patch.number) {
             error!(
@@ -467,6 +500,7 @@ impl ManagePatches for PatchManager {
     }
 
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.patches_state.currently_booting_patch = None;
         self.try_fall_back_from_patch(patch_number);
         self.save_patches_state()
     }
@@ -538,7 +572,7 @@ mod debug_tests {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
         let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, currently_booting_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
@@ -817,9 +851,12 @@ mod next_boot_patch_tests {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
-        // Add a first patch and pretend it booted successfully.
+        // Add a first patch and record that we started booting it, but not that it succeeded.
         manager.add_patch_for_test(&temp_dir, 1)?;
         manager.record_boot_start_for_patch(1)?;
+
+        // Simulate a restart.
+        manager.on_init()?;
 
         assert!(manager.next_boot_patch().is_none());
 
@@ -836,8 +873,12 @@ mod next_boot_patch_tests {
         manager.record_boot_start_for_patch(1)?;
         manager.record_boot_success()?;
 
+        // Add a second patch and record that we started booting it, but not that it succeeded.
         manager.add_patch_for_test(&temp_dir, 2)?;
         manager.record_boot_start_for_patch(2)?;
+
+        // Simulate a restart.
+        manager.on_init()?;
 
         assert!(manager
             .next_boot_patch()

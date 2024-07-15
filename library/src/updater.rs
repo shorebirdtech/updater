@@ -138,6 +138,15 @@ pub fn init(
         NetworkHooks::default(),
     );
 
+    let _ = with_config(|config| {
+        UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        )
+        .on_init()
+    });
+
     Ok(())
 }
 
