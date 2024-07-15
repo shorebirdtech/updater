@@ -470,11 +470,9 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             config.patch_public_key.as_deref(),
         );
 
-        let patch = state
-            .last_attempted_boot_patch()
-            .ok_or(anyhow::Error::from(UpdateError::InvalidState(
-                "last_attempted_boot_patch is None".to_string(),
-            )))?;
+        let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
+            UpdateError::InvalidState("currently_booting_patch is None".to_string()),
+        ))?;
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
         let mark_result = state.record_boot_failure_for_patch(patch.number);
@@ -506,7 +504,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             config.patch_public_key.as_deref(),
         );
 
-        let last_attempted_boot_patch = match state.last_attempted_boot_patch() {
+        let booting_patch = match state.currently_booting_patch() {
             Some(patch) => patch,
 
             // We didn't boot from a patch, so there's nothing to do.
@@ -532,7 +530,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             let event = PatchEvent {
                 app_id: config_copy.app_id.clone(),
                 arch: current_arch().to_string(),
-                patch_number: last_attempted_boot_patch.number,
+                patch_number: booting_patch.number,
                 platform: current_platform().to_string(),
                 release_version: config_copy.release_version.clone(),
                 identifier: EventType::PatchInstallSuccess,
@@ -646,7 +644,8 @@ mod tests {
         crate::report_launch_start().unwrap();
         crate::report_launch_success().unwrap();
         assert!(crate::next_boot_patch().unwrap().is_some());
-        // mark it bad.
+        // boot again, this time failing
+        crate::report_launch_start().unwrap();
         crate::report_launch_failure().unwrap();
         // Technically might need to "reload"
         // ask for current patch (should get none).

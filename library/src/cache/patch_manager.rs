@@ -39,9 +39,6 @@ struct PatchesState {
     /// The patch we are currently running, if any.
     last_booted_patch: Option<PatchMetadata>,
 
-    /// The last patch we attempted to boot, if any.
-    last_attempted_patch: Option<PatchMetadata>,
-
     /// The patch that will be run on the next app boot, if any. This may be the same
     /// as the last booted patch patch if no new patch has been downloaded.
     next_boot_patch: Option<PatchMetadata>,
@@ -80,9 +77,11 @@ pub trait ManagePatches {
     /// or None if no patch is installed.
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo>;
 
-    /// The patch we most recently attempted to boot. Will be the same as
-    /// last_successfully_booted_patch if the last boot was successful.
-    fn last_attempted_boot_patch(&self) -> Option<PatchInfo>;
+    /// The patch we are currently booting, if any. This will only have a value:
+    ///   1. Between record_boot_start_for_patch and record_boot_success or record_boot_failure_for_patch
+    ///   2. On init if we attempted to boot a patch but never recorded a successful boot (e.g., because
+    ///      the system crashed).
+    fn currently_booting_patch(&self) -> Option<PatchInfo>;
 
     /// Returns the next patch to boot, or None if:
     /// - no patches have been downloaded
@@ -220,32 +219,6 @@ impl PatchManager {
             );
         }
 
-        // If the last boot we tried was this patch, make sure we succeeded or the patch is bad.
-        // If we are currently in the process of booting this patch for the first time, this check
-        // will always fail, so skip it.
-        if !self.is_currently_booting_patch(patch.number)
-            && self.is_patch_last_attempted_patch(patch.number)
-        {
-            // We are trying to boot from the same patch that we tried to boot from last time.
-
-            match self.last_successful_boot_patch_number() {
-                Some(last_successful_patch_number)
-                    if last_successful_patch_number == patch.number =>
-                {
-                    // Our last boot attempt was this patch, and we've successfully booted from this
-                    // patch before.  This patch is safe to boot from.
-                }
-                _ => {
-                    // We've tried to boot from this patch before and didn't
-                    // succeed. Don't try again.
-                    bail!(
-                        "Already attempted and failed to boot patch {}",
-                        patch.number
-                    )
-                }
-            }
-        }
-
         if let Some(public_key) = &self.patch_public_key {
             // If we have a public key, verify that the patch's hash has a signature.
             let signature = patch
@@ -261,33 +234,6 @@ impl PatchManager {
         }
 
         Ok(())
-    }
-
-    /// Whether the given patch number is the last one we attempted to boot
-    /// (whether it was successful or not).
-    fn is_patch_last_attempted_patch(&self, patch_number: usize) -> bool {
-        self.patches_state
-            .last_attempted_patch
-            .as_ref()
-            .map(|patch| patch.number == patch_number)
-            .unwrap_or(false)
-    }
-
-    /// Whether this patch is in the process of booting.
-    fn is_currently_booting_patch(&self, patch_number: usize) -> bool {
-        if let Some(currently_booting_patch) = &self.patches_state.currently_booting_patch {
-            return currently_booting_patch.number == patch_number;
-        } else {
-            return false;
-        }
-    }
-
-    /// The number of the patch we last successfully booted, if any.
-    fn last_successful_boot_patch_number(&self) -> Option<usize> {
-        self.patches_state
-            .last_booted_patch
-            .as_ref()
-            .map(|patch| patch.number)
     }
 
     fn delete_patch_artifacts(&mut self, patch_number: usize) -> Result<()> {
@@ -434,9 +380,9 @@ impl ManagePatches for PatchManager {
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
-    fn last_attempted_boot_patch(&self) -> Option<PatchInfo> {
+    fn currently_booting_patch(&self) -> Option<PatchInfo> {
         self.patches_state
-            .last_attempted_patch
+            .currently_booting_patch
             .as_ref()
             .map(|patch| self.patch_info_for_number(patch.number))
     }
@@ -478,7 +424,6 @@ impl ManagePatches for PatchManager {
             );
         }
 
-        self.patches_state.last_attempted_patch = Some(next_boot_patch.clone());
         self.patches_state.currently_booting_patch = Some(next_boot_patch.clone());
         self.save_patches_state()
     }
@@ -486,9 +431,9 @@ impl ManagePatches for PatchManager {
     fn record_boot_success(&mut self) -> Result<()> {
         let boot_patch = self
             .patches_state
-            .last_attempted_patch
+            .currently_booting_patch
             .clone()
-            .context("No last_attempted_patch")?;
+            .context("No currently_booting_patch")?;
 
         self.patches_state.currently_booting_patch = None;
         self.patches_state.last_booted_patch = Some(boot_patch.clone());
@@ -574,7 +519,7 @@ mod debug_tests {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
         let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, last_attempted_patch: None, next_boot_patch: None, currently_booting_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
@@ -1204,44 +1149,6 @@ mod record_boot_success_for_patch_tests {
 
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
-
-        Ok(())
-    }
-
-    #[test]
-    fn repeated_calls_to_record_success_succeed() -> Result<()> {
-        let patch_number = 1;
-        let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-        let file_path = &temp_dir.path().join("patch1.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-
-        // Add the patch, make sure it has an artifact.
-        assert!(manager
-            .add_patch(patch_number, file_path, "hash", None)
-            .is_ok());
-        let patch_artifact_path = manager.patch_artifact_path(patch_number);
-        assert!(patch_artifact_path.exists());
-
-        // Record success, make sure the artifact still exists.
-        manager.record_boot_start_for_patch(patch_number)?;
-        assert!(manager.record_boot_success().is_ok());
-        assert_eq!(
-            manager.last_successfully_booted_patch().unwrap().number,
-            patch_number
-        );
-        assert_eq!(manager.next_boot_patch().unwrap().number, patch_number);
-        assert!(patch_artifact_path.exists());
-
-        // Record another success, make sure the artifact still exists.
-        assert!(manager.record_boot_success().is_ok());
-        assert_eq!(
-            manager.last_successfully_booted_patch().unwrap().number,
-            patch_number
-        );
-        assert_eq!(manager.next_boot_patch().unwrap().number, patch_number);
-        assert!(patch_artifact_path.exists());
 
         Ok(())
     }

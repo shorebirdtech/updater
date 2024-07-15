@@ -169,9 +169,10 @@ impl UpdaterState {
         self.patch_manager.record_boot_success()
     }
 
-    /// The patch we most recently attempted to boot.
-    pub fn last_attempted_boot_patch(&self) -> Option<PatchInfo> {
-        self.patch_manager.last_attempted_boot_patch()
+    /// The patch that is currently in the process of booting. That is, we've recorded a boot start
+    /// but not yet a boot success or failure.
+    pub fn currently_booting_patch(&self) -> Option<PatchInfo> {
+        self.patch_manager.currently_booting_patch()
     }
 
     /// This is the current patch that is running.
