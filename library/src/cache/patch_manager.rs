@@ -369,6 +369,7 @@ impl ManagePatches for PatchManager {
     fn on_init(&mut self) -> Result<()> {
         // If we were booting a patch but never recorded a successful boot, we assume that
         // the patch failed to boot. Attempt to fall back.
+        // TODO: this should record a PatchInstallFailure event. https://github.com/shorebirdtech/updater/issues/188
         if let Some(failed_boot_patch) = self.patches_state.currently_booting_patch.clone() {
             self.try_fall_back_from_patch(failed_boot_patch.number);
             self.patches_state.currently_booting_patch = None;
