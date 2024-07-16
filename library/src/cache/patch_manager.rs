@@ -899,7 +899,8 @@ mod next_boot_patch_tests {
         manager.add_patch_for_test(&temp_dir, 1)?;
         manager.record_boot_start_for_patch(1)?;
 
-        // Simulate a restart.
+        // Simulate that the app is being started fresh (e.g. from a crash)
+        manager = PatchManager::manager_for_test(&temp_dir);
         manager.on_init()?;
 
         assert!(manager.next_boot_patch().is_none());
@@ -921,7 +922,8 @@ mod next_boot_patch_tests {
         manager.add_patch_for_test(&temp_dir, 2)?;
         manager.record_boot_start_for_patch(2)?;
 
-        // Simulate a restart.
+        // Simulate that the app is being started fresh (e.g. from a crash)
+        manager = PatchManager::manager_for_test(&temp_dir);
         manager.on_init()?;
 
         assert!(manager
