@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 use anyhow::Context;
 use dyn_clone::DynClone;
-use log::warn;
 
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
@@ -47,9 +46,29 @@ impl Display for UpdateStatus {
     }
 }
 
+/// Returned when a call to `init` is not successful.
+#[derive(Debug, PartialEq)]
+pub enum InitError {
+    InvalidArgument(String, String),
+    AlreadyInitialized,
+}
+
+impl std::error::Error for InitError {}
+
+impl Display for InitError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            InitError::InvalidArgument(name, value) => {
+                write!(f, "Invalid Argument: {name} -> {value}")
+            }
+            InitError::AlreadyInitialized => write!(f, "Shorebird has already been initialized."),
+        }
+    }
+}
+
+/// Returned when a function that is part of the update lifecycle fails.
 #[derive(Debug, PartialEq)]
 pub enum UpdateError {
-    InvalidArgument(String, String),
     InvalidState(String),
     BadServerResponse,
     FailedToSaveState,
@@ -62,9 +81,6 @@ impl std::error::Error for UpdateError {}
 impl Display for UpdateError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            UpdateError::InvalidArgument(name, value) => {
-                write!(f, "Invalid Argument: {name} -> {value}")
-            }
             UpdateError::InvalidState(msg) => write!(f, "Invalid State: {msg}"),
             UpdateError::FailedToSaveState => write!(f, "Failed to save state"),
             UpdateError::BadServerResponse => write!(f, "Bad server response"),
@@ -102,10 +118,10 @@ dyn_clone::clone_trait_object!(ExternalFileProvider);
 // and a hard-coded name for the libapp file which we look up in the
 // split APKs in that datadir. On other platforms we just use a path.
 #[cfg(not(any(target_os = "android", test)))]
-fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
+fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, InitError> {
     let first = original_libapp_paths
         .first()
-        .ok_or(UpdateError::InvalidArgument(
+        .ok_or(InitError::InvalidArgument(
             "original_libapp_paths".to_string(),
             "empty".to_string(),
         ));
@@ -121,13 +137,13 @@ pub fn init(
     app_config: AppConfig,
     file_provider: Box<dyn ExternalFileProvider>,
     yaml: &str,
-) -> Result<(), UpdateError> {
+) -> Result<(), InitError> {
     #[cfg(any(target_os = "android", test))]
     use crate::android::libapp_path_from_settings;
 
     init_logging();
     let config = YamlConfig::from_yaml(yaml)
-        .map_err(|err| UpdateError::InvalidArgument("yaml".to_string(), err.to_string()))?;
+        .map_err(|err| InitError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     debug!("libapp_path: {:?}", libapp_path);
@@ -141,9 +157,8 @@ pub fn init(
 
     // set_config will return an error if the config is already initialized. This should not cause
     // init to fail.
-    if let Err(err) = set_config_result {
-        warn!("{}", err);
-        return Ok(());
+    if set_config_result.is_err() {
+        return Err(InitError::AlreadyInitialized);
     }
 
     let _ = with_config(|config| {
@@ -616,6 +631,59 @@ mod tests {
 
     #[serial]
     #[test]
+    fn subsequent_init_calls_do_not_update_config() {
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        testing_reset_config();
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        let mut yaml = "app_id: 1234".to_string();
+
+        assert_eq!(
+            crate::init(
+                crate::AppConfig {
+                    app_storage_dir: cache_dir.clone(),
+                    code_cache_dir: cache_dir.clone(),
+                    release_version: "1.0.0+1".to_string(),
+                    original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
+                },
+                Box::new(FakeExternalFileProvider {}),
+                &yaml,
+            ),
+            Ok(())
+        );
+
+        with_config(|config| {
+            assert_eq!(config.app_id, "1234");
+            Ok(())
+        })
+        .unwrap();
+
+        // Attempt to init a second time with a different app_id.
+        yaml = "app_id: 5678".to_string();
+        assert_eq!(
+            crate::init(
+                crate::AppConfig {
+                    app_storage_dir: cache_dir.clone(),
+                    code_cache_dir: cache_dir.clone(),
+                    release_version: "1.0.0+1".to_string(),
+                    original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
+                },
+                Box::new(FakeExternalFileProvider {}),
+                &yaml,
+            ),
+            Err(crate::InitError::AlreadyInitialized)
+        );
+
+        // Verify that the app_id is still the original value.
+        with_config(|config| {
+            assert_eq!(config.app_id, "1234");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[serial]
+    #[test]
     fn ignore_version_after_marked_bad() {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
@@ -715,7 +783,7 @@ mod tests {
                 Box::new(FakeExternalFileProvider {}),
                 "",
             ),
-            Err(crate::UpdateError::InvalidArgument(
+            Err(crate::InitError::InvalidArgument(
                 "yaml".to_string(),
                 "missing field `app_id`".to_string()
             ))

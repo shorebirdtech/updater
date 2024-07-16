@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::println as debug; // Workaround to use println! for logs.
 
-use crate::UpdateError;
+use crate::InitError;
 
 /// This function is a hack for Android.  Android passes an array of paths, the
 /// first of which is `libapp.so` the second of which is a long (virtual) path
@@ -24,9 +24,9 @@ use crate::UpdateError;
 /// "/data/app/~~7LtReIkm5snW_oXeDoJ5TQ==/com.example.shorebird_test-rpkDZSLBRv2jWcc1gQpwdg==/lib/x86_64/libapp.so"
 /// Will return:
 /// "/data/app/~~7LtReIkm5snW_oXeDoJ5TQ==/com.example.shorebird_test-rpkDZSLBRv2jWcc1gQpwdg=="
-fn app_data_dir_from_libapp_path(libapp_path: &str) -> Result<PathBuf, UpdateError> {
+fn app_data_dir_from_libapp_path(libapp_path: &str) -> Result<PathBuf, InitError> {
     let path = PathBuf::from(libapp_path);
-    let root = path.ancestors().nth(3).ok_or(UpdateError::InvalidArgument(
+    let root = path.ancestors().nth(3).ok_or(InitError::InvalidArgument(
         "original_libapp_paths".to_string(),
         format!("Invalid path: {}", libapp_path),
     ))?;
@@ -184,7 +184,7 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
     Ok(Cursor::new(buffer))
 }
 
-pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, UpdateError> {
+pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, InitError> {
     // FIXME: This makes the assumption that the last path provided is the full
     // path to the libapp.so file.  This is true for the current engine, but
     // may not be true in the future.  Better would be for the engine to
@@ -197,7 +197,7 @@ pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<Pat
     // https://developer.android.com/reference/android/content/pm/ApplicationInfo#nativeLibraryDir
     let full_libapp_path = original_libapp_paths
         .last()
-        .ok_or(UpdateError::InvalidArgument(
+        .ok_or(InitError::InvalidArgument(
             "original_libapp_paths".to_string(),
             "empty".to_string(),
         ))?;
