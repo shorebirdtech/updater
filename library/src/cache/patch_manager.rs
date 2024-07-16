@@ -613,7 +613,8 @@ mod on_init_tests {
             Some(1)
         );
 
-        // Simulate a restart.
+        // Simulate that the app is being started fresh (e.g. from a crash)
+        manager = PatchManager::manager_for_test(&temp_dir);
         manager.on_init()?;
 
         // Verify that we are no longer booting from patch 1.
