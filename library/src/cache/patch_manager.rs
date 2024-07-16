@@ -64,7 +64,7 @@ struct PatchesState {
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
     /// Triggers any initialization logic needed by the patch manager. This is intended
-    /// to be called when Shorebird is initialized by the Flutter engine.
+    /// to be called when Shorebird is initialized by the Flutter engine (shorebird_init).
     fn on_init(&mut self) -> Result<()>;
 
     /// Copies the patch file at file_path to the manager's directory structure sets
