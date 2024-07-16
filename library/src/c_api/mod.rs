@@ -543,9 +543,8 @@ mod test {
         // app_id is required or shorebird_init will fail.
         let c_yaml = c_string("app_id: bar");
 
-        // This will return true, but log a warning and not change the already-
-        // set config.
-        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+        // This will return false because we have already initialized.
+        assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
     }

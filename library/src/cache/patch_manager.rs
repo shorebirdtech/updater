@@ -43,8 +43,11 @@ struct PatchesState {
     /// as the last booted patch patch if no new patch has been downloaded.
     next_boot_patch: Option<PatchMetadata>,
 
-    /// The patch that is currently booting, if any. If the system initializes and
-    /// this has a value, we will consider this patch to have failed to boot.
+    /// This is given a value when we start booting a patch (record_boot_start_for_patch) and is
+    /// cleared when:
+    ///  - the patch boots successfully (record_boot_success)
+    ///  - the patch fails to boot (record_boot_failure_for_patch)
+    ///  - the system initializes (on_init, we take this to mean the patch failed to boot)
     currently_booting_patch: Option<PatchMetadata>,
 
     /// The highest patch number we have seen. This may be higher than the last booted
@@ -56,7 +59,7 @@ struct PatchesState {
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
     /// Triggers any initialization logic needed by the patch manager. This is intended
-    /// to be called when Shorebird is initialized by the Flutter engine.
+    /// to be called when Shorebird is initialized by the Flutter engine (shorebird_init).
     fn on_init(&mut self) -> Result<()>;
 
     /// Copies the patch file at file_path to the manager's directory structure sets
@@ -316,6 +319,7 @@ impl ManagePatches for PatchManager {
     fn on_init(&mut self) -> Result<()> {
         // If we were booting a patch but never recorded a successful boot, we assume that
         // the patch failed to boot. Attempt to fall back.
+        // TODO: this should record a PatchInstallFailure event. https://github.com/shorebirdtech/updater/issues/188
         if let Some(failed_boot_patch) = self.patches_state.currently_booting_patch.clone() {
             self.try_fall_back_from_patch(failed_boot_patch.number);
             self.patches_state.currently_booting_patch = None;
@@ -552,7 +556,13 @@ mod on_init_tests {
             Some(1)
         );
 
-        // Simulate a restart.
+        // Simulate that the app is being started fresh (e.g. from a crash)
+        manager = PatchManager::manager_for_test(&temp_dir);
+        // Ensure that we didn't somehow lose next_boot_patch when recreating the manager.
+        assert_eq!(
+            manager.next_boot_patch().as_ref().map(|p| p.number),
+            Some(1)
+        );
         manager.on_init()?;
 
         // Verify that we are no longer booting from patch 1.
@@ -838,7 +848,8 @@ mod next_boot_patch_tests {
         manager.add_patch_for_test(&temp_dir, 1)?;
         manager.record_boot_start_for_patch(1)?;
 
-        // Simulate a restart.
+        // Simulate that the app is being started fresh (e.g. from a crash)
+        manager = PatchManager::manager_for_test(&temp_dir);
         manager.on_init()?;
 
         assert!(manager.next_boot_patch().is_none());
@@ -860,7 +871,8 @@ mod next_boot_patch_tests {
         manager.add_patch_for_test(&temp_dir, 2)?;
         manager.record_boot_start_for_patch(2)?;
 
-        // Simulate a restart.
+        // Simulate that the app is being started fresh (e.g. from a crash)
+        manager = PatchManager::manager_for_test(&temp_dir);
         manager.on_init()?;
 
         assert!(manager
