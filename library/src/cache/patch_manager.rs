@@ -615,6 +615,11 @@ mod on_init_tests {
 
         // Simulate that the app is being started fresh (e.g. from a crash)
         manager = PatchManager::manager_for_test(&temp_dir);
+        // Ensure that we didn't somehow lose next_boot_patch when recreating the manager.
+        assert_eq!(
+            manager.next_boot_patch().as_ref().map(|p| p.number),
+            Some(1)
+        );
         manager.on_init()?;
 
         // Verify that we are no longer booting from patch 1.
