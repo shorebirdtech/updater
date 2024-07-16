@@ -228,6 +228,7 @@ impl PatchManager {
         // If the last boot we tried was this patch, make sure we succeeded or the patch is bad.
         // If we are currently in the process of booting this patch for the first time, this check
         // will always fail, so skip it.
+        // TODO: this validation only needs to happen once. Move to on_init.
         if !self.is_currently_booting_patch(patch.number)
             && self.is_patch_last_attempted_patch(patch.number)
         {
