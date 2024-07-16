@@ -48,6 +48,11 @@ struct PatchesState {
 
     /// The patch that is currently booting, if any. If the system initializes and
     /// this has a value, we will consider this patch to have failed to boot.
+    /// This is given a value when we start booting a patch (record_boot_start_for_patch) and is
+    /// cleared when:
+    ///  - the patch boots successfully (record_boot_success)
+    ///  - the patch fails to boot (record_boot_failure_for_patch)
+    ///  - the system initializes (on_init, we take this to mean the patch failed to boot)
     currently_booting_patch: Option<PatchMetadata>,
 
     /// The highest patch number we have seen. This may be higher than the last booted
