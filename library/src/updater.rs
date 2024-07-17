@@ -593,6 +593,7 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
+        cache::{PatchInfo, UpdaterState},
         config::{testing_reset_config, with_config},
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
         time, ExternalFileProvider,
@@ -625,6 +626,30 @@ mod tests {
             &yaml,
         )
         .unwrap();
+    }
+
+    fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
+        with_config(|config| {
+            let download_dir = std::path::PathBuf::from(&config.download_dir);
+            let artifact_path = download_dir.join(patch_number.to_string());
+            fs::create_dir_all(&download_dir)?;
+            fs::write(&artifact_path, "hello")?;
+
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
+            state.install_patch(
+                &PatchInfo {
+                    path: artifact_path,
+                    number: patch_number,
+                },
+                "hash",
+                None,
+            )?;
+            state.save()
+        })
     }
 
     #[serial]
@@ -686,35 +711,8 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
-        use crate::cache::{PatchInfo, UpdaterState};
-        use crate::config::with_config;
-
         // Install a fake patch.
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join("1");
-            fs::create_dir_all(&download_dir).unwrap();
-            fs::write(&artifact_path, "hello").unwrap();
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state
-                .install_patch(
-                    &PatchInfo {
-                        path: artifact_path,
-                        number: 1,
-                    },
-                    "hash",
-                    None,
-                )
-                .expect("move failed");
-            state.save().expect("save failed");
-            Ok(())
-        })
-        .unwrap();
+        install_fake_patch(1).unwrap();
         assert!(crate::next_boot_patch().unwrap().is_some());
         // pretend we booted from it
         crate::report_launch_start().unwrap();
@@ -808,38 +806,14 @@ mod tests {
     #[serial]
     #[test]
     fn report_launch_success_with_patch() {
-        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::cache::UpdaterState;
         use crate::config::with_config;
         let patch_number = 1;
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join("1");
-            fs::create_dir_all(&download_dir).unwrap();
-            fs::write(&artifact_path, "hello").unwrap();
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state
-                .install_patch(
-                    &PatchInfo {
-                        path: artifact_path,
-                        number: patch_number,
-                    },
-                    "hash",
-                    None,
-                )
-                .expect("move failed");
-            state.save().expect("save failed");
-            Ok(())
-        })
-        .unwrap();
+        install_fake_patch(1).unwrap();
 
         // Pretend we booted from it.
         crate::report_launch_start().unwrap();
@@ -860,37 +834,13 @@ mod tests {
     #[serial]
     #[test]
     fn report_launch_failure_with_patch() {
-        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::cache::UpdaterState;
         use crate::config::with_config;
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join("1");
-            fs::create_dir_all(&download_dir).unwrap();
-            fs::write(&artifact_path, "hello").unwrap();
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state
-                .install_patch(
-                    &PatchInfo {
-                        path: artifact_path,
-                        number: 1,
-                    },
-                    "hash",
-                    None,
-                )
-                .expect("move failed");
-            state.save().expect("save failed");
-            Ok(())
-        })
-        .unwrap();
+        install_fake_patch(1).unwrap();
 
         // Pretend we fail to boot from it.
         crate::report_launch_start().unwrap();
