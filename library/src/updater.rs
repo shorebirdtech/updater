@@ -191,17 +191,11 @@ pub fn check_for_failed_boot_patch() -> Result<()> {
         );
         if let Some(patch) = state.currently_booting_patch() {
             state.record_boot_failure_for_patch(patch.number)?;
-            state.uninstall_patch(patch.number)?;
-            let patch_install_failed_event = PatchEvent {
-                app_id: config.app_id.clone(),
-                arch: current_arch().to_string(),
-                identifier: EventType::PatchInstallFailure,
-                patch_number: patch.number,
-                platform: current_platform().to_string(),
-                release_version: config.release_version.clone(),
-                timestamp: time::unix_timestamp(),
-            };
-            state.queue_event(patch_install_failed_event)?;
+            state.queue_event(patch_event(
+                config,
+                EventType::PatchInstallFailure,
+                patch.number,
+            ))?;
         }
 
         Ok(())
@@ -210,6 +204,18 @@ pub fn check_for_failed_boot_patch() -> Result<()> {
 
 pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
+}
+
+fn patch_event(config: &UpdateConfig, event_type: EventType, patch_number: usize) -> PatchEvent {
+    PatchEvent {
+        app_id: config.app_id.clone(),
+        arch: current_arch().to_string(),
+        identifier: event_type,
+        patch_number,
+        platform: current_platform().to_string(),
+        release_version: config.release_version.clone(),
+        timestamp: time::unix_timestamp(),
+    }
 }
 
 fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchCheckRequest {
@@ -537,15 +543,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
-        let event = PatchEvent {
-            app_id: config.app_id.clone(),
-            arch: current_arch().to_string(),
-            identifier: EventType::PatchInstallFailure,
-            patch_number: patch.number,
-            platform: current_platform().to_string(),
-            release_version: config.release_version.clone(),
-            timestamp: time::unix_timestamp(),
-        };
+        let event = patch_event(config, EventType::PatchInstallFailure, patch.number);
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
         state.queue_event(event)
@@ -585,15 +583,11 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         let config_copy = config.clone();
         std::thread::spawn(move || {
-            let event = PatchEvent {
-                app_id: config_copy.app_id.clone(),
-                arch: current_arch().to_string(),
-                patch_number: booting_patch.number,
-                platform: current_platform().to_string(),
-                release_version: config_copy.release_version.clone(),
-                identifier: EventType::PatchInstallSuccess,
-                timestamp: time::unix_timestamp(),
-            };
+            let event = patch_event(
+                &config_copy,
+                EventType::PatchInstallSuccess,
+                booting_patch.number,
+            );
             let report_result = crate::network::send_patch_event(event, &config_copy);
             if let Err(err) = report_result {
                 error!("Failed to report successful patch install: {:?}", err);

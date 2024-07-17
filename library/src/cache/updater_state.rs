@@ -199,12 +199,6 @@ impl UpdaterState {
             .add_patch(patch.number, &patch.path, hash, signature)
     }
 
-    /// Removes the artifacts for the patch with patch_number and ensures that we do not attempt to
-    /// boot from it in the future.
-    pub fn uninstall_patch(&mut self, patch_number: usize) -> anyhow::Result<()> {
-        self.patch_manager.remove_patch(patch_number)
-    }
-
     /// Returns highest patch number that has been installed for this release.
     /// This should represent the latest patch we still have on disk so as
     /// to prevent re-downloading patches we already have.

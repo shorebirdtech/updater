@@ -72,14 +72,6 @@ pub trait ManagePatches {
         signature: Option<&'a str>,
     ) -> Result<()>;
 
-    /// Uninstalls the artifacts for the patch with the given number.
-    ///
-    /// If the patch is the next boot patch, it will be replaced by the last booted patch if the
-    ///   last booted patch passes validation, or None if it does not.
-    /// If the patch is the last booted patch, it will be removed and the last booted patch will be
-    ///   cleared.
-    fn remove_patch(&mut self, patch_number: usize) -> Result<()>;
-
     /// Returns the patch we most recently successfully booted from (usually the currently running patch),
     /// or None if no patch is installed.
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo>;
@@ -368,13 +360,6 @@ impl ManagePatches for PatchManager {
             .map(|highest_patch_number: usize| highest_patch_number.max(patch_number))
             .or(Some(patch_number));
         self.save_patches_state()
-    }
-
-    fn remove_patch(&mut self, patch_number: usize) -> Result<()> {
-        // Call try_fall_back_from_patch to ensure that we handle the case where we're removing
-        // the next_boot_patch.
-        self.try_fall_back_from_patch(patch_number);
-        Ok(())
     }
 
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo> {
