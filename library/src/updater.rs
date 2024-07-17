@@ -5,8 +5,7 @@ use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
-use anyhow::Context;
+use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
 use crate::cache::{PatchInfo, UpdaterState};
@@ -57,6 +56,7 @@ impl Display for UpdateStatus {
 pub enum InitError {
     InvalidArgument(String, String),
     AlreadyInitialized,
+    FailedToCleanUpFailedPatch,
 }
 
 impl std::error::Error for InitError {}
@@ -68,6 +68,9 @@ impl Display for InitError {
                 write!(f, "Invalid Argument: {name} -> {value}")
             }
             InitError::AlreadyInitialized => write!(f, "Shorebird has already been initialized."),
+            InitError::FailedToCleanUpFailedPatch => {
+                write!(f, "Failed to clean up after a failed patch.")
+            }
         }
     }
 }
@@ -134,6 +137,20 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
     first.map(PathBuf::from)
 }
 
+pub fn with_state<F, R>(f: F) -> anyhow::Result<R>
+where
+    F: FnOnce(&mut UpdaterState) -> anyhow::Result<R>,
+{
+    with_config(|config| {
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
+        f(&mut state)
+    })
+}
+
 /// Initialize the updater library.
 /// Takes a `AppConfig` struct and a yaml string.
 /// The yaml string is the contents of the `shorebird.yaml` file.
@@ -167,31 +184,62 @@ pub fn init(
         return Err(InitError::AlreadyInitialized);
     }
 
-    let _ = with_config(|config| {
-        UpdaterState::load_or_new_on_error(
+    handle_prior_boot_failure_if_necessary()
+}
+
+/// If, at initialization time, we detect that we were in the process of booting a patch, report a
+/// failure to boot for that patch and queue an event to report the failure.
+pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
+    with_config(|config| {
+        let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
-        )
-        .on_init()
-    });
+        );
+        if let Some(patch) = state.currently_booting_patch() {
+            state.record_boot_failure_for_patch(patch.number)?;
+            state.queue_event(patch_event(
+                config,
+                EventType::PatchInstallFailure,
+                patch.number,
+            ))?;
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .map_err(|e| {
+        error!("Failed to clean up after a failed patch: {:?}", e);
+        InitError::FailedToCleanUpFailedPatch
+    })
 }
 
+/// Whether the auto-update flag is set to true in the config.
 pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
+/// Creates a `PatchEvent` for the given `EventType` and patch number for reporting to the server.
+fn patch_event(config: &UpdateConfig, event_type: EventType, patch_number: usize) -> PatchEvent {
+    PatchEvent {
+        app_id: config.app_id.clone(),
+        arch: current_arch().to_string(),
+        identifier: event_type,
+        patch_number,
+        platform: current_platform().to_string(),
+        release_version: config.release_version.clone(),
+        timestamp: time::unix_timestamp(),
+    }
+}
+
 fn patch_check_request(config: &UpdateConfig, state: &mut UpdaterState) -> PatchCheckRequest {
-    let latest_patch_number = state.next_boot_patch().map(|p| p.number);
+    let patch_number = state.next_boot_patch().map(|p| p.number);
 
     // Send the request to the server.
     PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
         release_version: config.release_version.clone(),
-        patch_number: latest_patch_number,
+        patch_number: patch_number,
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     }
@@ -296,31 +344,17 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Saves state to disk (holds Config lock while writing).
 
     let config = copy_update_config()?;
-    // We should never try to write this state as some other writer may be
-    // racing with us, we should get a new state inside a lock if we want
-    // to write.
-    let read_only_state = UpdaterState::load_or_new_on_error(
-        &config.storage_dir,
-        &config.release_version,
-        config.patch_public_key.as_deref(),
-    );
 
     // We discard any events if we have more than 3 queued to make sure
     // we don't stall the client.
-    let events = read_only_state.copy_events(3);
+    let events = with_state(|state| Ok(state.copy_events(3)))?;
     for event in events {
         let result = crate::network::send_patch_event(event, &config);
         if let Err(err) = result {
             error!("Failed to report event: {:?}", err);
         }
     }
-    // We're abusing the config lock as a UpdateState lock for now.
-    let mut state = with_config(|_| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
+    let request = with_state(|state| {
         // This will clear any events which got queued between the time we
         // loaded the state now, but that's OK for now.
         let result = state.clear_events();
@@ -328,11 +362,10 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(state)
+        Ok(patch_check_request(&config, state))
     })?;
 
     // Check for update.
-    let request = patch_check_request(&config, &mut state);
     let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
     if !response.patch_available {
@@ -340,7 +373,8 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     }
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
-    if state.is_known_bad_patch(patch.number) {
+    let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch.number)))?;
+    if is_known_bad_patch {
         info!(
             "Patch {} has previously failed to boot, skipping.",
             patch.number
@@ -369,16 +403,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
     // two threads at once. We could give UpdateState its own lock instead.
-    with_config(|_| {
+    with_state(|state| {
         let patch_info = PatchInfo {
             path: output_path,
             number: patch.number,
         };
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
         // Move/state update should be "atomic" (it isn't today).
         state.install_patch(&patch_info, &patch.hash, patch.hash_signature.as_deref())?;
         info!("Patch {} successfully installed.", patch.number);
@@ -447,28 +476,19 @@ where
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-        Ok(state.next_boot_patch())
-    })
+    with_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch which is currently booted.  This is `None` until
-/// `report_launch_start()` is called at which point it is copied from
-/// `next_boot_patch`.
+/// The patch that was last successfully booted. If we're booting a patch for the first time, this
+/// will be the previous patch (or None, if there was no previous patch) until the boot is
+/// reported as successful.
+///
+/// TODO: This should always return the currently running patch, even if it has not been marked as
+///   good or bad. Presently, users of the shorebird_code_push package will never get the wrong
+///   patch number from this function because a launch will have been reported to be either a
+///   success or a failure before they can call this function.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_config(|config| {
-        let state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-        Ok(state.current_boot_patch())
-    })
+    with_state(|state| Ok(state.current_boot_patch()))
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
@@ -478,19 +498,12 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     //   next is now "patch to boot next"
     info!("Reporting launch start.");
 
-    with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-
-        let next_boot_patch = match state.next_boot_patch() {
-            Some(patch) => patch,
-            None => return Ok(()),
-        };
-
-        state.record_boot_start_for_patch(next_boot_patch.number)
+    with_state(|state| {
+        if let Some(next_boot_patch) = state.next_boot_patch() {
+            state.record_boot_start_for_patch(next_boot_patch.number)
+        } else {
+            Ok(())
+        }
     })
 }
 
@@ -515,15 +528,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
-        let event = PatchEvent {
-            app_id: config.app_id.clone(),
-            arch: current_arch().to_string(),
-            identifier: EventType::PatchInstallFailure,
-            patch_number: patch.number,
-            platform: current_platform().to_string(),
-            release_version: config.release_version.clone(),
-            timestamp: time::unix_timestamp(),
-        };
+        let event = patch_event(config, EventType::PatchInstallFailure, patch.number);
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
         state.queue_event(event)
@@ -563,15 +568,11 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         let config_copy = config.clone();
         std::thread::spawn(move || {
-            let event = PatchEvent {
-                app_id: config_copy.app_id.clone(),
-                arch: current_arch().to_string(),
-                patch_number: booting_patch.number,
-                platform: current_platform().to_string(),
-                release_version: config_copy.release_version.clone(),
-                identifier: EventType::PatchInstallSuccess,
-                timestamp: time::unix_timestamp(),
-            };
+            let event = patch_event(
+                &config_copy,
+                EventType::PatchInstallSuccess,
+                booting_patch.number,
+            );
             let report_result = crate::network::send_patch_event(event, &config_copy);
             if let Err(err) = report_result {
                 error!("Failed to report successful patch install: {:?}", err);
@@ -606,10 +607,11 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
-        cache::UpdaterState,
+        cache::{PatchInfo, UpdaterState},
         config::{testing_reset_config, with_config},
+        events::EventType,
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
-        time, ExternalFileProvider,
+        time, with_state, ExternalFileProvider,
     };
 
     #[derive(Debug, Clone)]
@@ -639,6 +641,30 @@ mod tests {
             &yaml,
         )
         .unwrap();
+    }
+
+    fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
+        with_config(|config| {
+            let download_dir = std::path::PathBuf::from(&config.download_dir);
+            let artifact_path = download_dir.join(patch_number.to_string());
+            fs::create_dir_all(&download_dir)?;
+            fs::write(&artifact_path, "hello")?;
+
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
+            state.install_patch(
+                &PatchInfo {
+                    path: artifact_path,
+                    number: patch_number,
+                },
+                "hash",
+                None,
+            )?;
+            state.save()
+        })
     }
 
     #[serial]
@@ -700,35 +726,8 @@ mod tests {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
-        use crate::cache::{PatchInfo, UpdaterState};
-        use crate::config::with_config;
-
         // Install a fake patch.
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join("1");
-            fs::create_dir_all(&download_dir).unwrap();
-            fs::write(&artifact_path, "hello").unwrap();
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state
-                .install_patch(
-                    &PatchInfo {
-                        path: artifact_path,
-                        number: 1,
-                    },
-                    "hash",
-                    None,
-                )
-                .expect("move failed");
-            state.save().expect("save failed");
-            Ok(())
-        })
-        .unwrap();
+        install_fake_patch(1).unwrap();
         assert!(crate::next_boot_patch().unwrap().is_some());
         // pretend we booted from it
         crate::report_launch_start().unwrap();
@@ -740,6 +739,47 @@ mod tests {
         // Technically might need to "reload"
         // ask for current patch (should get none).
         assert!(crate::next_boot_patch().unwrap().is_none());
+    }
+
+    #[serial]
+    #[test]
+    fn reports_patch_install_failure_if_patch_was_booting() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        with_config(|config| {
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
+            assert_eq!(state.next_boot_patch().unwrap().number, 1);
+            Ok(())
+        })?;
+
+        // Pretend we started to boot from it, but don't report success or failure.
+        crate::report_launch_start()?;
+        with_state(|state| {
+            assert_eq!(state.currently_booting_patch().unwrap().number, 1);
+            // We should have no queued events
+            assert!(state.copy_events(1).is_empty());
+            Ok(())
+        })?;
+
+        // Pretend we're starting the app a second time
+        init_for_testing(&tmp_dir, None);
+
+        with_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            // We should now have a queued PatchInstallFailure event
+            let events = state.copy_events(1);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].identifier, EventType::PatchInstallFailure);
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     #[test]
@@ -822,38 +862,14 @@ mod tests {
     #[serial]
     #[test]
     fn report_launch_success_with_patch() {
-        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::cache::UpdaterState;
         use crate::config::with_config;
         let patch_number = 1;
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join("1");
-            fs::create_dir_all(&download_dir).unwrap();
-            fs::write(&artifact_path, "hello").unwrap();
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state
-                .install_patch(
-                    &PatchInfo {
-                        path: artifact_path,
-                        number: patch_number,
-                    },
-                    "hash",
-                    None,
-                )
-                .expect("move failed");
-            state.save().expect("save failed");
-            Ok(())
-        })
-        .unwrap();
+        install_fake_patch(1).unwrap();
 
         // Pretend we booted from it.
         crate::report_launch_start().unwrap();
@@ -874,37 +890,13 @@ mod tests {
     #[serial]
     #[test]
     fn report_launch_failure_with_patch() {
-        use crate::cache::{PatchInfo, UpdaterState};
+        use crate::cache::UpdaterState;
         use crate::config::with_config;
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join("1");
-            fs::create_dir_all(&download_dir).unwrap();
-            fs::write(&artifact_path, "hello").unwrap();
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state
-                .install_patch(
-                    &PatchInfo {
-                        path: artifact_path,
-                        number: 1,
-                    },
-                    "hash",
-                    None,
-                )
-                .expect("move failed");
-            state.save().expect("save failed");
-            Ok(())
-        })
-        .unwrap();
+        install_fake_patch(1).unwrap();
 
         // Pretend we fail to boot from it.
         crate::report_launch_start().unwrap();
