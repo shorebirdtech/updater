@@ -667,7 +667,7 @@ mod tests {
     fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
         with_config(|config| {
             let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join(format!("{}", patch_number));
+            let artifact_path = download_dir.join(patch_number.to_string());
             fs::create_dir_all(&download_dir)?;
             fs::write(&artifact_path, "hello")?;
 
