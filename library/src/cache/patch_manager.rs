@@ -58,10 +58,6 @@ struct PatchesState {
 /// Abstracts the process of managing patches.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
-    // Triggers any initialization logic needed by the patch manager. This is intended
-    // to be called when Shorebird is initialized by the Flutter engine (shorebird_init).
-    //fn reset_boot_state(&mut self) -> Result<()>;
-
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
     ///
@@ -326,11 +322,6 @@ impl PatchManager {
 }
 
 impl ManagePatches for PatchManager {
-    // fn reset_boot_state(&mut self) -> Result<()> {
-    //     self.patches_state.currently_booting_patch = None;
-    //     self.save_patches_state()
-    // }
-
     // The explicit lifetime is required for automock to work with Options.
     // See https://github.com/asomers/mockall/issues/61.
     #[allow(clippy::needless_lifetimes)]
