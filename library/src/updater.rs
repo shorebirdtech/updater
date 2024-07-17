@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
-use log::warn;
 
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
@@ -51,6 +50,7 @@ impl Display for UpdateStatus {
 pub enum InitError {
     InvalidArgument(String, String),
     AlreadyInitialized,
+    FailedToCleanUpFailedPatch,
 }
 
 impl std::error::Error for InitError {}
@@ -62,6 +62,9 @@ impl Display for InitError {
                 write!(f, "Invalid Argument: {name} -> {value}")
             }
             InitError::AlreadyInitialized => write!(f, "Shorebird has already been initialized."),
+            InitError::FailedToCleanUpFailedPatch => {
+                write!(f, "Failed to clean up after a failed patch.")
+            }
         }
     }
 }
@@ -175,14 +178,12 @@ pub fn init(
         return Err(InitError::AlreadyInitialized);
     }
 
-    if check_for_failed_boot_patch().is_err() {
-        warn!("Failed check for failed boot patch.");
-    }
-
-    Ok(())
+    handle_boot_failure_if_necessary()
 }
 
-pub fn check_for_failed_boot_patch() -> Result<()> {
+/// If, at initialization time, we detect that we were in the process of booting a patch, report a
+/// failure to boot for that patch and queue an event to report the failure.
+pub fn handle_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
@@ -200,12 +201,18 @@ pub fn check_for_failed_boot_patch() -> Result<()> {
 
         Ok(())
     })
+    .map_err(|e| {
+        error!("Failed to clean up after a failed patch: {:?}", e);
+        InitError::FailedToCleanUpFailedPatch
+    })
 }
 
+/// Whether the auto-update flag is set to true in the config.
 pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
+/// Creates a `PatchEvent` for the given `EventType` and patch number for reporting to the server.
 fn patch_event(config: &UpdateConfig, event_type: EventType, patch_number: usize) -> PatchEvent {
     PatchEvent {
         app_id: config.app_id.clone(),
