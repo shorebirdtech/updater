@@ -465,12 +465,14 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch which was last successfully booted. If we're booting a patch for the first time, this
+/// The patch that was last successfully booted. If we're booting a patch for the first time, this
 /// will be the previous patch (or None, if there was no previous patch) until the boot is
 /// reported as successful.
 ///
 /// TODO: This should always return the currently running patch, even if it has not been marked as
-///   good or bad.
+///   good or bad. Presently, users of the shorebird_code_push package will never get the wrong
+///   patch number from this function because a launch will have been reported to be either a
+///   success or a failure before they can call this function.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.current_boot_patch()))
 }
