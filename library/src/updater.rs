@@ -470,6 +470,9 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 /// The patch which was last successfully booted. If we're booting a patch for the first time, this
 /// will be the previous patch (or None, if there was no previous patch) until the boot is
 /// reported as successful.
+///
+/// TODO: This should always return the currently running patch, even if it has not been marked as
+///   good or bad.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.current_boot_patch()))
 }
