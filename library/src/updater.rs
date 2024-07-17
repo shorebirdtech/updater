@@ -342,7 +342,9 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // We discard any events if we have more than 3 queued to make sure
     // we don't stall the client.
     let events = with_state(|state| Ok(state.copy_events(3)))?;
+    info!("Reporting {} events.", events.len());
     for event in events {
+        info!("Reporting event: {:?}", event);
         let result = crate::network::send_patch_event(event, &config);
         if let Err(err) = result {
             error!("Failed to report event: {:?}", err);
@@ -465,7 +467,9 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch which was last successfully booted. If we're running
+/// The patch which was last successfully booted. If we're booting a patch for the first time, this
+/// will be the previous patch (or None, if there was no previous patch) until the boot is
+/// reported as successful.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.current_boot_patch()))
 }
