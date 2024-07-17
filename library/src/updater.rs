@@ -342,9 +342,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // We discard any events if we have more than 3 queued to make sure
     // we don't stall the client.
     let events = with_state(|state| Ok(state.copy_events(3)))?;
-    info!("Reporting {} events.", events.len());
     for event in events {
-        info!("Reporting event: {:?}", event);
         let result = crate::network::send_patch_event(event, &config);
         if let Err(err) = result {
             error!("Failed to report event: {:?}", err);
