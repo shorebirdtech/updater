@@ -15,7 +15,6 @@ use crate::logging::init_logging;
 use crate::network::{
     download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest, PatchCheckResponse,
 };
-use crate::time;
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -192,7 +191,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
         );
         if let Some(patch) = state.currently_booting_patch() {
             state.record_boot_failure_for_patch(patch.number)?;
-            state.queue_event(patch_event(
+            state.queue_event(PatchEvent::new(
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
@@ -210,19 +209,6 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
 /// Whether the auto-update flag is set to true in the config.
 pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
-}
-
-/// Creates a `PatchEvent` for the given `EventType` and patch number for reporting to the server.
-fn patch_event(config: &UpdateConfig, event_type: EventType, patch_number: usize) -> PatchEvent {
-    PatchEvent {
-        app_id: config.app_id.clone(),
-        arch: current_arch().to_string(),
-        identifier: event_type,
-        patch_number,
-        platform: current_platform().to_string(),
-        release_version: config.release_version.clone(),
-        timestamp: time::unix_timestamp(),
-    }
 }
 
 fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchCheckRequest {
@@ -514,7 +500,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
-        let event = patch_event(config, EventType::PatchInstallFailure, patch.number);
+        let event = PatchEvent::new(config, EventType::PatchInstallFailure, patch.number);
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
         state.queue_event(event)
@@ -554,7 +540,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         let config_copy = config.clone();
         std::thread::spawn(move || {
-            let event = patch_event(
+            let event = PatchEvent::new(
                 &config_copy,
                 EventType::PatchInstallSuccess,
                 booting_patch.number,
