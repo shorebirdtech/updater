@@ -50,7 +50,10 @@ impl Display for UpdateStatus {
     }
 }
 
-/// Returned when a call to `init` is not successful.
+/// Returned when a call to `init` is not successful. These indicate that the specific call to
+/// `init` was not successful, but the library may still be in a valid state (e.g., if
+/// `AlreadyInitialized` is returned, the library is still initialized). Callers can safely ignore
+/// these errors if they are not interested in the specific reason why `init` failed.
 #[derive(Debug, PartialEq)]
 pub enum InitError {
     InvalidArgument(String, String),
