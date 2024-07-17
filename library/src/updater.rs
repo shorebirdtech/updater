@@ -178,12 +178,12 @@ pub fn init(
         return Err(InitError::AlreadyInitialized);
     }
 
-    handle_boot_failure_if_necessary()
+    handle_prior_boot_failure_if_necessary()
 }
 
 /// If, at initialization time, we detect that we were in the process of booting a patch, report a
 /// failure to boot for that patch and queue an event to report the failure.
-pub fn handle_boot_failure_if_necessary() -> Result<(), InitError> {
+pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
