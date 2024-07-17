@@ -331,31 +331,17 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Saves state to disk (holds Config lock while writing).
 
     let config = copy_update_config()?;
-    // We should never try to write this state as some other writer may be
-    // racing with us, we should get a new state inside a lock if we want
-    // to write.
-    let read_only_state = UpdaterState::load_or_new_on_error(
-        &config.storage_dir,
-        &config.release_version,
-        config.patch_public_key.as_deref(),
-    );
 
     // We discard any events if we have more than 3 queued to make sure
     // we don't stall the client.
-    let events = read_only_state.copy_events(3);
+    let events = with_state(|state| Ok(state.copy_events(3)))?;
     for event in events {
         let result = crate::network::send_patch_event(event, &config);
         if let Err(err) = result {
             error!("Failed to report event: {:?}", err);
         }
     }
-    // We're abusing the config lock as a UpdateState lock for now.
-    let read_only_state = with_config(|_| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
+    let request = with_state(|state| {
         // This will clear any events which got queued between the time we
         // loaded the state now, but that's OK for now.
         let result = state.clear_events();
@@ -363,11 +349,10 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(state)
+        Ok(patch_check_request(&config, &state))
     })?;
 
     // Check for update.
-    let request = patch_check_request(&config, &read_only_state);
     let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
     if !response.patch_available {
@@ -397,16 +382,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
     // two threads at once. We could give UpdateState its own lock instead.
-    with_config(|_| {
+    with_state(|state| {
         let patch_info = PatchInfo {
             path: output_path,
             number: patch.number,
         };
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
         // Move/state update should be "atomic" (it isn't today).
         state.install_patch(&patch_info, &patch.hash, patch.hash_signature.as_deref())?;
         info!("Patch {} successfully installed.", patch.number);
@@ -475,28 +455,12 @@ where
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-        Ok(state.next_boot_patch())
-    })
+    with_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch which is currently booted.  This is `None` until
-/// `report_launch_start()` is called at which point it is copied from
-/// `next_boot_patch`.
+/// The patch which was last successfully booted. If we're running
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_config(|config| {
-        let state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-        Ok(state.current_boot_patch())
-    })
+    with_state(|state| Ok(state.current_boot_patch()))
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
@@ -506,19 +470,12 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     //   next is now "patch to boot next"
     info!("Reporting launch start.");
 
-    with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-
-        let next_boot_patch = match state.next_boot_patch() {
-            Some(patch) => patch,
-            None => return Ok(()),
-        };
-
-        state.record_boot_start_for_patch(next_boot_patch.number)
+    with_state(|state| {
+        if let Some(next_boot_patch) = state.next_boot_patch() {
+            state.record_boot_start_for_patch(next_boot_patch.number)
+        } else {
+            Ok(())
+        }
     })
 }
 
