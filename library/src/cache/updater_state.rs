@@ -149,10 +149,6 @@ impl UpdaterState {
 
 /// Patch management. All patch management is done via the patch manager.
 impl UpdaterState {
-    pub fn on_init(&mut self) -> Result<()> {
-        self.patch_manager.on_init()
-    }
-
     /// Records that we are attempting to boot the patch with patch_number.
     pub fn record_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patch_manager.record_boot_start_for_patch(patch_number)
@@ -201,6 +197,12 @@ impl UpdaterState {
     ) -> anyhow::Result<()> {
         self.patch_manager
             .add_patch(patch.number, &patch.path, hash, signature)
+    }
+
+    /// Removes the artifacts for the patch with patch_number and ensures that we do not attempt to
+    /// boot from it in the future.
+    pub fn uninstall_patch(&mut self, patch_number: usize) -> anyhow::Result<()> {
+        self.patch_manager.remove_patch(patch_number)
     }
 
     /// Returns highest patch number that has been installed for this release.

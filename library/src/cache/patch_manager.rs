@@ -58,9 +58,9 @@ struct PatchesState {
 /// Abstracts the process of managing patches.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
-    /// Triggers any initialization logic needed by the patch manager. This is intended
-    /// to be called when Shorebird is initialized by the Flutter engine (shorebird_init).
-    fn on_init(&mut self) -> Result<()>;
+    // Triggers any initialization logic needed by the patch manager. This is intended
+    // to be called when Shorebird is initialized by the Flutter engine (shorebird_init).
+    //fn reset_boot_state(&mut self) -> Result<()>;
 
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
@@ -75,6 +75,14 @@ pub trait ManagePatches {
         hash: &str,
         signature: Option<&'a str>,
     ) -> Result<()>;
+
+    /// Uninstalls the artifacts for the patch with the given number.
+    ///
+    /// If the patch is the next boot patch, it will be replaced by the last booted patch if the
+    ///   last booted patch passes validation, or None if it does not.
+    /// If the patch is the last booted patch, it will be removed and the last booted patch will be
+    ///   cleared.
+    fn remove_patch(&mut self, patch_number: usize) -> Result<()>;
 
     /// Returns the patch we most recently successfully booted from (usually the currently running patch),
     /// or None if no patch is installed.
@@ -256,6 +264,8 @@ impl PatchManager {
     /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
     /// as the patch we're falling back from, we clear it as well.
     fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) {
+        // Continue even if we fail to delete the patch artifacts. It's more important to not try to
+        // boot from a bad patch than to delete its artifacts.
         // No need to log failure – delete_patch_artifacts logs for us.
         let _ = self.delete_patch_artifacts(bad_patch_number);
 
@@ -316,18 +326,10 @@ impl PatchManager {
 }
 
 impl ManagePatches for PatchManager {
-    fn on_init(&mut self) -> Result<()> {
-        // If we were booting a patch but never recorded a successful boot, we assume that
-        // the patch failed to boot. Attempt to fall back.
-        // TODO: this should record a PatchInstallFailure event. https://github.com/shorebirdtech/updater/issues/188
-        if let Some(failed_boot_patch) = self.patches_state.currently_booting_patch.clone() {
-            self.try_fall_back_from_patch(failed_boot_patch.number);
-            self.patches_state.currently_booting_patch = None;
-            self.save_patches_state()?;
-        }
-
-        Ok(())
-    }
+    // fn reset_boot_state(&mut self) -> Result<()> {
+    //     self.patches_state.currently_booting_patch = None;
+    //     self.save_patches_state()
+    // }
 
     // The explicit lifetime is required for automock to work with Options.
     // See https://github.com/asomers/mockall/issues/61.
@@ -375,6 +377,13 @@ impl ManagePatches for PatchManager {
             .map(|highest_patch_number: usize| highest_patch_number.max(patch_number))
             .or(Some(patch_number));
         self.save_patches_state()
+    }
+
+    fn remove_patch(&mut self, patch_number: usize) -> Result<()> {
+        // Call try_fall_back_from_patch to ensure that we handle the case where we're removing
+        // the next_boot_patch.
+        self.try_fall_back_from_patch(patch_number);
+        Ok(())
     }
 
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo> {
@@ -527,48 +536,6 @@ mod debug_tests {
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
-    }
-}
-
-#[cfg(test)]
-mod on_init_tests {
-    use super::*;
-
-    #[test]
-    fn clears_currently_booting_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a patch and start to boot from it.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-
-        assert_eq!(
-            manager
-                .patches_state
-                .currently_booting_patch
-                .as_ref()
-                .map(|p| p.number),
-            Some(1)
-        );
-        assert_eq!(
-            manager.next_boot_patch().as_ref().map(|p| p.number),
-            Some(1)
-        );
-
-        // Simulate that the app is being started fresh (e.g. from a crash)
-        manager = PatchManager::manager_for_test(&temp_dir);
-        // Ensure that we didn't somehow lose next_boot_patch when recreating the manager.
-        assert_eq!(
-            manager.next_boot_patch().as_ref().map(|p| p.number),
-            Some(1)
-        );
-        manager.on_init()?;
-
-        // Verify that we are no longer booting from patch 1.
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
     }
 }
 
@@ -835,49 +802,6 @@ mod next_boot_patch_tests {
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_if_first_patch_did_not_successfully_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a first patch and record that we started booting it, but not that it succeeded.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-
-        // Simulate that the app is being started fresh (e.g. from a crash)
-        manager = PatchManager::manager_for_test(&temp_dir);
-        manager.on_init()?;
-
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_if_next_patch_did_not_successfully_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a first patch and pretend it booted successfully.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-        manager.record_boot_success()?;
-
-        // Add a second patch and record that we started booting it, but not that it succeeded.
-        manager.add_patch_for_test(&temp_dir, 2)?;
-        manager.record_boot_start_for_patch(2)?;
-
-        // Simulate that the app is being started fresh (e.g. from a crash)
-        manager = PatchManager::manager_for_test(&temp_dir);
-        manager.on_init()?;
-
-        assert!(manager
-            .next_boot_patch()
-            .is_some_and(|patch| patch.number == 1));
 
         Ok(())
     }
