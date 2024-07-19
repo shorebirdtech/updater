@@ -55,7 +55,11 @@ struct PatchesState {
     highest_seen_patch_number: Option<usize>,
 }
 
-/// Abstracts the process of managing patches.
+/// Abstracts the storage of patches on disk.
+///
+/// The impementation of this (PatchManager) should only be responsible for translating what is on
+/// disk into a form that is useful for the updater and vice versa. Some business logic has crept in
+/// in the form of validation, and we should consider moving that into a separate module.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
     /// Copies the patch file at file_path to the manager's directory structure sets
