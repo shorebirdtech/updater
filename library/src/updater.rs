@@ -132,6 +132,20 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
 
 pub fn with_state<F, R>(f: F) -> anyhow::Result<R>
 where
+    F: FnOnce(&UpdaterState) -> anyhow::Result<R>,
+{
+    with_config(|config| {
+        let state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        );
+        f(&state)
+    })
+}
+
+pub fn with_mut_state<F, R>(f: F) -> anyhow::Result<R>
+where
     F: FnOnce(&mut UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
@@ -334,7 +348,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             error!("Failed to report event: {:?}", err);
         }
     }
-    let request = with_state(|state| {
+    let request = with_mut_state(|state| {
         // This will clear any events which got queued between the time we
         // loaded the state now, but that's OK for now.
         let result = state.clear_events();
@@ -375,7 +389,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
     // two threads at once. We could give UpdateState its own lock instead.
-    with_state(|state| {
+    with_mut_state(|state| {
         let patch_info = PatchInfo {
             path: output_path,
             number: patch.number,
@@ -448,7 +462,7 @@ where
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_state(|state| Ok(state.next_boot_patch()))
+    with_mut_state(|state| Ok(state.next_boot_patch()))
 }
 
 /// The patch that was last successfully booted. If we're booting a patch for the first time, this
@@ -470,7 +484,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     //   next is now "patch to boot next"
     info!("Reporting launch start.");
 
-    with_state(|state| {
+    with_mut_state(|state| {
         if let Some(next_boot_patch) = state.next_boot_patch() {
             state.record_boot_start_for_patch(next_boot_patch.number)
         } else {
