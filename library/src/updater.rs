@@ -377,7 +377,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     }
 
     // If we already have the latest available patch downloaded, we don't need to download it again.
-    let next_boot_patch = with_state(|state| Ok(state.next_boot_patch()))?;
+    let next_boot_patch = with_mut_state(|state| Ok(state.next_boot_patch()))?;
     if let Some(next_boot_patch) = next_boot_patch {
         if next_boot_patch.number == patch.number {
             info!("Patch {} is already installed, skipping.", patch.number);
