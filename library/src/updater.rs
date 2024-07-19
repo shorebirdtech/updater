@@ -226,9 +226,6 @@ fn patch_check_request(config: &UpdateConfig) -> PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
         release_version: config.release_version.clone(),
-        // Don't report a patch number to ensure we receive the latest patch.
-        // We will determine during the update process if an available patch should be installed.
-        patch_number: None,
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     }
