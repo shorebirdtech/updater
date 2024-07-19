@@ -711,23 +711,33 @@ mod tests {
 
     #[serial]
     #[test]
-    fn ignore_version_after_marked_bad() {
+    fn ignore_version_after_marked_bad() -> anyhow::Result<()> {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        install_fake_patch(1).unwrap();
-        assert!(crate::next_boot_patch().unwrap().is_some());
+        install_fake_patch(1)?;
+        assert!(crate::next_boot_patch()?.is_some());
         // pretend we booted from it
-        crate::report_launch_start().unwrap();
-        crate::report_launch_success().unwrap();
-        assert!(crate::next_boot_patch().unwrap().is_some());
+        crate::report_launch_start()?;
+        crate::report_launch_success()?;
+        assert!(crate::next_boot_patch()?.is_some());
+        with_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            Ok(())
+        })?;
         // boot again, this time failing
-        crate::report_launch_start().unwrap();
-        crate::report_launch_failure().unwrap();
+        crate::report_launch_start()?;
+        crate::report_launch_failure()?;
         // Technically might need to "reload"
         // ask for current patch (should get none).
-        assert!(crate::next_boot_patch().unwrap().is_none());
+        assert!(crate::next_boot_patch()?.is_none());
+        with_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     #[serial]
