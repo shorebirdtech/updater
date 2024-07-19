@@ -670,6 +670,7 @@ mod next_boot_patch_tests {
         assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
+        assert!(!manager.is_known_bad_patch(1));
 
         // Add patch 2, pretend it failed to boot.
         let file_path = &temp_dir.path().join("patch2.vmcode");
@@ -677,6 +678,7 @@ mod next_boot_patch_tests {
         assert!(manager.add_patch(2, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(2).is_ok());
         assert!(manager.record_boot_failure_for_patch(2).is_ok());
+        assert!(manager.is_known_bad_patch(2));
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
@@ -711,6 +713,13 @@ mod next_boot_patch_tests {
         // Verify that we will not attempt to boot from either patch.
         assert!(manager.next_boot_patch().is_none());
 
+        // Patch 1 should *not* be considered bad, as we successfully booted from it and it only
+        // became corrupted after that. Downloading it a second time might resolve the issue.
+        assert!(!manager.is_known_bad_patch(1));
+
+        // Patch 2 failed to boot, so it should be considered bad.
+        assert!(manager.is_known_bad_patch(2));
+
         Ok(())
     }
 
@@ -726,6 +735,7 @@ mod next_boot_patch_tests {
 
         // Because there is no previous patch, we should not attempt to boot any patch.
         assert!(manager.next_boot_patch().is_none());
+        assert!(manager.is_known_bad_patch(1));
 
         Ok(())
     }
@@ -747,6 +757,8 @@ mod next_boot_patch_tests {
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
+        assert!(!manager.is_known_bad_patch(1));
+        assert!(manager.is_known_bad_patch(2));
 
         Ok(())
     }
@@ -950,7 +962,16 @@ mod fall_back_tests {
         manager.try_fall_back_from_patch(1);
 
         assert!(manager.patches_state.last_booted_patch.is_none());
-        assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 2);
+        assert_eq!(
+            manager
+                .patches_state
+                .next_boot_patch
+                .clone()
+                .unwrap()
+                .number,
+            2
+        );
+        assert!(manager.is_known_bad_patch(1));
 
         Ok(())
     }
@@ -1131,6 +1152,7 @@ mod record_boot_failure_for_patch_tests {
         assert_eq!(manager.last_successfully_booted_patch().unwrap().number, 1);
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
         assert!(patch_artifact_path.exists());
+        assert!(!manager.is_known_bad_patch(1));
 
         // Now pretend it failed to boot
         assert!(manager.record_boot_start_for_patch(1).is_ok());
