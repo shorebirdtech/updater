@@ -3,6 +3,11 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::{
+    config::{current_arch, current_platform, UpdateConfig},
+    time,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventType {
     PatchInstallSuccess,
@@ -61,4 +66,19 @@ pub struct PatchEvent {
 
     /// When this event occurred as a Unix epoch timestamp in seconds.
     pub timestamp: u64,
+}
+
+impl PatchEvent {
+    /// Creates a `PatchEvent` for the given `EventType` and patch number for reporting to the server.
+    pub fn new(config: &UpdateConfig, event_type: EventType, patch_number: usize) -> PatchEvent {
+        PatchEvent {
+            app_id: config.app_id.clone(),
+            arch: current_arch().to_string(),
+            identifier: event_type,
+            patch_number,
+            platform: current_platform().to_string(),
+            release_version: config.release_version.clone(),
+            timestamp: time::unix_timestamp(),
+        }
+    }
 }

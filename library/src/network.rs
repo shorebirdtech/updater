@@ -173,14 +173,12 @@ pub struct PatchCheckRequest {
     /// running.  Patches are keyed to release versions and will only be
     /// offered to clients running the same release version.
     pub release_version: String,
-    /// The latest patch number that the client has downloaded.
-    /// Not necessarily the one it's running (if some have been marked bad).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub patch_number: Option<usize>,
     /// Platform (e.g. "android", "ios", "windows", "macos", "linux").
     pub platform: String,
     /// Architecture we're running (e.g. "aarch64", "x86", "x86_64").
     pub arch: String,
+    // We specifically do not send a patch number as part of this request because we always want to
+    // know what the latest available patch is.
 }
 
 /// The request body for the create patch install event endpoint.
@@ -290,7 +288,6 @@ mod tests {
                 app_id: "".to_string(),
                 channel: "".to_string(),
                 release_version: "".to_string(),
-                patch_number: None,
                 platform: "".to_string(),
                 arch: "".to_string(),
             },

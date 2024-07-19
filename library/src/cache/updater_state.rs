@@ -149,10 +149,6 @@ impl UpdaterState {
 
 /// Patch management. All patch management is done via the patch manager.
 impl UpdaterState {
-    pub fn on_init(&mut self) -> Result<()> {
-        self.patch_manager.on_init()
-    }
-
     /// Records that we are attempting to boot the patch with patch_number.
     pub fn record_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patch_manager.record_boot_start_for_patch(patch_number)
@@ -203,15 +199,9 @@ impl UpdaterState {
             .add_patch(patch.number, &patch.path, hash, signature)
     }
 
-    /// Returns highest patch number that has been installed for this release.
-    /// This should represent the latest patch we still have on disk so as
-    /// to prevent re-downloading patches we already have.
-    /// This should essentially be the max of the patch number in the slots
-    /// and the bad patch list (we don't need to keep bad patches on disk
-    /// to know that they're bad).
-    /// Used by the patch check logic.
-    pub fn latest_seen_patch_number(&self) -> Option<usize> {
-        self.patch_manager.highest_seen_patch_number()
+    /// Returns true if we have previously failed to boot from patch `patch_number`.
+    pub fn is_known_bad_patch(&self, patch_number: usize) -> bool {
+        self.patch_manager.is_known_bad_patch(patch_number)
     }
 }
 
@@ -289,7 +279,6 @@ mod tests {
         let mut next_version_state =
             UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None);
         assert!(next_version_state.next_boot_patch().is_none());
-        assert!(next_version_state.latest_seen_patch_number().is_none());
     }
 
     #[test]
@@ -399,14 +388,19 @@ mod tests {
     }
 
     #[test]
-    fn latest_patch_number_returns_value_from_patch_manager() {
-        let highest_patch_number = 1;
+    fn is_known_bad_patch_returns_value_from_patch_manager() {
         let tmp_dir = TempDir::new("example").unwrap();
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
-            .expect_highest_seen_patch_number()
-            .return_const(Some(highest_patch_number));
+            .expect_is_known_bad_patch()
+            .with(eq(1))
+            .return_const(true);
+        mock_manage_patches
+            .expect_is_known_bad_patch()
+            .with(eq(2))
+            .return_const(false);
         let state = test_state(&tmp_dir, mock_manage_patches);
-        assert_eq!(state.latest_seen_patch_number(), Some(highest_patch_number));
+        assert!(state.is_known_bad_patch(1));
+        assert!(!state.is_known_bad_patch(2));
     }
 }

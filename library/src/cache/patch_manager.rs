@@ -2,7 +2,10 @@ use super::{disk_io, signing, PatchInfo};
 use anyhow::{bail, Context, Result};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 #[cfg(test)]
 use mockall::automock;
@@ -50,18 +53,19 @@ struct PatchesState {
     ///  - the system initializes (on_init, we take this to mean the patch failed to boot)
     currently_booting_patch: Option<PatchMetadata>,
 
-    /// The highest patch number we have seen. This may be higher than the last booted
-    /// patch or next patch if we downloaded a patch that failed to boot.
-    highest_seen_patch_number: Option<usize>,
+    /// A list of patch numbers that we have tried and failed to install.
+    /// We should never attempt to download or install these again for the
+    /// current release.
+    known_bad_patches: HashSet<usize>,
 }
 
-/// Abstracts the process of managing patches.
+/// Abstracts the storage of patches on disk.
+///
+/// The impementation of this (PatchManager) should only be responsible for translating what is on
+/// disk into a form that is useful for the updater and vice versa. Some business logic has crept in
+/// in the form of validation, and we should consider moving that into a separate module.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
-    /// Triggers any initialization logic needed by the patch manager. This is intended
-    /// to be called when Shorebird is initialized by the Flutter engine (shorebird_init).
-    fn on_init(&mut self) -> Result<()>;
-
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
     ///
@@ -103,9 +107,8 @@ pub trait ManagePatches {
     /// that it will never be returned as the next boot or last booted patch.
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()>;
 
-    /// The highest patch number that has been added. This may be higher than the
-    /// last booted or next boot patch if we downloaded a patch that failed to boot.
-    fn highest_seen_patch_number(&self) -> Option<usize>;
+    /// Whether we have failed to boot from the patch with `patch_number`.
+    fn is_known_bad_patch(&self, patch_number: usize) -> bool;
 
     /// Resets the patch manager to its initial state, removing all patches. This is
     /// intended to be used when a new release version is installed.
@@ -256,6 +259,8 @@ impl PatchManager {
     /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
     /// as the patch we're falling back from, we clear it as well.
     fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) {
+        // Continue even if we fail to delete the patch artifacts. It's more important to not try to
+        // boot from a bad patch than to delete its artifacts.
         // No need to log failure – delete_patch_artifacts logs for us.
         let _ = self.delete_patch_artifacts(bad_patch_number);
 
@@ -316,19 +321,6 @@ impl PatchManager {
 }
 
 impl ManagePatches for PatchManager {
-    fn on_init(&mut self) -> Result<()> {
-        // If we were booting a patch but never recorded a successful boot, we assume that
-        // the patch failed to boot. Attempt to fall back.
-        // TODO: this should record a PatchInstallFailure event. https://github.com/shorebirdtech/updater/issues/188
-        if let Some(failed_boot_patch) = self.patches_state.currently_booting_patch.clone() {
-            self.try_fall_back_from_patch(failed_boot_patch.number);
-            self.patches_state.currently_booting_patch = None;
-            self.save_patches_state()?;
-        }
-
-        Ok(())
-    }
-
     // The explicit lifetime is required for automock to work with Options.
     // See https://github.com/asomers/mockall/issues/61.
     #[allow(clippy::needless_lifetimes)]
@@ -369,11 +361,6 @@ impl ManagePatches for PatchManager {
         }
 
         self.patches_state.next_boot_patch = Some(new_patch);
-        self.patches_state.highest_seen_patch_number = self
-            .patches_state
-            .highest_seen_patch_number
-            .map(|highest_patch_number: usize| highest_patch_number.max(patch_number))
-            .or(Some(patch_number));
         self.save_patches_state()
     }
 
@@ -452,12 +439,13 @@ impl ManagePatches for PatchManager {
 
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patches_state.currently_booting_patch = None;
+        self.patches_state.known_bad_patches.insert(patch_number);
         self.try_fall_back_from_patch(patch_number);
         self.save_patches_state()
     }
 
-    fn highest_seen_patch_number(&self) -> Option<usize> {
-        self.patches_state.highest_seen_patch_number
+    fn is_known_bad_patch(&self, patch_number: usize) -> bool {
+        self.patches_state.known_bad_patches.contains(&patch_number)
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -523,52 +511,10 @@ mod debug_tests {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
         let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, highest_seen_patch_number: None }}, patch_public_key: Some(\"public_key\") }}",
+            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, known_bad_patches: {{}} }}, patch_public_key: Some(\"public_key\") }}",
             temp_dir.path().display()
         );
         assert_eq!(format!("{:?}", patch_manager), expected_str);
-    }
-}
-
-#[cfg(test)]
-mod on_init_tests {
-    use super::*;
-
-    #[test]
-    fn clears_currently_booting_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a patch and start to boot from it.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-
-        assert_eq!(
-            manager
-                .patches_state
-                .currently_booting_patch
-                .as_ref()
-                .map(|p| p.number),
-            Some(1)
-        );
-        assert_eq!(
-            manager.next_boot_patch().as_ref().map(|p| p.number),
-            Some(1)
-        );
-
-        // Simulate that the app is being started fresh (e.g. from a crash)
-        manager = PatchManager::manager_for_test(&temp_dir);
-        // Ensure that we didn't somehow lose next_boot_patch when recreating the manager.
-        assert_eq!(
-            manager.next_boot_patch().as_ref().map(|p| p.number),
-            Some(1)
-        );
-        manager.on_init()?;
-
-        // Verify that we are no longer booting from patch 1.
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
     }
 }
 
@@ -620,36 +566,6 @@ mod add_patch_tests {
             })
         );
         assert!(!file_path.exists());
-        assert_eq!(manager.highest_seen_patch_number(), Some(patch_number));
-    }
-
-    #[test]
-    fn does_not_set_higher_highest_seen_patch_number_if_added_patch_is_lower() -> Result<()> {
-        let patch_file_contents = "patch contents";
-
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-        assert!(manager.highest_seen_patch_number().is_none());
-
-        // Add patch 1
-        let file_path = &temp_dir.path().join("patch.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
-        assert_eq!(manager.highest_seen_patch_number(), Some(1));
-
-        // Add patch 4, expect 4 to be the highest patch number we've seen
-        let file_path = &temp_dir.path().join("patch.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(4, file_path, "hash", None).is_ok());
-        assert_eq!(manager.highest_seen_patch_number(), Some(4));
-
-        // Add patch 3, expect 4 to still be the highest patch number we've seen
-        let file_path = &temp_dir.path().join("patch.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(3, file_path, "hash", None).is_ok());
-        assert_eq!(manager.highest_seen_patch_number(), Some(4));
-
-        Ok(())
     }
 }
 
@@ -758,6 +674,7 @@ mod next_boot_patch_tests {
         assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
+        assert!(!manager.is_known_bad_patch(1));
 
         // Add patch 2, pretend it failed to boot.
         let file_path = &temp_dir.path().join("patch2.vmcode");
@@ -765,6 +682,7 @@ mod next_boot_patch_tests {
         assert!(manager.add_patch(2, file_path, "hash", None).is_ok());
         assert!(manager.record_boot_start_for_patch(2).is_ok());
         assert!(manager.record_boot_failure_for_patch(2).is_ok());
+        assert!(manager.is_known_bad_patch(2));
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
@@ -799,6 +717,13 @@ mod next_boot_patch_tests {
         // Verify that we will not attempt to boot from either patch.
         assert!(manager.next_boot_patch().is_none());
 
+        // Patch 1 should *not* be considered bad, as we successfully booted from it and it only
+        // became corrupted after that. Downloading it a second time might resolve the issue.
+        assert!(!manager.is_known_bad_patch(1));
+
+        // Patch 2 failed to boot, so it should be considered bad.
+        assert!(manager.is_known_bad_patch(2));
+
         Ok(())
     }
 
@@ -814,6 +739,7 @@ mod next_boot_patch_tests {
 
         // Because there is no previous patch, we should not attempt to boot any patch.
         assert!(manager.next_boot_patch().is_none());
+        assert!(manager.is_known_bad_patch(1));
 
         Ok(())
     }
@@ -835,49 +761,8 @@ mod next_boot_patch_tests {
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_if_first_patch_did_not_successfully_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a first patch and record that we started booting it, but not that it succeeded.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-
-        // Simulate that the app is being started fresh (e.g. from a crash)
-        manager = PatchManager::manager_for_test(&temp_dir);
-        manager.on_init()?;
-
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_if_next_patch_did_not_successfully_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a first patch and pretend it booted successfully.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-        manager.record_boot_success()?;
-
-        // Add a second patch and record that we started booting it, but not that it succeeded.
-        manager.add_patch_for_test(&temp_dir, 2)?;
-        manager.record_boot_start_for_patch(2)?;
-
-        // Simulate that the app is being started fresh (e.g. from a crash)
-        manager = PatchManager::manager_for_test(&temp_dir);
-        manager.on_init()?;
-
-        assert!(manager
-            .next_boot_patch()
-            .is_some_and(|patch| patch.number == 1));
+        assert!(!manager.is_known_bad_patch(1));
+        assert!(manager.is_known_bad_patch(2));
 
         Ok(())
     }
@@ -1081,7 +966,16 @@ mod fall_back_tests {
         manager.try_fall_back_from_patch(1);
 
         assert!(manager.patches_state.last_booted_patch.is_none());
-        assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 2);
+        assert_eq!(
+            manager
+                .patches_state
+                .next_boot_patch
+                .clone()
+                .unwrap()
+                .number,
+            2
+        );
+        assert!(manager.is_known_bad_patch(1));
 
         Ok(())
     }
@@ -1231,6 +1125,7 @@ mod record_boot_failure_for_patch_tests {
         manager.add_patch_for_test(&temp_dir, 1)?;
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_success().is_ok());
+        assert!(!manager.is_known_bad_patch(1));
         let succeeded_patch_artifact_path = manager.patch_artifact_path(1);
 
         manager.add_patch_for_test(&temp_dir, 2)?;
@@ -1243,6 +1138,7 @@ mod record_boot_failure_for_patch_tests {
         assert!(manager.record_boot_start_for_patch(2).is_ok());
         assert!(manager.record_boot_failure_for_patch(2).is_ok());
         assert!(!failed_patch_artifact_path.exists());
+        assert!(manager.is_known_bad_patch(2));
 
         Ok(())
     }
@@ -1260,34 +1156,15 @@ mod record_boot_failure_for_patch_tests {
         assert_eq!(manager.last_successfully_booted_patch().unwrap().number, 1);
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
         assert!(patch_artifact_path.exists());
+        assert!(!manager.is_known_bad_patch(1));
 
         // Now pretend it failed to boot
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_failure_for_patch(1).is_ok());
         assert!(manager.last_successfully_booted_patch().is_none());
         assert!(manager.next_boot_patch().is_none());
+        assert!(manager.is_known_bad_patch(1));
         assert!(!patch_artifact_path.exists());
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod highest_seen_patch_number_tests {
-    use super::*;
-    use anyhow::{Ok, Result};
-    use tempdir::TempDir;
-
-    #[test]
-    fn returns_value_from_internal_state() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        assert!(manager.patches_state.highest_seen_patch_number.is_none());
-        assert!(manager.highest_seen_patch_number().is_none());
-
-        manager.patches_state.highest_seen_patch_number = Some(1);
-        assert_eq!(manager.highest_seen_patch_number(), Some(1));
 
         Ok(())
     }
