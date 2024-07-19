@@ -28,10 +28,12 @@ pub use crate::config::testing_reset_config;
 #[cfg(test)]
 pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequestFn};
 
+#[derive(Debug, PartialEq)]
 pub enum UpdateStatus {
     NoUpdate,
     UpdateInstalled,
     UpdateHadError,
+    UpdateIsBadPatch,
 }
 
 impl Display for UpdateStatus {
@@ -40,11 +42,18 @@ impl Display for UpdateStatus {
             UpdateStatus::NoUpdate => write!(f, "No update"),
             UpdateStatus::UpdateInstalled => write!(f, "Update installed"),
             UpdateStatus::UpdateHadError => write!(f, "Update had error"),
+            UpdateStatus::UpdateIsBadPatch => write!(
+                f,
+                "Update available but previously failed to install. Not installing."
+            ),
         }
     }
 }
 
-/// Returned when a call to `init` is not successful.
+/// Returned when a call to `init` is not successful. These indicate that the specific call to
+/// `init` was not successful, but the library may still be in a valid state (e.g., if
+/// `AlreadyInitialized` is returned, the library is still initialized). Callers can safely ignore
+/// these errors if they are not interested in the specific reason why `init` failed.
 #[derive(Debug, PartialEq)]
 pub enum InitError {
     InvalidArgument(String, String),
@@ -225,15 +234,12 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
-fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchCheckRequest {
-    let latest_patch_number = state.latest_seen_patch_number();
-
+fn patch_check_request(config: &UpdateConfig) -> PatchCheckRequest {
     // Send the request to the server.
     PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
         release_version: config.release_version.clone(),
-        patch_number: latest_patch_number,
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     }
@@ -241,17 +247,9 @@ fn patch_check_request(config: &UpdateConfig, state: &UpdaterState) -> PatchChec
 
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     let (request, url, request_fn) = with_config(|config| {
-        // Load UpdaterState from disk
-        // If there is no state, make an empty state.
-        let state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-
         // Get the required info to make the request.
         Ok((
-            patch_check_request(config, &state),
+            patch_check_request(config),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -356,7 +354,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(patch_check_request(&config, &state))
+        Ok(patch_check_request(&config))
     })?;
 
     // Check for update.
@@ -367,6 +365,25 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     }
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
+
+    // Don't install a patch if it has previously failed to boot.
+    let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch.number)))?;
+    if is_known_bad_patch {
+        info!(
+            "Patch {} has previously failed to boot, skipping.",
+            patch.number
+        );
+        return Ok(UpdateStatus::UpdateIsBadPatch);
+    }
+
+    // If we already have the latest available patch downloaded, we don't need to download it again.
+    let next_boot_patch = with_state(|state| Ok(state.next_boot_patch()))?;
+    if let Some(next_boot_patch) = next_boot_patch {
+        if next_boot_patch.number == patch.number {
+            info!("Patch {} is already installed, skipping.", patch.number);
+            return Ok(UpdateStatus::NoUpdate);
+        }
+    }
 
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
@@ -597,7 +614,7 @@ mod tests {
         config::{testing_reset_config, with_config},
         events::EventType,
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
-        time, with_state, ExternalFileProvider,
+        time, with_state, ExternalFileProvider, Patch,
     };
 
     #[derive(Debug, Clone)]
@@ -708,23 +725,33 @@ mod tests {
 
     #[serial]
     #[test]
-    fn ignore_version_after_marked_bad() {
+    fn ignore_version_after_marked_bad() -> anyhow::Result<()> {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
-        install_fake_patch(1).unwrap();
-        assert!(crate::next_boot_patch().unwrap().is_some());
+        install_fake_patch(1)?;
+        assert!(crate::next_boot_patch()?.is_some());
         // pretend we booted from it
-        crate::report_launch_start().unwrap();
-        crate::report_launch_success().unwrap();
-        assert!(crate::next_boot_patch().unwrap().is_some());
+        crate::report_launch_start()?;
+        crate::report_launch_success()?;
+        assert!(crate::next_boot_patch()?.is_some());
+        with_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            Ok(())
+        })?;
         // boot again, this time failing
-        crate::report_launch_start().unwrap();
-        crate::report_launch_failure().unwrap();
+        crate::report_launch_start()?;
+        crate::report_launch_failure()?;
         // Technically might need to "reload"
         // ask for current patch (should get none).
-        assert!(crate::next_boot_patch().unwrap().is_none());
+        assert!(crate::next_boot_patch()?.is_none());
+        with_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     #[serial]
@@ -906,6 +933,84 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn does_not_download_known_bad_patch() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(crate::network::Patch {
+                number: 1,
+                download_url: "download_url".to_string(),
+                hash: "hash".to_string(),
+                hash_signature: None,
+            }),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let mut updater_state = with_config(|config| {
+            let mut state = UpdaterState::load_or_new_on_error(
+                &config.storage_dir,
+                &config.release_version,
+                config.patch_public_key.as_deref(),
+            );
+
+            state.record_boot_failure_for_patch(1)?;
+
+            Ok(state)
+        })?;
+
+        // Make sure we're starting with no next boot patch.
+        assert!(updater_state.next_boot_patch().is_none());
+
+        let result = super::update()?;
+
+        // Ensure that we've skipped the known bad patch.
+        assert_eq!(result, crate::UpdateStatus::UpdateIsBadPatch);
+        assert!(updater_state.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn does_not_download_already_installed_patch() -> anyhow::Result<()> {
+        let patch_number = 1;
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: patch_number,
+                hash: "#".to_string(),
+                download_url: "download_url".to_string(),
+                hash_signature: None,
+            }),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(patch_number)?;
+
+        let update_status = super::update()?;
+
+        assert_eq!(update_status, crate::UpdateStatus::NoUpdate);
+
+        Ok(())
     }
 
     #[serial]
