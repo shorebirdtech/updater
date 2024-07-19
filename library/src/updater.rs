@@ -220,15 +220,15 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
-fn patch_check_request(config: &UpdateConfig, state: &mut UpdaterState) -> PatchCheckRequest {
-    let patch_number = state.next_boot_patch().map(|p| p.number);
-
+fn patch_check_request(config: &UpdateConfig) -> PatchCheckRequest {
     // Send the request to the server.
     PatchCheckRequest {
         app_id: config.app_id.clone(),
         channel: config.channel.clone(),
         release_version: config.release_version.clone(),
-        patch_number: patch_number,
+        // Don't report a patch number to ensure we receive the latest patch.
+        // We will determine during the update process if an available patch should be installed.
+        patch_number: None,
         platform: current_platform().to_string(),
         arch: current_arch().to_string(),
     }
@@ -236,17 +236,9 @@ fn patch_check_request(config: &UpdateConfig, state: &mut UpdaterState) -> Patch
 
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     let (request, url, request_fn) = with_config(|config| {
-        // Load UpdaterState from disk
-        // If there is no state, make an empty state.
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
-
         // Get the required info to make the request.
         Ok((
-            patch_check_request(config, &mut state),
+            patch_check_request(config),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -351,7 +343,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(patch_check_request(&config, state))
+        Ok(patch_check_request(&config))
     })?;
 
     // Check for update.
@@ -362,6 +354,8 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     }
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
+
+    // Don't install a patch if it has previously failed to boot.
     let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch.number)))?;
     if is_known_bad_patch {
         info!(
@@ -369,6 +363,15 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             patch.number
         );
         return Ok(UpdateStatus::UpdateIsBadPatch);
+    }
+
+    // If we already have the latest available patch downloaded, we don't need to download it again.
+    let next_boot_patch = with_state(|state| Ok(state.next_boot_patch()))?;
+    if let Some(next_boot_patch) = next_boot_patch {
+        if next_boot_patch.number == patch.number {
+            info!("Patch {} is already installed, skipping.", patch.number);
+            return Ok(UpdateStatus::NoUpdate);
+        }
     }
 
     let download_dir = PathBuf::from(&config.download_dir);
@@ -600,7 +603,7 @@ mod tests {
         config::{testing_reset_config, with_config},
         events::EventType,
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
-        time, with_state, ExternalFileProvider,
+        time, with_state, ExternalFileProvider, Patch,
     };
 
     #[derive(Debug, Clone)]
@@ -953,6 +956,38 @@ mod tests {
         // Ensure that we've skipped the known bad patch.
         assert_eq!(result, crate::UpdateStatus::UpdateIsBadPatch);
         assert!(updater_state.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn does_not_download_already_installed_patch() -> anyhow::Result<()> {
+        let patch_number = 1;
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: patch_number,
+                hash: "#".to_string(),
+                download_url: "download_url".to_string(),
+                hash_signature: None,
+            }),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(patch_number)?;
+
+        let update_status = super::update()?;
+
+        assert_eq!(update_status, crate::UpdateStatus::NoUpdate);
 
         Ok(())
     }
