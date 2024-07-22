@@ -360,6 +360,21 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Check for update.
     let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
+
+    with_mut_state(|state| {
+        if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
+            if !rolled_back_patches.is_empty() {
+                info!("Rolled back patches: {:?}", rolled_back_patches);
+                for patch_number in rolled_back_patches {
+                    info!("Attempting uninstall of patch {}...", patch_number);
+                    state.uninstall_patch(patch_number)?;
+                }
+            }
+        }
+
+        Ok(())
+    })?;
+
     if !response.patch_available {
         return Ok(UpdateStatus::NoUpdate);
     }
@@ -618,14 +633,14 @@ mod tests {
     };
 
     #[derive(Debug, Clone)]
-    struct FakeExternalFileProvider {}
+    pub struct FakeExternalFileProvider {}
     impl ExternalFileProvider for FakeExternalFileProvider {
         fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))
         }
     }
 
-    fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
+    pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
         testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         let mut yaml = "app_id: 1234".to_string();
@@ -633,12 +648,19 @@ mod tests {
             yaml += &format!("\nbase_url: {}", url);
         }
 
+        let libapp_path = tmp_dir
+            .path()
+            .join("lib/arch/libapp.so")
+            .to_str()
+            .unwrap()
+            .to_string();
+
         crate::init(
             crate::AppConfig {
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
-                original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
+                original_libapp_paths: vec![libapp_path],
             },
             Box::new(FakeExternalFileProvider {}),
             &yaml,
@@ -646,7 +668,7 @@ mod tests {
         .unwrap();
     }
 
-    fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
+    pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
         with_config(|config| {
             let download_dir = std::path::PathBuf::from(&config.download_dir);
             let artifact_path = download_dir.join(patch_number.to_string());
@@ -947,6 +969,7 @@ mod tests {
                 hash: "hash".to_string(),
                 hash_signature: None,
             }),
+            rolled_back_patch_numbers: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -994,6 +1017,7 @@ mod tests {
                 download_url: "download_url".to_string(),
                 hash_signature: None,
             }),
+            rolled_back_patch_numbers: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1025,6 +1049,7 @@ mod tests {
         let check_response = PatchCheckResponse {
             patch_available: false,
             patch: None,
+            rolled_back_patch_numbers: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1100,6 +1125,7 @@ mod tests {
                     return Ok(PatchCheckResponse {
                         patch_available: false,
                         patch: None,
+                        rolled_back_patch_numbers: None,
                     });
                 }
 
@@ -1130,5 +1156,137 @@ mod tests {
         // if with_config isn't waiting for the patch check thread. If it is waiting, this test will
         // take patch_check_delay (defined above) to complete and fail due to the unreachable!() in
         // the patch check callback.
+    }
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempdir::TempDir;
+
+    use crate::network::PatchCheckResponse;
+
+    use super::{
+        report_launch_start, report_launch_success,
+        tests::{init_for_testing, install_fake_patch},
+        with_mut_state, Patch,
+    };
+
+    fn write_fake_zip(zip_path: &str, libapp_contents: &[u8]) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(zip_path).unwrap());
+        let options = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
+        let app_path = crate::android::get_relative_lib_path("libapp.so");
+        zip.start_file(app_path.to_str().unwrap(), options).unwrap();
+        zip.write_all(libapp_contents).unwrap();
+        zip.finish().unwrap();
+    }
+
+    /// If the next_boot_patch is rolled back, the updater should roll back to the release version
+    /// if no other patches are available on disk.
+    #[serial]
+    #[test]
+    fn rolls_back_from_current_patch_to_release() -> Result<()> {
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: false,
+            patch: None,
+            rolled_back_patch_numbers: Some(vec![1]),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        crate::update()?;
+
+        with_mut_state(|state| {
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// If an older patch is provided by the patch check response, verify that we uninstall the
+    /// rolled back patch and install the older patch specified by the patch check response.
+    #[serial]
+    #[test]
+    fn rolls_back_to_previous_patch() -> Result<()> {
+        let mut server = mockito::Server::new();
+        let download_url = format!("{}/patch/1", server.url());
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: 1,
+                download_url: download_url.to_string(),
+                // Generated by `string_patch "hello world" "hello tests"`
+                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
+                    .to_string(),
+                hash_signature: None,
+            }),
+            rolled_back_patch_numbers: Some(vec![2]),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let _ = server
+            .mock("GET", "/patch/1")
+            .with_status(200)
+            .with_body(
+                // Generated by `string_patch "hello world" "hello tests"`
+                [
+                    40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0,
+                    0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
+                ],
+            )
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_zip(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Install patch 2, pretend we're starting to boot from it, but don't report success or failure
+        // to ensure we still have patch 1 on disk.
+        install_fake_patch(2)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        with_mut_state(|state| {
+            assert_eq!(state.current_boot_patch().map(|p| p.number), Some(2));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            Ok(())
+        })?;
+
+        assert!(crate::update().is_ok());
+
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        Ok(())
     }
 }

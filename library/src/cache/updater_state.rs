@@ -199,6 +199,12 @@ impl UpdaterState {
             .add_patch(patch.number, &patch.path, hash, signature)
     }
 
+    /// Removes the artifacts for patch `patch_number` from disk and updates state to ensure the
+    /// uninstalled patch is not booted in the future.
+    pub fn uninstall_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.patch_manager.remove_patch(patch_number)
+    }
+
     /// Returns true if we have previously failed to boot from patch `patch_number`.
     pub fn is_known_bad_patch(&self, patch_number: usize) -> bool {
         self.patch_manager.is_known_bad_patch(patch_number)

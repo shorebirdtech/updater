@@ -190,13 +190,20 @@ pub struct CreatePatchEventRequest {
     event: PatchEvent,
 }
 
+/// A response from the server telling us the latest state of patches for this release.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PatchCheckResponse {
     pub patch_available: bool,
     #[serde(default)]
     pub patch: Option<Patch>,
+
+    /// A list of patch numbers that have been rolled back by app developers. These should be
+    /// uninstalled from the device and not booted from.
+    #[serde(default)]
+    pub rolled_back_patch_numbers: Option<Vec<usize>>,
 }
 
+/// Reports a patch event (e.g., install success/failure) to the server.
 pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Result<()> {
     let request = CreatePatchEventRequest { event };
 
@@ -205,6 +212,7 @@ pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Res
     report_event_fn(url, request)
 }
 
+/// Downloads the file at `url` to `path`.
 pub fn download_to_path(
     network_hooks: &NetworkHooks,
     url: &str,

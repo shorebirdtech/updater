@@ -482,6 +482,7 @@ mod test {
                         download_url: "ignored".to_owned(),
                         hash_signature: None,
                     }),
+                    rolled_back_patch_numbers: None,
                 })
             },
             |_url| {
@@ -584,6 +585,7 @@ mod test {
                         download_url: "ignored".to_owned(),
                         hash_signature: None,
                     }),
+                    rolled_back_patch_numbers: None,
                 })
             },
             |_url| {

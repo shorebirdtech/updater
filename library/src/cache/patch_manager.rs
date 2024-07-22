@@ -110,6 +110,10 @@ pub trait ManagePatches {
     /// Whether we have failed to boot from the patch with `patch_number`.
     fn is_known_bad_patch(&self, patch_number: usize) -> bool;
 
+    /// Deletes artifacts for the provided patch_number if they exist.
+    /// If the patch is the next_boot_patch, it is cleared.
+    fn remove_patch(&mut self, patch_number: usize) -> Result<()>;
+
     /// Resets the patch manager to its initial state, removing all patches. This is
     /// intended to be used when a new release version is installed.
     fn reset(&mut self) -> Result<()>;
@@ -243,9 +247,13 @@ impl PatchManager {
     }
 
     fn delete_patch_artifacts(&mut self, patch_number: usize) -> Result<()> {
-        info!("Deleting patch artifacts for patch {}", patch_number);
-
         let patch_dir = self.patch_dir(patch_number);
+        if !patch_dir.exists() {
+            debug!("Patch {} not installed, nothing to delete", patch_number);
+            return Ok(());
+        }
+
+        info!("Deleting patch artifacts for patch {}", patch_number);
 
         std::fs::remove_dir_all(&patch_dir)
             .map_err(|e| {
@@ -258,7 +266,7 @@ impl PatchManager {
     /// Deletes artifacts for the provided bad_patch_number and attempts to set the next_boot_patch to the last
     /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
     /// as the patch we're falling back from, we clear it as well.
-    fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) {
+    fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) -> Result<()> {
         // Continue even if we fail to delete the patch artifacts. It's more important to not try to
         // boot from a bad patch than to delete its artifacts.
         // No need to log failure – delete_patch_artifacts logs for us.
@@ -284,6 +292,8 @@ impl PatchManager {
                 let _ = self.delete_patch_artifacts(last_boot_patch.number);
             }
         }
+
+        self.save_patches_state()
     }
 
     /// Deletes all patch artifacts with numbers less than patch_number.
@@ -387,10 +397,11 @@ impl ManagePatches for PatchManager {
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
             error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
 
-            self.try_fall_back_from_patch(next_boot_patch.number);
-
-            if let Err(e) = self.save_patches_state() {
-                error!("Failed to save patches state: {}", e);
+            if let Err(e) = self.try_fall_back_from_patch(next_boot_patch.number) {
+                error!(
+                    "Failed to fall back from next_boot_patch {}: {}",
+                    next_boot_patch.number, e
+                );
             }
         }
 
@@ -440,12 +451,15 @@ impl ManagePatches for PatchManager {
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patches_state.currently_booting_patch = None;
         self.patches_state.known_bad_patches.insert(patch_number);
-        self.try_fall_back_from_patch(patch_number);
-        self.save_patches_state()
+        self.try_fall_back_from_patch(patch_number)
     }
 
     fn is_known_bad_patch(&self, patch_number: usize) -> bool {
         self.patches_state.known_bad_patches.contains(&patch_number)
+    }
+
+    fn remove_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.try_fall_back_from_patch(patch_number)
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -871,7 +885,7 @@ mod fall_back_tests {
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
 
-        manager.try_fall_back_from_patch(1);
+        manager.try_fall_back_from_patch(1)?;
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
@@ -892,7 +906,7 @@ mod fall_back_tests {
             hash: "hash".to_string(),
             signature: Some("signature".to_owned()),
         });
-        manager.try_fall_back_from_patch(1);
+        manager.try_fall_back_from_patch(1)?;
 
         assert_eq!(
             manager.patches_state.next_boot_patch,
@@ -915,7 +929,7 @@ mod fall_back_tests {
         // Download and fall back from patch 2
         manager.add_patch_for_test(&temp_dir, 2)?;
 
-        manager.try_fall_back_from_patch(2);
+        manager.try_fall_back_from_patch(2)?;
 
         assert_eq!(manager.patches_state.last_booted_patch.unwrap().number, 1);
         assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 1);
@@ -938,7 +952,7 @@ mod fall_back_tests {
         // Download and fall back from patch 2
         manager.add_patch_for_test(&temp_dir, 2)?;
 
-        manager.try_fall_back_from_patch(2);
+        manager.try_fall_back_from_patch(2)?;
 
         // Neither patch should exist.
         assert!(manager.patches_state.last_booted_patch.is_none());
@@ -963,7 +977,7 @@ mod fall_back_tests {
 
         manager.record_boot_failure_for_patch(1)?;
 
-        manager.try_fall_back_from_patch(1);
+        manager.try_fall_back_from_patch(1)?;
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert_eq!(
@@ -999,7 +1013,7 @@ mod fall_back_tests {
         let patch_dir = manager.patch_dir(2);
         std::fs::remove_dir_all(patch_dir)?;
 
-        manager.try_fall_back_from_patch(2);
+        manager.try_fall_back_from_patch(2)?;
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
