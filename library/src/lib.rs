@@ -19,6 +19,9 @@ mod yaml;
 #[cfg(any(target_os = "android", test))]
 mod android;
 
+#[cfg(test)]
+mod test_utils;
+
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;
 

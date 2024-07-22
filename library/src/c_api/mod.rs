@@ -281,7 +281,10 @@ pub extern "C" fn shorebird_report_launch_success() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::network::{testing_set_network_hooks, PatchCheckResponse};
+    use crate::{
+        network::{testing_set_network_hooks, PatchCheckResponse},
+        test_utils::write_fake_zip,
+    };
     use anyhow::Ok;
     use serial_test::serial;
     use tempdir::TempDir;
@@ -436,18 +439,6 @@ mod test {
         shorebird_report_launch_start();
         shorebird_report_launch_success();
         shorebird_report_launch_failure();
-    }
-
-    fn write_fake_zip(zip_path: &str, libapp_contents: &[u8]) {
-        use std::io::Write;
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(zip_path).unwrap());
-        let options = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored)
-            .unix_permissions(0o755);
-        let app_path = crate::android::get_relative_lib_path("libapp.so");
-        zip.start_file(app_path.to_str().unwrap(), options).unwrap();
-        zip.write_all(libapp_contents).unwrap();
-        zip.finish().unwrap();
     }
 
     #[serial]

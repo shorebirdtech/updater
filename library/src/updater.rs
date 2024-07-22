@@ -625,10 +625,11 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::{
-        cache::{PatchInfo, UpdaterState},
+        cache::UpdaterState,
         config::{testing_reset_config, with_config},
         events::EventType,
         network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
+        test_utils::install_fake_patch,
         time, with_state, ExternalFileProvider, Patch,
     };
 
@@ -666,30 +667,6 @@ mod tests {
             &yaml,
         )
         .unwrap();
-    }
-
-    pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
-        with_config(|config| {
-            let download_dir = std::path::PathBuf::from(&config.download_dir);
-            let artifact_path = download_dir.join(patch_number.to_string());
-            fs::create_dir_all(&download_dir)?;
-            fs::write(&artifact_path, "hello")?;
-
-            let mut state = UpdaterState::load_or_new_on_error(
-                &config.storage_dir,
-                &config.release_version,
-                config.patch_public_key.as_deref(),
-            );
-            state.install_patch(
-                &PatchInfo {
-                    path: artifact_path,
-                    number: patch_number,
-                },
-                "hash",
-                None,
-            )?;
-            state.save()
-        })
     }
 
     #[serial]
@@ -1165,25 +1142,14 @@ mod rollback_tests {
     use serial_test::serial;
     use tempdir::TempDir;
 
-    use crate::network::PatchCheckResponse;
-
-    use super::{
-        report_launch_start, report_launch_success,
-        tests::{init_for_testing, install_fake_patch},
-        with_mut_state, Patch,
+    use crate::{
+        network::PatchCheckResponse,
+        test_utils::{install_fake_patch, write_fake_zip},
     };
 
-    fn write_fake_zip(zip_path: &str, libapp_contents: &[u8]) {
-        use std::io::Write;
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(zip_path).unwrap());
-        let options = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored)
-            .unix_permissions(0o755);
-        let app_path = crate::android::get_relative_lib_path("libapp.so");
-        zip.start_file(app_path.to_str().unwrap(), options).unwrap();
-        zip.write_all(libapp_contents).unwrap();
-        zip.finish().unwrap();
-    }
+    use super::{
+        report_launch_start, report_launch_success, tests::init_for_testing, with_mut_state, Patch,
+    };
 
     /// If the next_boot_patch is rolled back, the updater should roll back to the release version
     /// if no other patches are available on disk.
