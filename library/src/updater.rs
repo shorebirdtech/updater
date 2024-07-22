@@ -1151,6 +1151,40 @@ mod rollback_tests {
         report_launch_start, report_launch_success, tests::init_for_testing, with_mut_state, Patch,
     };
 
+    #[serial]
+    #[test]
+    fn does_not_roll_back_when_rolled_back_patches_is_empty() -> Result<()> {
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: false,
+            patch: None,
+            rolled_back_patch_numbers: Some(vec![]),
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        with_mut_state(|state| {
+            assert_eq!(state.current_boot_patch().map(|p| p.number), Some(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        let update_result = crate::update();
+        assert_eq!(update_result.unwrap(), crate::UpdateStatus::NoUpdate);
+
+        Ok(())
+    }
+
     /// If the next_boot_patch is rolled back, the updater should roll back to the release version
     /// if no other patches are available on disk.
     #[serial]
@@ -1246,7 +1280,8 @@ mod rollback_tests {
             Ok(())
         })?;
 
-        assert!(crate::update().is_ok());
+        let update_result = crate::update();
+        assert_eq!(update_result.unwrap(), crate::UpdateStatus::UpdateInstalled);
 
         with_mut_state(|state| {
             assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
