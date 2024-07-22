@@ -1,3 +1,4 @@
+/// Helper methods for tests.
 use std::fs;
 
 use crate::{
@@ -5,6 +6,7 @@ use crate::{
     config::with_config,
 };
 
+/// Writes a fake patch to the patches directory and sets it as the next boot patch.
 pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
     with_config(|config| {
         let download_dir = std::path::PathBuf::from(&config.download_dir);
@@ -29,9 +31,10 @@ pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
     })
 }
 
-pub fn write_fake_zip(zip_path: &str, libapp_contents: &[u8]) {
+/// Creates a fake APK at `apk_path` and writes `libapp_contents` to its relative `libapp.so` path.
+pub fn write_fake_apk(apk_path: &str, libapp_contents: &[u8]) {
     use std::io::Write;
-    let mut zip = zip::ZipWriter::new(std::fs::File::create(zip_path).unwrap());
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(apk_path).unwrap());
     let options = zip::write::FileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o755);

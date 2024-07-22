@@ -283,7 +283,7 @@ mod test {
     use super::*;
     use crate::{
         network::{testing_set_network_hooks, PatchCheckResponse},
-        test_utils::write_fake_zip,
+        test_utils::write_fake_apk,
     };
     use anyhow::Ok;
     use serial_test::serial;
@@ -451,7 +451,7 @@ mod test {
         let base = "hello world";
         let expected_new: &str = "hello tests";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_zip(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.

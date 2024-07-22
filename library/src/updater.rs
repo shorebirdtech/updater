@@ -103,7 +103,7 @@ impl Display for UpdateError {
     }
 }
 
-// `AppConfig` is the rust API.  `ResolvedConfig` is the internal storage.
+// `AppConfig` is the rust API.
 // However rusty api would probably used `&str` instead of `String`,
 // but making `&str` from `CStr*` is a bit of a pain.
 pub struct AppConfig {
@@ -1144,7 +1144,7 @@ mod rollback_tests {
 
     use crate::{
         network::PatchCheckResponse,
-        test_utils::{install_fake_patch, write_fake_zip},
+        test_utils::{install_fake_patch, write_fake_apk},
     };
 
     use super::{
@@ -1266,7 +1266,7 @@ mod rollback_tests {
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_zip(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
         // Install patch 2, pretend we're starting to boot from it, but don't report success or failure
         // to ensure we still have patch 1 on disk.
