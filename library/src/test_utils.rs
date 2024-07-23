@@ -35,9 +35,8 @@ pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
 pub fn write_fake_apk(apk_path: &str, libapp_contents: &[u8]) {
     use std::io::Write;
     let mut zip = zip::ZipWriter::new(std::fs::File::create(apk_path).unwrap());
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored)
-        .unix_permissions(0o755);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let app_path = crate::android::get_relative_lib_path("libapp.so");
     zip.start_file(app_path.to_str().unwrap(), options).unwrap();
     zip.write_all(libapp_contents).unwrap();
