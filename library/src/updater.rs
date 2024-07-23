@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
 use crate::cache::{PatchInfo, UpdaterState};
-use crate::config::{current_arch, current_platform, set_config, with_config, UpdateConfig};
+use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
@@ -234,22 +234,11 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
-fn patch_check_request(config: &UpdateConfig) -> PatchCheckRequest {
-    // Send the request to the server.
-    PatchCheckRequest {
-        app_id: config.app_id.clone(),
-        channel: config.channel.clone(),
-        release_version: config.release_version.clone(),
-        platform: current_platform().to_string(),
-        arch: current_arch().to_string(),
-    }
-}
-
 fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
     let (request, url, request_fn) = with_config(|config| {
         // Get the required info to make the request.
         Ok((
-            patch_check_request(config),
+            PatchCheckRequest::new(config),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -354,7 +343,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(patch_check_request(&config))
+        Ok(PatchCheckRequest::new(&config))
     })?;
 
     // Check for update.
