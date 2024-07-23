@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::Path;
 use std::string::ToString;
 
-use crate::config::UpdateConfig;
+use crate::config::{current_arch, current_platform, UpdateConfig};
 use crate::events::PatchEvent;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
@@ -179,6 +179,18 @@ pub struct PatchCheckRequest {
     pub arch: String,
     // We specifically do not send a patch number as part of this request because we always want to
     // know what the latest available patch is.
+}
+
+impl PatchCheckRequest {
+    pub fn new(config: &UpdateConfig) -> PatchCheckRequest {
+        PatchCheckRequest {
+            app_id: config.app_id.clone(),
+            channel: config.channel.clone(),
+            release_version: config.release_version.clone(),
+            platform: current_platform().to_string(),
+            arch: current_arch().to_string(),
+        }
+    }
 }
 
 /// The request body for the create patch install event endpoint.
