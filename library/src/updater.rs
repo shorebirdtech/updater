@@ -360,11 +360,11 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Check for update.
     let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
+    info!("Patch check response: {:?}", response);
 
     with_mut_state(|state| {
         if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
             if !rolled_back_patches.is_empty() {
-                info!("Rolled back patches: {:?}", rolled_back_patches);
                 for patch_number in rolled_back_patches {
                     info!("Attempting uninstall of patch {}...", patch_number);
                     state.uninstall_patch(patch_number)?;
