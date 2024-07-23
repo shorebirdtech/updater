@@ -12,6 +12,7 @@ use crate::{
 pub enum EventType {
     PatchInstallSuccess,
     PatchInstallFailure,
+    PatchDownload,
 }
 
 impl Serialize for EventType {
@@ -22,6 +23,7 @@ impl Serialize for EventType {
         serializer.serialize_str(match self {
             EventType::PatchInstallSuccess => "__patch_install__",
             EventType::PatchInstallFailure => "__patch_install_failure__",
+            EventType::PatchDownload => "__patch_download__",
         })
     }
 }
@@ -35,6 +37,7 @@ impl<'de> Deserialize<'de> for EventType {
         match s.as_str() {
             "__patch_install__" => Ok(EventType::PatchInstallSuccess),
             "__patch_install_failure__" => Ok(EventType::PatchInstallFailure),
+            "__patch_download__" => Ok(EventType::PatchDownload),
             _ => Err(serde::de::Error::custom(format!("Unknown event type: {s}"))),
         }
     }
