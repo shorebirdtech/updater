@@ -14,10 +14,6 @@ runs:
     - name: 🐦 Setup Flutter
       uses: subosito/flutter-action@v2
 
-    - name: ☎️ Install OIDC Client from Core Package
-      shell: ${{ inputs.shell }}
-      run: npm install @actions/core@1.6.0 @actions/http-client
-
     - name: 🪪 Get Id Token
       uses: actions/github-script@v6
       with:
@@ -33,10 +29,12 @@ runs:
       shell: ${{ inputs.shell }}
       run: flutter pub get
       working-directory: ${{ inputs.working-directory }}
+
     - name: 🌵 Dry Run
       shell: ${{ inputs.shell }}
       run: flutter pub publish --dry-run
       working-directory: ${{ inputs.working-directory }}
+
     - name: 📢 Publish
       shell: ${{ inputs.shell }}
       run: flutter pub publish -f
