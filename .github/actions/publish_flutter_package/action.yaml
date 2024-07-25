@@ -28,7 +28,7 @@ runs:
 
     - name: 📢 Authenticate
       shell: ${{ inputs.shell }}
-      run: flutter pub pub token add --host https://pub.dev --env-var PUB_TOKEN
+      run: flutter pub pub token add https://pub.dev --env-var PUB_TOKEN
 
     - name: 📦 Install dependencies
       shell: ${{ inputs.shell }}
