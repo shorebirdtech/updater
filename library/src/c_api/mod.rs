@@ -563,6 +563,11 @@ mod test {
 
         // After reporting a launch start, the next boot patch should be the current patch.
         assert_eq!(shorebird_current_boot_patch_number(), 1);
+
+        shorebird_report_launch_success();
+
+        // After reporting a launch success, the current patch number should not have changed.
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
     }
 
     #[serial]
