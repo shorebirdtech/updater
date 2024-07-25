@@ -3,20 +3,22 @@ name: Publish to pub.dev
 on:
   push:
     tags:
-    - 'shorebird_code_push-v[0-9]+.[0-9]+.[0-9]+*' # for tags like: 'v1.2.3'
+      - "shorebird_code_push-v[0-9]+.[0-9]+.[0-9]+*" # for tags like: 'v1.2.3'
 
 jobs:
   publish:
-    environment: 'pub.dev'
+    environment: "pub.dev"
     permissions:
       id-token: write # Required for authentication using OIDC
     runs-on: ubuntu-latest
     steps:
-    - name: 📚 Git Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - uses: ./.github/actions/publish_flutter_package
-      with:
-       # Specify the github actions deployment environment
-       working-directory: shorebird_code_push
+      - name: 📚 Git Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 📦 Publish Package
+        uses: ./.github/actions/publish_flutter_package
+        with:
+          # Specify the github actions deployment environment
+          working-directory: shorebird_code_push

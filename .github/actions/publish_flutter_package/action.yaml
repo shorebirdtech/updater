@@ -11,6 +11,7 @@ runs:
   steps:
     - name: 📚 Git Checkout
       uses: actions/checkout@v4
+
     - name: 🐦 Setup Flutter
       uses: subosito/flutter-action@v2
 
@@ -18,7 +19,7 @@ runs:
       uses: actions/github-script@v6
       with:
         script: |
-          let pub_token = await core.getIDToken('https://pub.dev')
+          const pub_token = await core.getIDToken('https://pub.dev')
           core.exportVariable('PUB_TOKEN', pub_token)
 
     - name: 📢 Authenticate
