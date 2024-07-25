@@ -521,11 +521,6 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 /// The patch that was last successfully booted. If we're booting a patch for the first time, this
 /// will be the previous patch (or None, if there was no previous patch) until the boot is
 /// reported as successful.
-///
-/// TODO: This should always return the currently running patch, even if it has not been marked as
-///   good or bad. Presently, users of the shorebird_code_push package will never get the wrong
-///   patch number from this function because a launch will have been reported to be either a
-///   success or a failure before they can call this function.
 pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.current_boot_patch()))
 }
@@ -591,13 +586,17 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             None => return Ok(()),
         };
 
-        let maybe_previous_boot_patch = state.current_boot_patch();
+        // Get the last successfully booted patch before we record the boot success.
+        let maybe_previous_boot_patch = state.last_successfully_booted_patch();
 
         state.record_boot_success()?;
 
-        if let (Some(previous_boot_patch), Some(current_boot_patch)) =
-            (maybe_previous_boot_patch, state.current_boot_patch())
-        {
+        // Check whether last_successfully_booted_patch has changed. If so, we should report a
+        // PatchInstallSuccess event.
+        if let (Some(previous_boot_patch), Some(current_boot_patch)) = (
+            maybe_previous_boot_patch,
+            state.last_successfully_booted_patch(),
+        ) {
             // If we had previously booted from a patch and it has the same number as the
             // patch we just booted from, then we shouldn't report a patch install.
             if previous_boot_patch.number == current_boot_patch.number {
@@ -1050,7 +1049,10 @@ mod tests {
                 &config.release_version,
                 config.patch_public_key.as_deref(),
             );
-            assert_eq!(state.current_boot_patch().unwrap().number, patch_number);
+            assert_eq!(
+                state.last_successfully_booted_patch().unwrap().number,
+                patch_number
+            );
             Ok(())
         })
         .unwrap();
@@ -1331,7 +1333,10 @@ mod rollback_tests {
         report_launch_success()?;
 
         with_mut_state(|state| {
-            assert_eq!(state.current_boot_patch().map(|p| p.number), Some(1));
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
             assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
             Ok(())
         })?;
@@ -1432,7 +1437,10 @@ mod rollback_tests {
         report_launch_success()?;
 
         with_mut_state(|state| {
-            assert_eq!(state.current_boot_patch().map(|p| p.number), Some(2));
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(2)
+            );
             assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
             Ok(())
         })?;
