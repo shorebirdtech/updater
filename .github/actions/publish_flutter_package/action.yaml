@@ -13,6 +13,45 @@ runs:
       uses: actions/checkout@v4
     - name: 🐦 Setup Flutter
       uses: subosito/flutter-action@v2
+
+# Future<void> createPubOIDCToken() async {
+#   final tokenRequestUrl = process.env('ACTIONS_ID_TOKEN_REQUEST_URL');
+#   final tokenRequestToken = process.env('ACTIONS_ID_TOKEN_REQUEST_TOKEN');
+
+#   if (tokenRequestUrl == null || tokenRequestToken == null) {
+#     return;
+#   }
+
+#   final token =
+#       await promiseToFuture<String>(core.getIDToken('https://pub.dev'));
+
+#   core.exportVariable('PUB_TOKEN', token);
+
+#   await promiseToFuture<void>(exec.exec(
+#     'dart',
+#     [
+#       'pub'.toJS,
+#       'token'.toJS,
+#       'add'.toJS,
+#       'https://pub.dev'.toJS,
+#       '--env-var'.toJS,
+#       'PUB_TOKEN'.toJS,
+#     ].toJS,
+#   ));
+# }
+# Get the token and put it in the PUB_TOKEN environment variable
+# curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://pub.dev/"
+# flutter pub pub token add --host https://pub.dev --env-var PUB_TOKEN
+
+    - name: Get OIDC token
+      shell: ${{ inputs.shell }}
+      run: |
+        curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://pub.dev/"
+
+    - name: 📢 Authenticate
+      shell: ${{ inputs.shell }}
+      run: flutter pub pub token add --host https://pub.dev --env-var PUB_TOKEN
+
     - name: 📦 Install dependencies
       shell: ${{ inputs.shell }}
       run: flutter pub get
