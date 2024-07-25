@@ -7,7 +7,7 @@ on:
 
 jobs:
   publish:
-    environment: "pub.dev"
+    environment: pub.dev
     permissions:
       id-token: write # Required for authentication using OIDC
     runs-on: ubuntu-latest
