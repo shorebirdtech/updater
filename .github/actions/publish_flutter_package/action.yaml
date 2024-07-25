@@ -22,9 +22,8 @@ runs:
       uses: actions/github-script@v6
       with:
         script: |
-          const core_mod = require('@actions/core')
-          let pub_token = await core_mod.getIDToken('https://pub.dev/')
-          core_mod.setOutput('PUB_TOKEN', pub_token)
+          let pub_token = await core.getIDToken('https://pub.dev/')
+          core.exportVariable('PUB_TOKEN', pub_token)
 
     - name: 📢 Authenticate
       shell: ${{ inputs.shell }}
