@@ -18,16 +18,12 @@ runs:
       uses: actions/github-script@v6
       with:
         script: |
-          let pub_token = await core.getIDToken('https://pub.dev/')
+          let pub_token = await core.getIDToken('https://pub.dev')
           core.exportVariable('PUB_TOKEN', pub_token)
 
     - name: 📢 Authenticate
       shell: ${{ inputs.shell }}
       run: flutter pub pub token add https://pub.dev --env-var PUB_TOKEN
-
-    - name: 'Debug'
-      shell: ${{ inputs.shell }}
-      run: echo $PUB_TOKEN
 
     - name: 📦 Install dependencies
       shell: ${{ inputs.shell }}
