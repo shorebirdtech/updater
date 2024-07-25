@@ -11,6 +11,10 @@ jobs:
       id-token: write # Required for authentication using OIDC
     runs-on: ubuntu-latest
     steps:
+    - name: 📚 Git Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
     - uses: ./.github/actions/publish_flutter_package
       with:
        # Specify the github actions deployment environment
