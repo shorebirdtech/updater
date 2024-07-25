@@ -9,8 +9,9 @@ jobs:
   publish:
     permissions:
       id-token: write # Required for authentication using OIDC
-    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
-    with:
-      # Specify the github actions deployment environment
-      environment: pub.dev
-      working-directory: shorebird_code_push
+    runs-on: ubuntu-latest
+    steps:
+    - uses: ./.github/actions/publish_flutter_package
+      with:
+       # Specify the github actions deployment environment
+       working-directory: shorebird_code_push
