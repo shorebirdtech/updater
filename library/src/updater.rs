@@ -12,9 +12,7 @@ use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
-use crate::network::{
-    download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest, PatchCheckResponse,
-};
+use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -48,6 +46,13 @@ impl Display for UpdateStatus {
             ),
         }
     }
+}
+
+/// Whether a patch is OK to install, and if not, why.
+pub enum ShouldInstallPatchCheckResult {
+    PatchOkToInstall,
+    PatchKnownBad,
+    PatchAlreadyInstalled,
 }
 
 /// Returned when a call to `init` is not successful. These indicate that the specific call to
@@ -234,7 +239,8 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
-fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
+/// Synchronously checks for an update and returns true if an update is available.
+pub fn check_for_update() -> anyhow::Result<bool> {
     let (request, url, request_fn) = with_config(|config| {
         // Get the required info to make the request.
         Ok((
@@ -246,12 +252,16 @@ fn check_for_update_internal() -> anyhow::Result<PatchCheckResponse> {
 
     let response = request_fn(&url, request)?;
     debug!("Patch check response: {:?}", response);
-    Ok(response)
-}
 
-/// Synchronously checks for an update and returns true if an update is available.
-pub fn check_for_update() -> anyhow::Result<bool> {
-    check_for_update_internal().map(|res| res.patch_available)
+    if let Some(patch) = response.patch {
+        match should_install_patch(patch.number)? {
+            ShouldInstallPatchCheckResult::PatchOkToInstall => Ok(true),
+            ShouldInstallPatchCheckResult::PatchKnownBad => Ok(false),
+            ShouldInstallPatchCheckResult::PatchAlreadyInstalled => Ok(false),
+        }
+    } else {
+        Ok(false)
+    }
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
@@ -370,23 +380,10 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
 
-    // Don't install a patch if it has previously failed to boot.
-    let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch.number)))?;
-    if is_known_bad_patch {
-        info!(
-            "Patch {} has previously failed to boot, skipping.",
-            patch.number
-        );
-        return Ok(UpdateStatus::UpdateIsBadPatch);
-    }
-
-    // If we already have the latest available patch downloaded, we don't need to download it again.
-    let next_boot_patch = with_mut_state(|state| Ok(state.next_boot_patch()))?;
-    if let Some(next_boot_patch) = next_boot_patch {
-        if next_boot_patch.number == patch.number {
-            info!("Patch {} is already installed, skipping.", patch.number);
-            return Ok(UpdateStatus::NoUpdate);
-        }
+    match should_install_patch(patch.number)? {
+        ShouldInstallPatchCheckResult::PatchOkToInstall => {}
+        ShouldInstallPatchCheckResult::PatchKnownBad => return Ok(UpdateStatus::UpdateIsBadPatch),
+        ShouldInstallPatchCheckResult::PatchAlreadyInstalled => return Ok(UpdateStatus::NoUpdate),
     }
 
     let download_dir = PathBuf::from(&config.download_dir);
@@ -435,6 +432,29 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         // booted version (patched or not).
         Ok(UpdateStatus::UpdateInstalled)
     })
+}
+
+fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckResult> {
+    // Don't install a patch if it has previously failed to boot.
+    let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch_number)))?;
+    if is_known_bad_patch {
+        info!(
+            "Patch {} has previously failed to boot, skipping.",
+            patch_number
+        );
+        return Ok(ShouldInstallPatchCheckResult::PatchKnownBad);
+    }
+
+    // If we already have the latest available patch downloaded, we don't need to download it again.
+    let next_boot_patch = with_mut_state(|state| Ok(state.next_boot_patch()))?;
+    if let Some(next_boot_patch) = next_boot_patch {
+        if next_boot_patch.number == patch_number {
+            info!("Patch {} is already installed, skipping.", patch_number);
+            return Ok(ShouldInstallPatchCheckResult::PatchAlreadyInstalled);
+        }
+    }
+
+    Ok(ShouldInstallPatchCheckResult::PatchOkToInstall)
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
@@ -1424,6 +1444,89 @@ mod rollback_tests {
             assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
             Ok(())
         })?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod check_for_update_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempdir::TempDir;
+
+    use crate::{
+        network::PatchCheckResponse, report_launch_failure, report_launch_start,
+        test_utils::install_fake_patch, updater::tests::init_for_testing,
+    };
+
+    use super::Patch;
+
+    fn mock_server(available_patch_number: usize) -> mockito::ServerGuard {
+        let mut server = mockito::Server::new();
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: available_patch_number,
+                hash: "#".to_string(),
+                download_url: "download_url".to_string(),
+                hash_signature: None,
+            }),
+            rolled_back_patch_numbers: None,
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        server
+    }
+
+    #[serial]
+    #[test]
+    fn returns_false_if_patch_is_already_installed() -> Result<()> {
+        let patch_number = 1;
+        let server = mock_server(patch_number);
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(patch_number)?;
+
+        let is_update_available = crate::check_for_update()?;
+        assert!(!is_update_available);
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn returns_false_if_patch_is_known_bad() -> Result<()> {
+        let patch_number = 1;
+        let server = mock_server(patch_number);
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(patch_number)?;
+        report_launch_start()?;
+        report_launch_failure()?;
+
+        let is_update_available = crate::check_for_update()?;
+        assert!(!is_update_available);
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn returns_true_if_patch_has_no_issues() -> Result<()> {
+        let patch_number = 1;
+        let server = mock_server(patch_number);
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let is_update_available = crate::check_for_update()?;
+        assert!(is_update_available);
 
         Ok(())
     }
