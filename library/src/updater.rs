@@ -570,6 +570,8 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
 }
 
 pub fn report_launch_success() -> anyhow::Result<()> {
+    info!("Reporting successful launch.");
+
     with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
