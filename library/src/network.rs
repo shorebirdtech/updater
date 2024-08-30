@@ -287,12 +287,33 @@ mod tests {
             release_version: "release_version".to_string(),
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
+            message: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
-            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234}}"#
+            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":null}}"#
+        )
+    }
+
+    #[test]
+    fn create_patch_install_event_request_serializes_with_message() {
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            arch: "arch".to_string(),
+            patch_number: 1,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: EventType::PatchInstallSuccess,
+            timestamp: 1234,
+            message: Some("hello".to_string()),
+        };
+        let request = super::CreatePatchEventRequest { event };
+        let json_string = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            json_string,
+            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":"hello"}}"#
         )
     }
 
@@ -367,6 +388,7 @@ mod tests {
             release_version: "release_version".to_string(),
             identifier: EventType::PatchInstallSuccess,
             timestamp: time::unix_timestamp(),
+            message: None,
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -395,6 +417,7 @@ mod tests {
                     release_version: "release_version".to_string(),
                     identifier: EventType::PatchInstallSuccess,
                     timestamp: time::unix_timestamp(),
+                    message: None,
                 },
             },
         );

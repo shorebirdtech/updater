@@ -223,6 +223,13 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
+                Some(
+                    format!(
+                        "Patch {} was marked currently_booting in init",
+                        patch.number
+                    )
+                    .as_ref(),
+                ),
             ))?;
         }
 
@@ -420,7 +427,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         );
 
         std::thread::spawn(move || {
-            let event = PatchEvent::new(&config, EventType::PatchDownload, patch.number);
+            let event = PatchEvent::new(&config, EventType::PatchDownload, patch.number, None);
             let report_result = crate::network::send_patch_event(event, &config);
             if let Err(err) = report_result {
                 error!("Failed to report patch download: {:?}", err);
@@ -562,7 +569,18 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             error!("Failed to mark patch as bad: {:?}", mark_result);
         }
-        let event = PatchEvent::new(config, EventType::PatchInstallFailure, patch.number);
+        let event = PatchEvent::new(
+            config,
+            EventType::PatchInstallFailure,
+            patch.number,
+            Some(
+                format!(
+                    "Install failure reported from engine for patch {}",
+                    patch.number
+                )
+                .as_ref(),
+            ),
+        );
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
         state.queue_event(event)
@@ -612,6 +630,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                 &config_copy,
                 EventType::PatchInstallSuccess,
                 booting_patch.number,
+                None,
             );
             let report_result = crate::network::send_patch_event(event, &config_copy);
             if let Err(err) = report_result {
@@ -1216,6 +1235,7 @@ mod tests {
                 platform: current_platform().to_string(),
                 release_version: config.release_version.clone(),
                 timestamp: time::unix_timestamp(),
+                message: Some("Install failure reported from engine for patch 1".to_string()),
             };
             // Queue 5 events.
             assert!(state.queue_event(fail_event.clone()).is_ok());

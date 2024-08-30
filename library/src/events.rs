@@ -69,11 +69,20 @@ pub struct PatchEvent {
 
     /// When this event occurred as a Unix epoch timestamp in seconds.
     pub timestamp: u64,
+
+    /// An optional message to be sent with the event.
+    /// Care should be taken that this field *never* contain PII or sensitive information.
+    pub message: Option<String>,
 }
 
 impl PatchEvent {
     /// Creates a `PatchEvent` for the given `EventType` and patch number for reporting to the server.
-    pub fn new(config: &UpdateConfig, event_type: EventType, patch_number: usize) -> PatchEvent {
+    pub fn new(
+        config: &UpdateConfig,
+        event_type: EventType,
+        patch_number: usize,
+        message: Option<&str>,
+    ) -> PatchEvent {
         PatchEvent {
             app_id: config.app_id.clone(),
             arch: current_arch().to_string(),
@@ -82,6 +91,7 @@ impl PatchEvent {
             platform: current_platform().to_string(),
             release_version: config.release_version.clone(),
             timestamp: time::unix_timestamp(),
+            message: message.map(|s| s.to_string()),
         }
     }
 }
