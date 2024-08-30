@@ -71,6 +71,7 @@ pub struct PatchEvent {
     pub timestamp: u64,
 
     /// An optional message to be sent with the event.
+    /// Care should be taken that this field *never* contain PII or sensitive information.
     pub message: Option<String>,
 }
 
