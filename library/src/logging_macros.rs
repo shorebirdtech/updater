@@ -1,4 +1,5 @@
-// Wrappers around logging functions to provide an easy way to prefix them with "[shorebird]".
+// Wrappers around crate::log's logging functions that prepend "[shorebird]" to the log message.
+
 #[macro_export]
 macro_rules! shorebird_info {
     // shorebird_info!("a {} event", "log")
