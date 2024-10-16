@@ -8,14 +8,14 @@ use std::{
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
+use std::println as shorebird_debug; // Workaround to use println! for logs.
 
 pub fn write<S, P>(serializable: &S, path: &P) -> anyhow::Result<()>
 where
     S: ?Sized + Serialize,
     P: AsRef<Path>,
 {
-    debug!("Writing to {:?}", path.as_ref());
+    shorebird_debug!("Writing to {:?}", path.as_ref());
 
     let path_as_ref = path.as_ref();
     let containing_dir = path_as_ref
@@ -38,7 +38,7 @@ where
     D: DeserializeOwned,
     P: AsRef<Path>,
 {
-    debug!("Reading from {:?}", path.as_ref());
+    shorebird_debug!("Reading from {:?}", path.as_ref());
 
     let path_as_ref = path.as_ref();
     if !path_as_ref.exists() {

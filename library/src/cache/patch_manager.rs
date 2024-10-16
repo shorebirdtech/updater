@@ -14,7 +14,7 @@ use tempdir::TempDir;
 
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as error, println as debug}; // Workaround to use println! for logs.
+use std::{println as shorebird_info, println as shorebird_error, println as shorebird_debug}; // Workaround to use println! for logs.
 
 const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
@@ -166,7 +166,7 @@ impl PatchManager {
         match disk_io::read(&path) {
             Ok(maybe_state) => maybe_state,
             Err(e) => {
-                debug!(
+                shorebird_debug!(
                     "Failed to load patches state from {}: {}",
                     path.display(),
                     e
@@ -240,7 +240,7 @@ impl PatchManager {
             let patch_hash = signing::hash_file(&artifact_path)?;
             signing::check_signature(&patch_hash, &signature, public_key)?;
         } else {
-            info!("No public key provided, skipping signature verification");
+            shorebird_info!("No public key provided, skipping signature verification");
         }
 
         Ok(())
@@ -249,15 +249,15 @@ impl PatchManager {
     fn delete_patch_artifacts(&mut self, patch_number: usize) -> Result<()> {
         let patch_dir = self.patch_dir(patch_number);
         if !patch_dir.exists() {
-            debug!("Patch {} not installed, nothing to delete", patch_number);
+            shorebird_debug!("Patch {} not installed, nothing to delete", patch_number);
             return Ok(());
         }
 
-        info!("Deleting patch artifacts for patch {}", patch_number);
+        shorebird_info!("Deleting patch artifacts for patch {}", patch_number);
 
         std::fs::remove_dir_all(&patch_dir)
             .map_err(|e| {
-                error!("Failed to delete patch dir {}: {}", patch_dir.display(), e);
+                shorebird_error!("Failed to delete patch dir {}: {}", patch_dir.display(), e);
                 e
             })
             .with_context(|| format!("Failed to delete patch dir {}", &patch_dir.display()))
@@ -315,7 +315,7 @@ impl PatchManager {
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    error!(
+                    shorebird_error!(
                         "Failed to parse patch number from patches directory entry, deleting: {}",
                         e
                     );
@@ -395,12 +395,13 @@ impl ManagePatches for PatchManager {
         };
 
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
-            error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
+            shorebird_error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
 
             if let Err(e) = self.try_fall_back_from_patch(next_boot_patch.number) {
-                error!(
+                shorebird_error!(
                     "Failed to fall back from next_boot_patch {}: {}",
-                    next_boot_patch.number, e
+                    next_boot_patch.number,
+                    e
                 );
             }
         }
@@ -440,9 +441,10 @@ impl ManagePatches for PatchManager {
         self.patches_state.currently_booting_patch = None;
         self.patches_state.last_booted_patch = Some(boot_patch.clone());
         if let Err(e) = self.delete_patch_artifacts_older_than(boot_patch.number) {
-            error!(
+            shorebird_error!(
                 "Failed to delete patch artifacts older than {}: {}",
-                boot_patch.number, e
+                boot_patch.number,
+                e
             );
         }
         self.save_patches_state()
@@ -495,7 +497,7 @@ impl PatchManager {
             .path()
             .join(format!("patch{}.vmcode", patch_number));
         std::fs::write(file_path, patch_number.to_string().repeat(patch_number)).unwrap();
-        info!(
+        shorebird_info!(
             "Adding patch {} with contents {} hash {} at {}",
             patch_number,
             patch_number.to_string().repeat(patch_number),

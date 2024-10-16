@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 // <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
+use std::println as shorebird_debug; // Workaround to use println! for logs.
 
 use crate::InitError;
 
@@ -138,9 +138,9 @@ fn find_and_open_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<ZipLocat
                 // We could remove the apk_split check and assume that the
                 // first apk to contain the library is the right one?
                 if filename.ends_with(".apk") && filename.contains(arch.apk_split) {
-                    debug!("Checking APK: {:?}", path);
+                    shorebird_debug!("Checking APK: {:?}", path);
                     if let Ok(zip) = check_for_lib_path(&path, &lib_path) {
-                        debug!("Found lib in apk split: {:?}", path);
+                        shorebird_debug!("Found lib in apk split: {:?}", path);
                         return Ok(zip);
                     }
                 }
@@ -149,7 +149,7 @@ fn find_and_open_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<ZipLocat
     }
     // If we failed to find a split, assume the base.apk contains the library.
     let base_apk_path = apks_dir.join("base.apk");
-    debug!("Checking base APK: {:?}", base_apk_path);
+    shorebird_debug!("Checking base APK: {:?}", base_apk_path);
     check_for_lib_path(&base_apk_path, &lib_path)
 }
 
@@ -205,7 +205,7 @@ pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<Pat
     // https://developer.android.com/reference/android/content/pm/ApplicationInfo#sourceDir
     // and splitSourceDirs (api 21+)
     // https://developer.android.com/reference/android/content/pm/ApplicationInfo#splitSourceDirs
-    debug!("Finding apk from: {:?}", full_libapp_path);
+    shorebird_debug!("Finding apk from: {:?}", full_libapp_path);
     app_data_dir_from_libapp_path(full_libapp_path)
 }
 

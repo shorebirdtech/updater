@@ -8,7 +8,7 @@ pub fn init_logging() {
             .with_tag("flutter")
             .with_max_level(log::LevelFilter::Info),
     );
-    debug!("Logging initialized");
+    shorebird_debug!("Logging initialized");
 }
 
 #[cfg(target_os = "ios")]
@@ -17,8 +17,8 @@ pub fn init_logging() {
         .level_filter(log::LevelFilter::Info)
         .init();
     match init_result {
-        Ok(_) => debug!("Logging initialized"),
-        Err(e) => error!("Failed to initialize logging: {}", e),
+        Ok(_) => shorebird_debug!("Logging initialized"),
+        Err(e) => shorebird_error!("Failed to initialize logging: {}", e),
     }
 }
 
