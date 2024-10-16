@@ -3,7 +3,7 @@ use base64::Engine;
 use std::path::Path;
 // https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
 #[cfg(test)]
-use std::{println as info, println as debug, println as error}; // Workaround to use println! for logs.
+use std::{println as shorebird_info, println as shorebird_debug, println as shorebird_error}; // Workaround to use println! for logs.
 
 /// Reads the file at `path` and returns the SHA-256 hash of its contents as a String.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
@@ -29,9 +29,9 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
 /// See https://docs.rs/ring/latest/ring/signature/index.html#signing-and-verifying-with-rsa-pkcs1-15-padding
 /// for more information.
 pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Result<()> {
-    debug!("Message is {}", message);
-    debug!("Public key is {:?}", public_key);
-    debug!("Signature is {}", signature);
+    shorebird_debug!("Message is {}", message);
+    shorebird_debug!("Public key is {:?}", public_key);
+    shorebird_debug!("Signature is {}", signature);
 
     let public_key_bytes = base64::prelude::BASE64_STANDARD
         .decode(public_key)
@@ -44,16 +44,16 @@ pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Resu
         .decode(signature)
         .map_err(|e| anyhow::Error::msg(format!("Failed to decode signature: {:?}", e)))?;
 
-    info!("Verifying patch signature...");
+    shorebird_info!("Verifying patch signature...");
     match public_key.verify(message.as_bytes(), &decoded_sig) {
         Ok(_) => {
-            info!("Patch signature is valid");
+            shorebird_info!("Patch signature is valid");
             Ok(())
         }
         Err(_) => {
             // The error provided by `verify` is (by design) not helpful, so we ignore it.
             // See https://docs.rs/ring/latest/ring/error/struct.Unspecified.html
-            error!("Patch signature is invalid");
+            shorebird_error!("Patch signature is invalid");
             bail!("Patch signature is invalid")
         }
     }

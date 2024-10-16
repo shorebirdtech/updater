@@ -18,7 +18,7 @@ use crate::updater;
 
 // <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
 #[cfg(test)]
-use std::{println as info, println as error}; // Workaround to use println! for logs.
+use std::{println as shorebird_info, println as shorebird_error}; // Workaround to use println! for logs.
 
 use self::c_file::CFileProvder;
 
@@ -118,7 +118,7 @@ where
     F: FnOnce() -> Result<R, anyhow::Error>,
 {
     f().unwrap_or_else(|e| {
-        error!("Error {}: {:?}", context, e);
+        shorebird_error!("Error {}: {:?}", context, e);
         error_result
     })
 }
@@ -226,7 +226,7 @@ pub extern "C" fn shorebird_check_for_update() -> bool {
 #[no_mangle]
 pub extern "C" fn shorebird_update() {
     log_on_error(
-        || updater::update().map(|result| info!("Update result: {}", result)),
+        || updater::update().map(|result| shorebird_info!("Update result: {}", result)),
         "downloading update",
         (),
     );
