@@ -3,11 +3,6 @@ import 'package:restart_app/restart_app.dart';
 
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
-// Create an instance of ShorebirdCodePush. Because this example only contains
-// a single widget, we create it here, but you will likely only need to create
-// a single instance of ShorebirdCodePush in your app.
-final _shorebirdCodePush = ShorebirdCodePush();
-
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -21,61 +16,52 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Shorebird Code Push'),
+      home: const MyHomePage(),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({required this.title, super.key});
-
-  final String title;
+  const MyHomePage({super.key});
 
   @override
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final _isShorebirdAvailable = _shorebirdCodePush.isShorebirdAvailable();
-  int? _currentPatchVersion;
-  bool _isCheckingForUpdate = false;
+  final _updater = ShorebirdUpdater();
+
+  bool _loading = false;
+  late UpdaterState _state;
 
   @override
   void initState() {
     super.initState();
-    // Request the current patch number.
-    _shorebirdCodePush.currentPatchNumber().then((currentPatchVersion) {
-      if (!mounted) return;
-      setState(() {
-        _currentPatchVersion = currentPatchVersion;
-      });
-    });
+    // Check for updates
+    _checkForUpdate();
   }
 
   Future<void> _checkForUpdate() async {
-    setState(() {
-      _isCheckingForUpdate = true;
-    });
+    setState(() => _loading = true);
 
-    // Ask the Shorebird servers if there is a new patch available.
-    final isUpdateAvailable =
-        await _shorebirdCodePush.isNewPatchAvailableForDownload();
+    final state = await _updater.state;
 
     if (!mounted) return;
 
     setState(() {
-      _isCheckingForUpdate = false;
+      _loading = false;
+      _state = state;
     });
 
-    if (isUpdateAvailable) {
-      _showUpdateAvailableBanner();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No update available'),
-        ),
-      );
-    }
+    _onUpdateCheckComplete(_state);
+  }
+
+  void _onUpdateCheckComplete(UpdaterState state) {
+    return switch (state) {
+      UpdaterAvailableState(isUpToDate: final isUpToDate) when !isUpToDate =>
+        _showUpdateAvailableBanner(),
+      _ => null,
+    };
   }
 
   void _showDownloadingBanner() {
@@ -146,27 +132,15 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  // Note: this is only run if an update is reported as available.
-  // [isNewPatchReadyToInstall] returning false does not always indicate an
-  // error with the download.
   Future<void> _downloadUpdate() async {
     _showDownloadingBanner();
 
-    await Future.wait([
-      _shorebirdCodePush.downloadUpdateIfAvailable(),
-      // Add an artificial delay so the banner has enough time to animate in.
-      Future<void>.delayed(const Duration(milliseconds: 250)),
-    ]);
-
-    final isUpdateReadyToInstall =
-        await _shorebirdCodePush.isNewPatchReadyToInstall();
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-    if (isUpdateReadyToInstall) {
+    try {
+      await _updater.update();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
       _showRestartBanner();
-    } else {
+    } catch (error) {
       _showErrorBanner();
     }
   }
@@ -174,40 +148,76 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final heading = _currentPatchVersion != null
-        ? '$_currentPatchVersion'
-        : 'No patch installed';
     return Scaffold(
       appBar: AppBar(
         backgroundColor: theme.colorScheme.inversePrimary,
-        title: Text(widget.title),
+        title: const Text('Shorebird Code Push'),
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('Current patch version:'),
-            Text(
-              heading,
-              style: theme.textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 20),
-            if (!_isShorebirdAvailable)
-              Text(
-                'Shorebird Engine not available.',
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: theme.colorScheme.error,
-                ),
-              ),
-            if (_isShorebirdAvailable)
-              ElevatedButton(
-                onPressed: _isCheckingForUpdate ? null : _checkForUpdate,
-                child: _isCheckingForUpdate
-                    ? const _LoadingIndicator()
-                    : const Text('Check for update'),
-              ),
-          ],
+      body: _MyHomeBody(state: _state),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _checkForUpdate,
+        tooltip: 'Check for update',
+        child: _loading ? const _LoadingIndicator() : const Icon(Icons.refresh),
+      ),
+    );
+  }
+}
+
+class _MyHomeBody extends StatelessWidget {
+  const _MyHomeBody({required this.state});
+
+  final UpdaterState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (state) {
+      UpdaterUnavailableState() => const _ShorebirdUnavailableView(),
+      final UpdaterAvailableState state =>
+        _ShorebirdAvailableView(state: state),
+    };
+  }
+}
+
+class _ShorebirdUnavailableView extends StatelessWidget {
+  const _ShorebirdUnavailableView();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Text(
+        'Shorebird Engine not available.',
+        style: theme.textTheme.bodyLarge?.copyWith(
+          color: theme.colorScheme.error,
         ),
+      ),
+    );
+  }
+}
+
+class _ShorebirdAvailableView extends StatelessWidget {
+  const _ShorebirdAvailableView({required this.state});
+
+  final UpdaterAvailableState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final installedPatchNumber = state.installedPatchNumber;
+    final heading = installedPatchNumber != null
+        ? '$installedPatchNumber'
+        : 'No patch installed';
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          const Text('Current patch version:'),
+          Text(
+            heading,
+            style: theme.textTheme.headlineMedium,
+          ),
+        ],
       ),
     );
   }
