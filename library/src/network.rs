@@ -11,10 +11,6 @@ use std::string::ToString;
 use crate::config::{current_arch, current_platform, UpdateConfig};
 use crate::events::PatchEvent;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as info, println as debug}; // Workaround to use println! for logs.
-
 pub fn patches_check_url(base_url: &str) -> String {
     format!("{base_url}/api/v1/patches/check")
 }
@@ -63,11 +59,11 @@ pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
-    info!("Sending patch check request: {:?}", request);
+    shorebird_info!("Sending patch check request: {:?}", request);
     let client = reqwest::blocking::Client::new();
     let result = client.post(url).json(&request).send();
     let response = handle_network_result(result)?.json()?;
-    debug!("Patch check response: {:?}", response);
+    shorebird_debug!("Patch check response: {:?}", response);
     Ok(response)
 }
 
@@ -230,18 +226,18 @@ pub fn download_to_path(
     url: &str,
     path: &Path,
 ) -> anyhow::Result<()> {
-    debug!("Downloading patch from: {}", url);
+    shorebird_debug!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
     let download_file_hook = network_hooks.download_file_fn;
     let bytes = download_file_hook(url)?;
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
-        debug!("Creating download directory: {:?}", parent);
+        shorebird_debug!("Creating download directory: {:?}", parent);
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create_dir_all failed for {}", parent.display()))?;
     }
 
-    debug!("Writing download to: {:?}", path);
+    shorebird_debug!("Writing download to: {:?}", path);
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
     Ok(())
