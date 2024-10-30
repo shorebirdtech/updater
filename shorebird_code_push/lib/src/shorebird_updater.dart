@@ -1,5 +1,5 @@
 import 'package:shorebird_code_push/src/shorebird_updater_io.dart'
-    if (dart.library.html) './shorebird_updater_web.dart';
+    if (dart.library.js_interop) './shorebird_updater_web.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
 /// Signature for a function that reports download progress.
