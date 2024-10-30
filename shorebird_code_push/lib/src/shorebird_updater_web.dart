@@ -24,7 +24,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<UpdaterState> get state async => const UpdaterUnavailableState();
 
   @override
-  Future<bool> get isUpToDate => throw const UnsupportedPlatformException();
+  Future<PatchStatus> get patchStatus =>
+      throw const UnsupportedPlatformException();
 
   @override
   Future<void> update({OnDownloadProgress? onDownloadProgress}) {

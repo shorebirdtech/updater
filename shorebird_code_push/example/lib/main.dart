@@ -29,7 +29,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
   var _state = AsyncValue<UpdaterState>.idle();
-  var _isUpToDate = AsyncValue<bool>.idle();
+  var _patchStatus = AsyncValue<PatchStatus>.idle();
 
   @override
   Future<void> initState() async {
@@ -40,14 +40,16 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _checkForUpdate() async {
-    setState(() => _isUpToDate = AsyncValue.loading());
+    setState(() => _patchStatus = AsyncValue.loading());
     try {
-      final isUpToDate = await _updater.isUpToDate;
+      final patchStatus = await _updater.patchStatus;
       if (!mounted) return;
-      setState(() => _isUpToDate = AsyncValue.loaded(isUpToDate));
-      if (!isUpToDate) _showUpdateAvailableBanner();
+      setState(() => _patchStatus = AsyncValue.loaded(patchStatus));
+      if (patchStatus == PatchStatus.outdated) {
+        _showUpdateAvailableBanner();
+      }
     } catch (error) {
-      setState(() => _isUpToDate = AsyncValue.error(error));
+      setState(() => _patchStatus = AsyncValue.error(error));
     }
   }
 
@@ -141,7 +143,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final loading = _isUpToDate is Loading<bool>;
+    final loading = _patchStatus is Loading<bool>;
 
     return Scaffold(
       appBar: AppBar(

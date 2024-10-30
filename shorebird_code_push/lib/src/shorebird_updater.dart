@@ -60,10 +60,26 @@ class UpdaterAvailableState extends UpdaterState {
   /// The patch number of the patch that has been most recently downloaded.
   /// If no patch has been downloaded, this will be null.
   /// See also:
-  /// * [ShorebirdUpdater.isUpToDate] to determine whether a new update is
+  /// * [ShorebirdUpdater.patchStatus] to determine whether a new patch is
   ///   available.
   /// * [ShorebirdUpdater.update] to download a new patch.
   final int? downloadedPatchNumber;
+}
+
+/// The current status of the updater.
+enum PatchStatus {
+  /// The app is up to date (e.g. running the latest patch.)
+  upToDate,
+
+  /// A new update is available for download.
+  outdated,
+
+  /// The app is up to date, but a restart is required for the update to take
+  /// effect.
+  restartRequired,
+
+  /// The current status is unknown because the updater is not available.
+  unsupported,
 }
 
 /// {@template shorebird_updater}
@@ -77,10 +93,8 @@ abstract class ShorebirdUpdater {
   /// and downloaded patches.
   Future<UpdaterState> get state;
 
-  /// Whether there are new updates available.
-  /// Returns false when there is a new patch available that has not yet been
-  /// downloaded. Otherwise, returns true.
-  Future<bool> get isUpToDate;
+  /// Returns the current [PatchStatus].
+  Future<PatchStatus> get patchStatus;
 
   /// Updates the app to the latest patch.
   /// Note: The app must be restarted for the update to take effect.

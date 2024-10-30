@@ -30,8 +30,22 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<bool> get isUpToDate async {
-    return Isolate.run(() => !_updater.checkForUpdate());
+  Future<PatchStatus> get patchStatus async {
+    final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
+    if (isUpdateAvailable) return PatchStatus.outdated;
+
+    final currentState = await state;
+    return switch (currentState) {
+      UpdaterAvailableState(
+        installedPatchNumber: final installedPatchNumber,
+        downloadedPatchNumber: final downloadedPatchNumber
+      ) =>
+        downloadedPatchNumber != null &&
+                installedPatchNumber != downloadedPatchNumber
+            ? PatchStatus.restartRequired
+            : PatchStatus.upToDate,
+      _ => PatchStatus.unsupported,
+    };
   }
 
   @override
