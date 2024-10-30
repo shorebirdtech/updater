@@ -28,14 +28,14 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
-  late bool _isSupported;
+  late bool _isUpdaterAvailable;
   var _patchState = AsyncValue<PatchState>.idle();
 
   @override
   Future<void> initState() async {
     super.initState();
     setState(() {
-      _isSupported = _updater.isSupported;
+      _isUpdaterAvailable = _updater.isAvailable;
       _patchState = AsyncValue.loading();
     });
     final state = await _updater.patchState;
@@ -149,11 +149,11 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: Builder(
         builder: (context) {
-          if (!_isSupported) return const _ShorebirdUnavailableView();
+          if (!_isUpdaterAvailable) return const _MissingShorebirdUpdater();
           return _patchState.when(
             idle: () => const SizedBox.shrink(),
             loading: () => const Center(child: CircularProgressIndicator()),
-            loaded: (patch) => _ShorebirdAvailableView(patch: patch),
+            loaded: (patch) => _PatchInfo(patch: patch),
             error: (error) => Center(
               child: Text('Oops something went wrong: $error'),
             ),
@@ -169,8 +169,8 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
-class _ShorebirdUnavailableView extends StatelessWidget {
-  const _ShorebirdUnavailableView();
+class _MissingShorebirdUpdater extends StatelessWidget {
+  const _MissingShorebirdUpdater();
 
   @override
   Widget build(BuildContext context) {
@@ -186,8 +186,8 @@ class _ShorebirdUnavailableView extends StatelessWidget {
   }
 }
 
-class _ShorebirdAvailableView extends StatelessWidget {
-  const _ShorebirdAvailableView({required this.patch});
+class _PatchInfo extends StatelessWidget {
+  const _PatchInfo({required this.patch});
 
   final PatchState patch;
 

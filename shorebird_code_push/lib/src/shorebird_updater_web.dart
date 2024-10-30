@@ -21,7 +21,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   final Updater _updater;
 
   @override
-  bool get isSupported => false;
+  bool get isAvailable => false;
 
   @override
   Future<PatchState> get patchState async => const PatchState();

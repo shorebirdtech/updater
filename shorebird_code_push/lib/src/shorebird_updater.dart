@@ -63,7 +63,7 @@ enum UpdateState {
   /// effect.
   restartRequired,
 
-  /// The current status is unknown because the updater is not available.
+  /// The current status is unsupported because the updater is not available.
   unsupported,
 }
 
@@ -74,13 +74,13 @@ abstract class ShorebirdUpdater {
   /// {@macro shorebird_updater}
   factory ShorebirdUpdater() => ShorebirdUpdaterImpl(const Updater());
 
-  /// Whether the updater is supported on the current platform.
+  /// Whether the updater is available on the current platform.
   /// The most common reasons for this returning false are:
   /// 1. The app is running in debug mode (Shorebird only supports release
   ///    mode).
   /// 2. The app was *NOT* built using `shorebird release` and does *NOT*
   ///    contain the Shorebird engine.
-  bool get isSupported;
+  bool get isAvailable;
 
   /// The current state of the updater which includes the currently installed
   /// and downloaded patches.

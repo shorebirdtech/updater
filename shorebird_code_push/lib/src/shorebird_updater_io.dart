@@ -13,18 +13,18 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     try {
       // If the Shorebird Engine is not available, this will throw an exception.
       _updater.currentPatchNumber();
-      _isSupported = true;
+      _isAvailable = true;
     } catch (_) {
-      _isSupported = false;
+      _isAvailable = false;
     }
   }
 
-  late final bool _isSupported;
+  late final bool _isAvailable;
 
   final Updater _updater;
 
   @override
-  bool get isSupported => _isSupported;
+  bool get isAvailable => _isAvailable;
 
   @override
   Future<PatchState> get patchState async {
@@ -48,7 +48,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
   @override
   Future<UpdateState> get updateState async {
-    if (!isSupported) return UpdateState.unsupported;
+    if (!_isAvailable) return UpdateState.unsupported;
 
     final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
     if (isUpdateAvailable) return UpdateState.outdated;
