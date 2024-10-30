@@ -82,8 +82,8 @@ impl UpdaterState {
             serialized_state: SerializedState {
                 release_version,
                 queued_events: Vec::new(),
-                // Generate random number in the range [1, 100].
-                rollout_group: rand::thread_rng().gen_range(1..101),
+                // Generate random number between 1 and 100, inclusive.
+                rollout_group: rand::thread_rng().gen_range(1..=100),
             },
         }
     }
