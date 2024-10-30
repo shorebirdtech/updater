@@ -147,8 +147,8 @@ class _MyHomePageState extends State<MyHomePage> {
             Loading() => const Center(child: CircularProgressIndicator()),
             Loaded<UpdaterState>(value: final state) =>
               _MyHomeBody(state: state),
-            Error<UpdaterState>() =>
-              const Center(child: Text('Something went wrong')),
+            Error<UpdaterState>(error: final error) =>
+              Center(child: Text('$error')),
           };
         },
       ),
