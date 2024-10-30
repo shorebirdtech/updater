@@ -8,8 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+use crate::config::UpdateConfig;
 use crate::events::PatchEvent;
 
 use super::patch_manager::{ManagePatches, PatchManager};
@@ -52,6 +54,13 @@ struct SerializedState {
     /// Events that have not yet been sent to the server.
     /// Format could change between releases, so this is per-release state.
     queued_events: Vec<PatchEvent>,
+    /// A randomly assigned number between 1 and 100 (inclusive) that determines when this device
+    /// will receive a phased rollout. If the rollout_group is less than or equal to the rollout
+    /// percentage, the device will receive the update (this logic is implemented server-side).
+    ///
+    /// This number is generated once when the state is created (i.e., when a release is first
+    /// launched) and is not changed until the next release is installed.
+    rollout_group: u32,
 }
 
 fn is_file_not_found(error: &anyhow::Error) -> bool {
@@ -73,6 +82,8 @@ impl UpdaterState {
             serialized_state: SerializedState {
                 release_version,
                 queued_events: Vec::new(),
+                // Generate random number between 1 and 100, inclusive.
+                rollout_group: rand::thread_rng().gen_range(1..=100),
             },
         }
     }
@@ -103,6 +114,14 @@ impl UpdaterState {
             shorebird_warn!("Error saving state {:?}, ignoring.", e);
         }
         state
+    }
+
+    pub fn load_or_new_from_config(config: &UpdateConfig) -> Self {
+        UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+        )
     }
 
     pub fn load_or_new_on_error(
@@ -184,6 +203,11 @@ impl UpdaterState {
             .or(self.patch_manager.last_successfully_booted_patch())
     }
 
+    /// The rollout group number (1-100) for this device.
+    pub fn rollout_group(&self) -> u32 {
+        self.serialized_state.rollout_group
+    }
+
     /// This is the patch that will be used for the next boot.
     /// Will be None if:
     /// - There has never been a patch selected.
@@ -261,6 +285,7 @@ mod tests {
             serialized_state: SerializedState {
                 release_version: "1.0.0+1".to_string(),
                 queued_events: Vec::new(),
+                rollout_group: 1,
             },
         }
     }
@@ -312,6 +337,7 @@ mod tests {
             serialized_state: SerializedState {
                 release_version: "1.0.0+1".to_string(),
                 queued_events: Vec::new(),
+                rollout_group: 10,
             },
         };
         original_state.save().unwrap();
@@ -444,5 +470,36 @@ mod tests {
         let state = test_state(&tmp_dir, mock_manage_patches);
         assert!(state.is_known_bad_patch(1));
         assert!(!state.is_known_bad_patch(2));
+    }
+
+    #[test]
+    fn generates_random_rollout_group_between_1_and_100() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let state = test_state(&tmp_dir, PatchManager::manager_for_test(&tmp_dir));
+        let first_rollout_group = state.serialized_state.rollout_group;
+        assert!(first_rollout_group >= 1);
+        assert!(first_rollout_group <= 100);
+
+        let number_of_tries = 5;
+        for i in 0..number_of_tries {
+            let state = test_state(&tmp_dir, PatchManager::manager_for_test(&tmp_dir));
+            assert!(state.serialized_state.rollout_group >= 1);
+            assert!(state.serialized_state.rollout_group <= 100);
+            if state.serialized_state.rollout_group == first_rollout_group {
+                // This is an unlikely event, but it could happen.
+                // If it does, we'll try a few more times.
+                continue;
+            }
+
+            if i == number_of_tries - 1 {
+                // The likelihood of getting the same random 1-100 number 5 times in a row is 1 in
+                // 100^5, or 10,000,000,000.
+                // Treat this as a failure of our random number generation.
+                assert!(
+                    false,
+                    "Failed to generate a random rollout group after 5 tries."
+                );
+            }
+        }
     }
 }

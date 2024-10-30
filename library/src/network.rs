@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::Path;
 use std::string::ToString;
 
+use crate::cache::UpdaterState;
 use crate::config::{current_arch, current_platform, UpdateConfig};
 use crate::events::PatchEvent;
 
@@ -173,6 +174,8 @@ pub struct PatchCheckRequest {
     pub platform: String,
     /// Architecture we're running (e.g. "aarch64", "x86", "x86_64").
     pub arch: String,
+    /// Which rollout group this device has been assigned to
+    pub rollout_group: u32,
     // We specifically do not send a patch number as part of this request because we always want to
     // know what the latest available patch is.
 }
@@ -185,6 +188,7 @@ impl PatchCheckRequest {
             release_version: config.release_version.clone(),
             platform: current_platform().to_string(),
             arch: current_arch().to_string(),
+            rollout_group: UpdaterState::load_or_new_from_config(config).rollout_group(),
         }
     }
 }
@@ -327,6 +331,7 @@ mod tests {
                 release_version: "".to_string(),
                 platform: "".to_string(),
                 arch: "".to_string(),
+                rollout_group: 1,
             },
         );
         assert!(result.is_err());
