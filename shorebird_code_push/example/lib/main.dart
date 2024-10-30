@@ -143,8 +143,7 @@ class _MyHomePageState extends State<MyHomePage> {
       body: Builder(
         builder: (context) {
           return switch (_state) {
-            Idle<UpdaterState>() =>
-              const Center(child: CircularProgressIndicator()),
+            Idle<UpdaterState>() => const SizedBox(),
             Loading() => const Center(child: CircularProgressIndicator()),
             Loaded<UpdaterState>(value: final state) =>
               _MyHomeBody(state: state),
