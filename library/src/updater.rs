@@ -145,11 +145,7 @@ where
     F: FnOnce(&UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
+        let state = UpdaterState::load_or_new_from_config(&config);
         f(&state)
     })
 }
@@ -159,11 +155,7 @@ where
     F: FnOnce(&mut UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-        );
+        let mut state = UpdaterState::load_or_new_from_config(&config);
         f(&mut state)
     })
 }
