@@ -34,7 +34,7 @@ class PatchState {
   /// The patch number of the patch that has been most recently downloaded.
   /// If no patch has been downloaded, this will be null.
   /// See also:
-  /// * [ShorebirdUpdater.updateState] to determine whether a new patch is
+  /// * [ShorebirdUpdater.updateStatus] to determine whether a new patch is
   ///   available.
   /// * [ShorebirdUpdater.update] to download a new patch.
   final Patch? next;
@@ -51,8 +51,8 @@ class Patch {
   final int number;
 }
 
-/// The current state of the app in terms of whether its up-to-date.
-enum UpdateState {
+/// The current status of the app in terms of whether its up-to-date.
+enum UpdateStatus {
   /// The app is up to date (e.g. running the latest patch.)
   upToDate,
 
@@ -84,10 +84,14 @@ abstract class ShorebirdUpdater {
 
   /// The current state of the updater which includes the currently installed
   /// and downloaded patches.
-  Future<PatchState> get patchState;
+  Future<Patch?> get currentPatch;
 
-  /// Returns the current [UpdateState].
-  Future<UpdateState> get updateState;
+  /// The current state of the updater which includes the currently installed
+  /// and downloaded patches.
+  Future<Patch?> get nextPatch;
+
+  /// Returns the current [UpdateStatus].
+  Future<UpdateStatus> get updateStatus;
 
   /// Updates the app to the latest patch.
   /// Note: The app must be restarted for the update to take effect.

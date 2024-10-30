@@ -29,24 +29,24 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
   late bool _isUpdaterAvailable;
-  var _patchState = AsyncValue<PatchState>.idle();
+  var _currentPatch = AsyncValue<Patch?>.idle();
 
   @override
   Future<void> initState() async {
     super.initState();
     setState(() {
       _isUpdaterAvailable = _updater.isAvailable;
-      _patchState = AsyncValue.loading();
+      _currentPatch = AsyncValue.loading();
     });
-    final state = await _updater.patchState;
-    setState(() => _patchState = AsyncValue.loaded(state));
+    final currentPatch = await _updater.currentPatch;
+    setState(() => _currentPatch = AsyncValue.loaded(currentPatch));
   }
 
   Future<void> _checkForUpdate() async {
     try {
-      final updateState = await _updater.updateState;
+      final status = await _updater.updateStatus;
       if (!mounted) return;
-      if (updateState == UpdateState.outdated) _showUpdateAvailableBanner();
+      if (status == UpdateStatus.outdated) _showUpdateAvailableBanner();
     } catch (_) {}
   }
 
@@ -140,7 +140,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final loading = _patchState is Loading<bool>;
+    final loading = _currentPatch is Loading<bool>;
 
     return Scaffold(
       appBar: AppBar(
@@ -150,7 +150,7 @@ class _MyHomePageState extends State<MyHomePage> {
       body: Builder(
         builder: (context) {
           if (!_isUpdaterAvailable) return const _MissingShorebirdUpdater();
-          return _patchState.when(
+          return _currentPatch.when(
             idle: () => const SizedBox.shrink(),
             loading: () => const Center(child: CircularProgressIndicator()),
             loaded: (patch) => _PatchInfo(patch: patch),
@@ -189,14 +189,12 @@ class _MissingShorebirdUpdater extends StatelessWidget {
 class _PatchInfo extends StatelessWidget {
   const _PatchInfo({required this.patch});
 
-  final PatchState patch;
+  final Patch? patch;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final currentPatch = patch.current;
-    final heading =
-        currentPatch != null ? '$currentPatch' : 'No patch installed';
+    final heading = patch != null ? '$patch' : 'No patch installed';
 
     return Center(
       child: Column(

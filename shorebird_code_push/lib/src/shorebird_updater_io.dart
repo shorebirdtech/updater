@@ -27,36 +27,46 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => _isAvailable;
 
   @override
-  Future<PatchState> get patchState async {
+  Future<Patch?> get currentPatch async {
     return Isolate.run(
       () {
         try {
           final currentPatchNumber = _updater.currentPatchNumber();
-          final nextPatchNumber = _updater.nextPatchNumber();
-          return PatchState(
-            current: currentPatchNumber > 0
-                ? Patch(number: currentPatchNumber)
-                : null,
-            next: nextPatchNumber > 0 ? Patch(number: nextPatchNumber) : null,
-          );
+          return currentPatchNumber > 0
+              ? Patch(number: currentPatchNumber)
+              : null;
         } catch (_) {
-          return const PatchState();
+          return null;
         }
       },
     );
   }
 
   @override
-  Future<UpdateState> get updateState async {
-    if (!_isAvailable) return UpdateState.unsupported;
+  Future<Patch?> get nextPatch async {
+    return Isolate.run(
+      () {
+        try {
+          final nextPatchNumber = _updater.nextPatchNumber();
+          return nextPatchNumber > 0 ? Patch(number: nextPatchNumber) : null;
+        } catch (_) {
+          return null;
+        }
+      },
+    );
+  }
+
+  @override
+  Future<UpdateStatus> get updateStatus async {
+    if (!_isAvailable) return UpdateStatus.unsupported;
 
     final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
-    if (isUpdateAvailable) return UpdateState.outdated;
+    if (isUpdateAvailable) return UpdateStatus.outdated;
 
-    final patch = await patchState;
-    return patch.next != null && patch.current?.number != patch.next?.number
-        ? UpdateState.restartRequired
-        : UpdateState.upToDate;
+    final (current, next) = await (currentPatch, nextPatch).wait;
+    return next != null && current?.number != next.number
+        ? UpdateStatus.restartRequired
+        : UpdateStatus.upToDate;
   }
 
   @override
@@ -64,8 +74,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     final hasUpdate = await Isolate.run(_updater.checkForUpdate);
     if (!hasUpdate) throw const UpdateException('No updates available.');
     await Isolate.run(_updater.downloadUpdate);
-    final currentUpdateState = await updateState;
-    if (currentUpdateState != UpdateState.restartRequired) {
+    final status = await updateStatus;
+    if (status != UpdateStatus.restartRequired) {
       throw const UpdateException('Failed to download update.');
     }
   }

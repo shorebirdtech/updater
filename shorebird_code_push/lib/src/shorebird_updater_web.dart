@@ -24,10 +24,13 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => false;
 
   @override
-  Future<PatchState> get patchState async => const PatchState();
+  Future<Patch?> get currentPatch => throw const UnsupportedPlatformException();
 
   @override
-  Future<UpdateState> get updateState =>
+  Future<Patch?> get nextPatch => throw const UnsupportedPlatformException();
+
+  @override
+  Future<UpdateStatus> get updateStatus =>
       throw const UnsupportedPlatformException();
 
   @override
