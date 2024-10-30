@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:restart_app/restart_app.dart';
-
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 void main() => runApp(const MyApp());
@@ -13,7 +11,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Shorebird Code Push Demo',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
       ),
       home: const MyHomePage(),
@@ -30,38 +28,27 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
-
-  bool _loading = false;
-  late UpdaterState _state;
+  var _state = AsyncValue<UpdaterState>.idle();
+  var _isUpToDate = AsyncValue<bool>.idle();
 
   @override
-  void initState() {
+  Future<void> initState() async {
     super.initState();
-    // Check for updates
-    _checkForUpdate();
+    setState(() => _state = AsyncValue.loading());
+    final state = await _updater.state;
+    setState(() => _state = AsyncValue.loaded(state));
   }
 
   Future<void> _checkForUpdate() async {
-    setState(() => _loading = true);
-
-    final state = await _updater.state;
-
-    if (!mounted) return;
-
-    setState(() {
-      _loading = false;
-      _state = state;
-    });
-
-    _onUpdateCheckComplete(_state);
-  }
-
-  void _onUpdateCheckComplete(UpdaterState state) {
-    return switch (state) {
-      UpdaterAvailableState(isUpToDate: final isUpToDate) when !isUpToDate =>
-        _showUpdateAvailableBanner(),
-      _ => null,
-    };
+    setState(() => _isUpToDate = AsyncValue.loading());
+    try {
+      final isUpToDate = await _updater.isUpToDate;
+      if (!mounted) return;
+      setState(() => _isUpToDate = AsyncValue.loaded(isUpToDate));
+      if (!isUpToDate) _showUpdateAvailableBanner();
+    } catch (error) {
+      setState(() => _isUpToDate = AsyncValue.error(error));
+    }
   }
 
   void _showDownloadingBanner() {
@@ -72,9 +59,7 @@ class _MyHomePageState extends State<MyHomePage> {
           SizedBox(
             height: 14,
             width: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-            ),
+            child: CircularProgressIndicator(),
           ),
         ],
       ),
@@ -90,7 +75,6 @@ class _MyHomePageState extends State<MyHomePage> {
             onPressed: () async {
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
               await _downloadUpdate();
-
               if (!mounted) return;
               ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
             },
@@ -103,13 +87,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _showRestartBanner() {
     ScaffoldMessenger.of(context).showMaterialBanner(
-      const MaterialBanner(
-        content: Text('A new patch is ready!'),
+      MaterialBanner(
+        content: const Text('A new patch is ready! Please restart your app.'),
         actions: [
           TextButton(
-            // Restart the app for the new patch to take effect.
-            onPressed: Restart.restartApp,
-            child: Text('Restart app'),
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+            },
+            child: const Text('Dismiss'),
           ),
         ],
       ),
@@ -148,16 +133,30 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final state = _state;
+    final loading = _isUpToDate is Loading<bool>;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: theme.colorScheme.inversePrimary,
         title: const Text('Shorebird Code Push'),
       ),
-      body: _MyHomeBody(state: _state),
+      body: Builder(
+        builder: (context) {
+          return switch (state) {
+            Idle<UpdaterState>() =>
+              const Center(child: CircularProgressIndicator()),
+            Loading() => const Center(child: CircularProgressIndicator()),
+            Loaded<UpdaterState>() => _MyHomeBody(state: state.value),
+            Error<UpdaterState>() =>
+              const Center(child: Text('Something went wrong')),
+          };
+        },
+      ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _checkForUpdate,
+        onPressed: loading ? null : _checkForUpdate,
         tooltip: 'Check for update',
-        child: _loading ? const _LoadingIndicator() : const Icon(Icons.refresh),
+        child: loading ? const _LoadingIndicator() : const Icon(Icons.refresh),
       ),
     );
   }
@@ -234,4 +233,30 @@ class _LoadingIndicator extends StatelessWidget {
       child: CircularProgressIndicator(strokeWidth: 2),
     );
   }
+}
+
+sealed class AsyncValue<T> {
+  const AsyncValue._();
+  factory AsyncValue.idle() => const Idle();
+  factory AsyncValue.loading() => const Loading();
+  factory AsyncValue.loaded(T value) => Loaded(value);
+  factory AsyncValue.error(Object error) => Error(error);
+}
+
+class Idle<T> extends AsyncValue<T> {
+  const Idle() : super._();
+}
+
+class Loading<T> extends AsyncValue<T> {
+  const Loading() : super._();
+}
+
+class Loaded<T> extends AsyncValue<T> {
+  const Loaded(this.value) : super._();
+  final T value;
+}
+
+class Error<T> extends AsyncValue<T> {
+  const Error(this.error) : super._();
+  final Object error;
 }

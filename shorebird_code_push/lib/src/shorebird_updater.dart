@@ -1,5 +1,6 @@
 import 'package:shorebird_code_push/src/shorebird_updater_io.dart'
     if (dart.library.html) './shorebird_updater_web.dart';
+import 'package:shorebird_code_push/src/updater.dart';
 
 /// Signature for a function that reports download progress.
 typedef OnDownloadProgress = void Function(int received, int total);
@@ -47,15 +48,9 @@ class UpdaterUnavailableState extends UpdaterState {
 class UpdaterAvailableState extends UpdaterState {
   /// {@macro updater_available_state}
   const UpdaterAvailableState({
-    required this.isUpToDate,
     required this.installedPatchNumber,
     required this.downloadedPatchNumber,
   });
-
-  /// Whether there are new updates available.
-  /// Returns true when there is a new patch available that has not yet been
-  /// downloaded. Otherwise, returns false.
-  final bool isUpToDate;
 
   /// The patch number of the currently installed patch.
   /// This is the patch that the app is currently running.
@@ -65,7 +60,8 @@ class UpdaterAvailableState extends UpdaterState {
   /// The patch number of the patch that has been most recently downloaded.
   /// If no patch has been downloaded, this will be null.
   /// See also:
-  /// * [isUpToDate] to determine whether a new update is available.
+  /// * [ShorebirdUpdater.isUpToDate] to determine whether a new update is
+  ///   available.
   /// * [ShorebirdUpdater.update] to download a new patch.
   final int? downloadedPatchNumber;
 }
@@ -75,11 +71,16 @@ class UpdaterAvailableState extends UpdaterState {
 /// {@endtemplate}
 abstract class ShorebirdUpdater {
   /// {@macro shorebird_updater}
-  factory ShorebirdUpdater() => ShorebirdUpdaterImpl();
+  factory ShorebirdUpdater() => const ShorebirdUpdaterImpl(Updater());
 
   /// The current state of the updater which includes the currently installed
   /// and downloaded patches.
   Future<UpdaterState> get state;
+
+  /// Whether there are new updates available.
+  /// Returns false when there is a new patch available that has not yet been
+  /// downloaded. Otherwise, returns true.
+  Future<bool> get isUpToDate;
 
   /// Updates the app to the latest patch.
   /// Note: The app must be restarted for the update to take effect.
