@@ -368,7 +368,6 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
             if !rolled_back_patches.is_empty() {
                 for patch_number in rolled_back_patches {
-                    shorebird_info!("Attempting uninstall of patch {}...", patch_number);
                     state.uninstall_patch(patch_number)?;
                 }
             }
