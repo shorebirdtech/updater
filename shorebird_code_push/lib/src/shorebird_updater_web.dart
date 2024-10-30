@@ -15,16 +15,19 @@ class UnsupportedPlatformException extends UpdateException {
 /// {@endtemplate}
 class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   /// {@macro shorebird_updater_web}
-  const ShorebirdUpdaterImpl(this._updater);
+  ShorebirdUpdaterImpl(this._updater);
 
   // ignore: unused_field
   final Updater _updater;
 
   @override
-  Future<UpdaterState> get state async => const UpdaterUnavailableState();
+  bool get isSupported => false;
 
   @override
-  Future<PatchStatus> get patchStatus =>
+  Future<PatchState> get patchState async => const PatchState();
+
+  @override
+  Future<UpdateState> get updateState =>
       throw const UnsupportedPlatformException();
 
   @override

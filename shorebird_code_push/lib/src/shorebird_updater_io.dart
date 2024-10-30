@@ -9,43 +9,54 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// {@endtemplate}
 class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   /// {@macro shorebird_updater_io}
-  const ShorebirdUpdaterImpl(this._updater);
+  ShorebirdUpdaterImpl(this._updater) {
+    try {
+      // If the Shorebird Engine is not available, this will throw an exception.
+      _updater.currentPatchNumber();
+      _isSupported = true;
+    } catch (_) {
+      _isSupported = false;
+    }
+  }
+
+  late final bool _isSupported;
 
   final Updater _updater;
 
   @override
-  Future<UpdaterState> get state async {
+  bool get isSupported => _isSupported;
+
+  @override
+  Future<PatchState> get patchState async {
     return Isolate.run(
       () {
         try {
-          return UpdaterAvailableState(
-            installedPatchNumber: _updater.currentPatchNumber(),
-            downloadedPatchNumber: _updater.nextPatchNumber(),
+          final currentPatchNumber = _updater.currentPatchNumber();
+          final nextPatchNumber = _updater.nextPatchNumber();
+          return PatchState(
+            current: currentPatchNumber > 0
+                ? Patch(number: currentPatchNumber)
+                : null,
+            next: nextPatchNumber > 0 ? Patch(number: nextPatchNumber) : null,
           );
         } catch (_) {
-          return const UpdaterUnavailableState();
+          return const PatchState();
         }
       },
     );
   }
 
   @override
-  Future<PatchStatus> get patchStatus async {
-    final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
-    if (isUpdateAvailable) return PatchStatus.outdated;
+  Future<UpdateState> get updateState async {
+    if (!isSupported) return UpdateState.unsupported;
 
-    final currentState = await state;
-    return switch (currentState) {
-      UpdaterAvailableState(
-        installedPatchNumber: final installedPatchNumber,
-        downloadedPatchNumber: final downloadedPatchNumber
-      ) =>
-        downloadedPatchNumber != null &&
-                installedPatchNumber != downloadedPatchNumber
-            ? PatchStatus.restartRequired
-            : PatchStatus.upToDate,
-      _ => PatchStatus.unsupported,
-    };
+    final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
+    if (isUpdateAvailable) return UpdateState.outdated;
+
+    final patch = await patchState;
+    return patch.next != null && patch.current?.number != patch.next?.number
+        ? UpdateState.restartRequired
+        : UpdateState.upToDate;
   }
 
   @override
@@ -53,21 +64,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     final hasUpdate = await Isolate.run(_updater.checkForUpdate);
     if (!hasUpdate) throw const UpdateException('No updates available.');
     await Isolate.run(_updater.downloadUpdate);
-    final currentState = await state;
-
-    bool didDownloadSucceed(UpdaterState state) {
-      return switch (state) {
-        UpdaterAvailableState(
-          installedPatchNumber: final installedPatchNumber,
-          downloadedPatchNumber: final downloadedPatchNumber
-        ) =>
-          downloadedPatchNumber != null &&
-              installedPatchNumber != downloadedPatchNumber,
-        _ => false,
-      };
-    }
-
-    if (!didDownloadSucceed(currentState)) {
+    final currentUpdateState = await updateState;
+    if (currentUpdateState != UpdateState.restartRequired) {
       throw const UpdateException('Failed to download update.');
     }
   }

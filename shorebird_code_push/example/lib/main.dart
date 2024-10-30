@@ -28,29 +28,26 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
-  var _state = AsyncValue<UpdaterState>.idle();
-  var _patchStatus = AsyncValue<PatchStatus>.idle();
+  late bool _isSupported;
+  var _patchState = AsyncValue<PatchState>.idle();
 
   @override
   Future<void> initState() async {
     super.initState();
-    setState(() => _state = AsyncValue.loading());
-    final state = await _updater.state;
-    setState(() => _state = AsyncValue.loaded(state));
+    setState(() {
+      _isSupported = _updater.isSupported;
+      _patchState = AsyncValue.loading();
+    });
+    final state = await _updater.patchState;
+    setState(() => _patchState = AsyncValue.loaded(state));
   }
 
   Future<void> _checkForUpdate() async {
-    setState(() => _patchStatus = AsyncValue.loading());
     try {
-      final patchStatus = await _updater.patchStatus;
+      final updateState = await _updater.updateState;
       if (!mounted) return;
-      setState(() => _patchStatus = AsyncValue.loaded(patchStatus));
-      if (patchStatus == PatchStatus.outdated) {
-        _showUpdateAvailableBanner();
-      }
-    } catch (error) {
-      setState(() => _patchStatus = AsyncValue.error(error));
-    }
+      if (updateState == UpdateState.outdated) _showUpdateAvailableBanner();
+    } catch (_) {}
   }
 
   void _showDownloadingBanner() {
@@ -143,7 +140,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final loading = _patchStatus is Loading<bool>;
+    final loading = _patchState is Loading<bool>;
 
     return Scaffold(
       appBar: AppBar(
@@ -152,12 +149,15 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: Builder(
         builder: (context) {
-          return switch (_state) {
-            Loading() => const Center(child: CircularProgressIndicator()),
-            Loaded<UpdaterState>(value: final state) =>
-              _MyHomeBody(state: state),
-            _ => const SizedBox(),
-          };
+          if (!_isSupported) return const _ShorebirdUnavailableView();
+          return _patchState.when(
+            idle: () => const SizedBox.shrink(),
+            loading: () => const Center(child: CircularProgressIndicator()),
+            loaded: (patch) => _ShorebirdAvailableView(patch: patch),
+            error: (error) => Center(
+              child: Text('Oops something went wrong: $error'),
+            ),
+          );
         },
       ),
       floatingActionButton: FloatingActionButton(
@@ -166,21 +166,6 @@ class _MyHomePageState extends State<MyHomePage> {
         child: loading ? const _LoadingIndicator() : const Icon(Icons.refresh),
       ),
     );
-  }
-}
-
-class _MyHomeBody extends StatelessWidget {
-  const _MyHomeBody({required this.state});
-
-  final UpdaterState state;
-
-  @override
-  Widget build(BuildContext context) {
-    return switch (state) {
-      UpdaterUnavailableState() => const _ShorebirdUnavailableView(),
-      final UpdaterAvailableState state =>
-        _ShorebirdAvailableView(state: state),
-    };
   }
 }
 
@@ -202,17 +187,16 @@ class _ShorebirdUnavailableView extends StatelessWidget {
 }
 
 class _ShorebirdAvailableView extends StatelessWidget {
-  const _ShorebirdAvailableView({required this.state});
+  const _ShorebirdAvailableView({required this.patch});
 
-  final UpdaterAvailableState state;
+  final PatchState patch;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final installedPatchNumber = state.installedPatchNumber;
-    final heading = installedPatchNumber != null
-        ? '$installedPatchNumber'
-        : 'No patch installed';
+    final currentPatch = patch.current;
+    final heading =
+        currentPatch != null ? '$currentPatch' : 'No patch installed';
 
     return Center(
       child: Column(
@@ -248,6 +232,20 @@ sealed class AsyncValue<T> {
   factory AsyncValue.loading() => const Loading();
   factory AsyncValue.loaded(T value) => Loaded(value);
   factory AsyncValue.error(Object error) => Error(error);
+
+  R when<R>({
+    required R Function() idle,
+    required R Function() loading,
+    required R Function(T value) loaded,
+    required R Function(Object error) error,
+  }) {
+    final value = this;
+    if (value is Idle<T>) return idle();
+    if (value is Loading<T>) return loading();
+    if (value is Loaded<T>) return loaded(value.value);
+    if (value is Error<T>) return error(value.error);
+    throw AssertionError();
+  }
 }
 
 class Idle<T> extends AsyncValue<T> {
