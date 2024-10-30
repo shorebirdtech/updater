@@ -480,7 +480,8 @@ mod tests {
         assert!(first_rollout_group >= 1);
         assert!(first_rollout_group <= 100);
 
-        for i in 0..5 {
+        let number_of_tries = 5;
+        for i in 0..number_of_tries {
             let state = test_state(&tmp_dir, PatchManager::manager_for_test(&tmp_dir));
             assert!(state.serialized_state.rollout_group >= 1);
             assert!(state.serialized_state.rollout_group <= 100);
@@ -490,9 +491,10 @@ mod tests {
                 continue;
             }
 
-            if i == 4 {
-                // The odds of getting the same random 1-100 number 5 times in a row are 1 in 100^5.
-                // Treat this as a failure.
+            if i == number_of_tries - 1 {
+                // The likelihood of getting the same random 1-100 number 5 times in a row is 1 in
+                // 100^5, or 10,000,000,000.
+                // Treat this as a failure of our random number generation.
                 assert!(
                     false,
                     "Failed to generate a random rollout group after 5 tries."
