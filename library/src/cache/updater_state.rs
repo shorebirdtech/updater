@@ -12,10 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::PatchEvent;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as info, println as warn}; // Workaround to use println! for logs.
-
 use super::patch_manager::{ManagePatches, PatchManager};
 use super::{disk_io, PatchInfo};
 
@@ -104,7 +100,7 @@ impl UpdaterState {
             patch_public_key,
         );
         if let Err(e) = state.save() {
-            warn!("Error saving state {:?}, ignoring.", e);
+            shorebird_warn!("Error saving state {:?}, ignoring.", e);
         }
         state
     }
@@ -118,9 +114,10 @@ impl UpdaterState {
         match load_result {
             Ok(mut loaded) => {
                 if loaded.serialized_state.release_version != release_version {
-                    info!(
+                    shorebird_info!(
                         "release_version changed {} -> {}, creating new state",
-                        loaded.serialized_state.release_version, release_version
+                        loaded.serialized_state.release_version,
+                        release_version
                     );
                     let _ = loaded.patch_manager.reset();
                     return Self::create_new_and_save(
@@ -133,7 +130,7 @@ impl UpdaterState {
             }
             Err(e) => {
                 if !is_file_not_found(&e) {
-                    info!("No existing state file found: {:#}, creating new state.", e);
+                    shorebird_info!("No existing state file found: {:#}, creating new state.", e);
                 }
                 Self::create_new_and_save(storage_dir, release_version, patch_public_key)
             }

@@ -10,10 +10,6 @@ use anyhow::{bail, Result};
 use once_cell::sync::OnceCell;
 use std::sync::Mutex;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::println as debug; // Workaround to use println! for logs.
-
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
 /// cbindgen:ignore
@@ -132,7 +128,7 @@ pub fn set_config(
             file_provider,
             patch_public_key: yaml.patch_public_key.to_owned(),
         };
-        debug!("Updater configured with: {:?}", new_config);
+        shorebird_debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
 
         Ok(())

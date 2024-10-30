@@ -16,10 +16,6 @@ use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchChe
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as info, println as error, println as debug}; // Workaround to use println! for logs.
-
 #[cfg(test)]
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
@@ -190,7 +186,7 @@ pub fn init(
         .map_err(|err| InitError::InvalidArgument("yaml".to_string(), err.to_string()))?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
-    debug!("libapp_path: {:?}", libapp_path);
+    shorebird_debug!("libapp_path: {:?}", libapp_path);
     let set_config_result = set_config(
         app_config,
         file_provider,
@@ -236,7 +232,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
         Ok(())
     })
     .map_err(|e| {
-        error!("Failed to clean up after a failed patch: {:?}", e);
+        shorebird_error!("Failed to clean up after a failed patch: {:?}", e);
         InitError::FailedToCleanUpFailedPatch
     })
 }
@@ -258,7 +254,7 @@ pub fn check_for_update() -> anyhow::Result<bool> {
     })?;
 
     let response = request_fn(&url, request)?;
-    debug!("Patch check response: {:?}", response);
+    shorebird_debug!("Patch check response: {:?}", response);
 
     if let Some(patch) = response.patch {
         match should_install_patch(patch.number)? {
@@ -300,7 +296,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
             hex::encode(hash)
         );
     }
-    debug!("Hash match: {:?}", path);
+    shorebird_debug!("Hash match: {:?}", path);
     Ok(())
 }
 
@@ -349,7 +345,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     for event in events {
         let result = crate::network::send_patch_event(event, &config);
         if let Err(err) = result {
-            error!("Failed to report event: {:?}", err);
+            shorebird_error!("Failed to report event: {:?}", err);
         }
     }
     let request = with_mut_state(|state| {
@@ -357,7 +353,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         // loaded the state now, but that's OK for now.
         let result = state.clear_events();
         if let Err(err) = result {
-            error!("Failed to clear events: {:?}", err);
+            shorebird_error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
         Ok(PatchCheckRequest::new(&config))
@@ -366,13 +362,12 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Check for update.
     let patch_check_request_fn = &(config.network_hooks.patch_check_request_fn);
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
-    info!("Patch check response: {:?}", response);
+    shorebird_info!("Patch check response: {:?}", response);
 
     with_mut_state(|state| {
         if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
             if !rolled_back_patches.is_empty() {
                 for patch_number in rolled_back_patches {
-                    info!("Attempting uninstall of patch {}...", patch_number);
                     state.uninstall_patch(patch_number)?;
                 }
             }
@@ -421,7 +416,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
         };
         // Move/state update should be "atomic" (it isn't today).
         state.install_patch(&patch_info, &patch.hash, patch.hash_signature.as_deref())?;
-        info!(
+        shorebird_info!(
             "Patch {} successfully downloaded. It will be launched when the app next restarts.",
             patch.number
         );
@@ -430,7 +425,7 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
             let event = PatchEvent::new(&config, EventType::PatchDownload, patch.number, None);
             let report_result = crate::network::send_patch_event(event, &config);
             if let Err(err) = report_result {
-                error!("Failed to report patch download: {:?}", err);
+                shorebird_error!("Failed to report patch download: {:?}", err);
             }
         });
 
@@ -445,7 +440,7 @@ fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckRe
     // Don't install a patch if it has previously failed to boot.
     let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch_number)))?;
     if is_known_bad_patch {
-        info!(
+        shorebird_info!(
             "Patch {} has previously failed to boot, skipping.",
             patch_number
         );
@@ -456,7 +451,7 @@ fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckRe
     let next_boot_patch = with_mut_state(|state| Ok(state.next_boot_patch()))?;
     if let Some(next_boot_patch) = next_boot_patch {
         if next_boot_patch.number == patch_number {
-            info!("Patch {} is already installed, skipping.", patch_number);
+            shorebird_info!("Patch {} is already installed, skipping.", patch_number);
             return Ok(ShouldInstallPatchCheckResult::PatchAlreadyInstalled);
         }
     }
@@ -477,12 +472,12 @@ where
 {
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
-    debug!("Patch is compressed, inflating...");
+    shorebird_debug!("Patch is compressed, inflating...");
     use std::io::{BufReader, BufWriter};
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
-    debug!("Reading patch file: {:?}", patch_path);
+    shorebird_debug!("Reading patch file: {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path)
             .context(format!("Failed to open patch file: {:?}", patch_path))?,
@@ -502,7 +497,7 @@ where
         // Most important is to not crash.
         let result = decompress.copy(compressed_patch_r, patch_w);
         if let Err(err) = result {
-            error!("Decompression thread failed: {err}");
+            shorebird_error!("Decompression thread failed: {}", err);
         }
     });
 
@@ -537,7 +532,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     // do so because the semantics have changed:
     //   current is now "last successfully booted patch"
     //   next is now "patch to boot next"
-    info!("Reporting launch start.");
+    shorebird_info!("Reporting launch start.");
 
     with_mut_state(|state| {
         if let Some(next_boot_patch) = state.next_boot_patch() {
@@ -551,7 +546,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
-    info!("Reporting failed launch.");
+    shorebird_info!("Reporting failed launch.");
 
     with_config(|config| {
         let mut state = UpdaterState::load_or_new_on_error(
@@ -567,7 +562,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         // even if we fail to mark this one as bad (because it was already bad).
         let mark_result = state.record_boot_failure_for_patch(patch.number);
         if mark_result.is_err() {
-            error!("Failed to mark patch as bad: {:?}", mark_result);
+            shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
         let event = PatchEvent::new(
             config,
@@ -588,7 +583,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
 }
 
 pub fn report_launch_success() -> anyhow::Result<()> {
-    info!("Reporting successful launch.");
+    shorebird_info!("Reporting successful launch.");
 
     with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
@@ -634,7 +629,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             );
             let report_result = crate::network::send_patch_event(event, &config_copy);
             if let Err(err) = report_result {
-                error!("Failed to report successful patch install: {:?}", err);
+                shorebird_error!("Failed to report successful patch install: {:?}", err);
             }
         });
 
@@ -651,11 +646,11 @@ pub fn start_update_thread() {
         let status = match result {
             Ok(status) => status,
             Err(err) => {
-                error!("Update failed: {:?}", err);
+                shorebird_error!("Update failed: {:?}", err);
                 UpdateStatus::UpdateHadError
             }
         };
-        info!("Update thread finished with status: {}", status);
+        shorebird_info!("Update thread finished with status: {}", status);
     });
 }
 
