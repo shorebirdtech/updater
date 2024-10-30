@@ -12,10 +12,6 @@ use mockall::automock;
 #[cfg(test)]
 use tempdir::TempDir;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as shorebird_info, println as shorebird_error, println as shorebird_debug}; // Workaround to use println! for logs.
-
 const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
 const PATCH_ARTIFACT_FILENAME: &str = "dlc.vmcode";

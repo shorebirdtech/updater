@@ -11,10 +11,6 @@ use std::string::ToString;
 use crate::config::{current_arch, current_platform, UpdateConfig};
 use crate::events::PatchEvent;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as shorebird_info, println as shorebird_debug}; // Workaround to use println! for logs.
-
 pub fn patches_check_url(base_url: &str) -> String {
     format!("{base_url}/api/v1/patches/check")
 }

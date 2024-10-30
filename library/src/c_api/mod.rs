@@ -16,10 +16,6 @@ use std::path::PathBuf;
 
 use crate::updater;
 
-// <https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests>
-#[cfg(test)]
-use std::{println as shorebird_info, println as shorebird_error}; // Workaround to use println! for logs.
-
 use self::c_file::CFileProvder;
 
 mod c_file;

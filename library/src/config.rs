@@ -10,10 +10,6 @@ use anyhow::{bail, Result};
 use once_cell::sync::OnceCell;
 use std::sync::Mutex;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::println as shorebird_debug; // Workaround to use println! for logs.
-
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
 /// cbindgen:ignore

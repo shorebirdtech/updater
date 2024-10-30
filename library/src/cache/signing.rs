@@ -1,9 +1,6 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use std::path::Path;
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as shorebird_info, println as shorebird_debug, println as shorebird_error}; // Workaround to use println! for logs.
 
 /// Reads the file at `path` and returns the SHA-256 hash of its contents as a String.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {

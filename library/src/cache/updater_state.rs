@@ -12,10 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::PatchEvent;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as shorebird_info, println as shorebird_warn}; // Workaround to use println! for logs.
-
 use super::patch_manager::{ManagePatches, PatchManager};
 use super::{disk_io, PatchInfo};
 

@@ -16,10 +16,6 @@ use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchChe
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::{println as shorebird_info, println as shorebird_error, println as shorebird_debug}; // Workaround to use println! for logs.
-
 #[cfg(test)]
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;

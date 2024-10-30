@@ -6,10 +6,6 @@ use std::{
     path::Path,
 };
 
-// https://stackoverflow.com/questions/67087597/is-it-possible-to-use-rusts-log-info-for-tests
-#[cfg(test)]
-use std::println as shorebird_debug; // Workaround to use println! for logs.
-
 pub fn write<S, P>(serializable: &S, path: &P) -> anyhow::Result<()>
 where
     S: ?Sized + Serialize,

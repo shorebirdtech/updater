@@ -1,7 +1,6 @@
 // This is a required file for rust libraries which declares what files are
 // part of the library and what interfaces are public from the library.
 
-#[cfg(not(test))]
 #[macro_use]
 mod logging_macros;
 
