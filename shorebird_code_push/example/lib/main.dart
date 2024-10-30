@@ -52,81 +52,89 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _showDownloadingBanner() {
-    ScaffoldMessenger.of(context).showMaterialBanner(
-      const MaterialBanner(
-        content: Text('Downloading...'),
-        actions: [
-          SizedBox(
-            height: 14,
-            width: 14,
-            child: CircularProgressIndicator(),
-          ),
-        ],
-      ),
-    );
+    ScaffoldMessenger.of(context)
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        const MaterialBanner(
+          content: Text('Downloading...'),
+          actions: [
+            SizedBox(
+              height: 14,
+              width: 14,
+              child: CircularProgressIndicator(),
+            ),
+          ],
+        ),
+      );
   }
 
   void _showUpdateAvailableBanner() {
-    ScaffoldMessenger.of(context).showMaterialBanner(
-      MaterialBanner(
-        content: const Text('Update available'),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-              await _downloadUpdate();
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-            },
-            child: const Text('Download'),
-          ),
-        ],
-      ),
-    );
+    ScaffoldMessenger.of(context)
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        MaterialBanner(
+          content: const Text('Update available'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                await _downloadUpdate();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              },
+              child: const Text('Download'),
+            ),
+          ],
+        ),
+      );
   }
 
   void _showRestartBanner() {
-    ScaffoldMessenger.of(context).showMaterialBanner(
-      MaterialBanner(
-        content: const Text('A new patch is ready! Please restart your app.'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-            },
-            child: const Text('Dismiss'),
-          ),
-        ],
-      ),
-    );
+    ScaffoldMessenger.of(context)
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        MaterialBanner(
+          content: const Text('A new patch is ready! Please restart your app.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              },
+              child: const Text('Dismiss'),
+            ),
+          ],
+        ),
+      );
   }
 
-  void _showErrorBanner() {
-    ScaffoldMessenger.of(context).showMaterialBanner(
-      MaterialBanner(
-        content: const Text('An error occurred while downloading the update.'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-            },
-            child: const Text('Dismiss'),
+  void _showErrorBanner(Object error) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        MaterialBanner(
+          content: Text(
+            'An error occurred while downloading the update: $error.',
           ),
-        ],
-      ),
-    );
+          actions: [
+            TextButton(
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              },
+              child: const Text('Dismiss'),
+            ),
+          ],
+        ),
+      );
   }
 
   Future<void> _downloadUpdate() async {
     _showDownloadingBanner();
-
     try {
       await _updater.update();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
       _showRestartBanner();
     } catch (error) {
-      _showErrorBanner();
+      _showErrorBanner(error);
     }
   }
 
@@ -143,12 +151,10 @@ class _MyHomePageState extends State<MyHomePage> {
       body: Builder(
         builder: (context) {
           return switch (_state) {
-            Idle<UpdaterState>() => const SizedBox(),
             Loading() => const Center(child: CircularProgressIndicator()),
             Loaded<UpdaterState>(value: final state) =>
               _MyHomeBody(state: state),
-            Error<UpdaterState>(error: final error) =>
-              Center(child: Text('$error')),
+            _ => const SizedBox(),
           };
         },
       ),
