@@ -263,6 +263,8 @@ impl PatchManager {
     /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
     /// as the patch we're falling back from, we clear it as well.
     fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) -> Result<()> {
+        shorebird_info!("Falling back from patch {}", bad_patch_number);
+
         // Continue even if we fail to delete the patch artifacts. It's more important to not try to
         // boot from a bad patch than to delete its artifacts.
         // No need to log failure – delete_patch_artifacts logs for us.
@@ -302,6 +304,7 @@ impl PatchManager {
     /// Deleting all other patch artifacts would delete patch 3, and because we've "seen" patch 3,
     /// we would never try to download it again (it would be considered "bad").
     fn delete_patch_artifacts_older_than(&mut self, patch_number: usize) -> Result<()> {
+        shorebird_info!("Deleting patch artifacts older than {}", patch_number);
         for entry in std::fs::read_dir(self.patches_dir())? {
             let entry = entry?;
             match entry.file_name().to_string_lossy().parse::<usize>() {
@@ -362,6 +365,10 @@ impl ManagePatches for PatchManager {
             self.patches_state.last_booted_patch.clone(),
         ) {
             if last_boot_patch.number != next_boot_patch.number {
+                shorebird_info!(
+                    "Patch {} was installed but never booted never booted, deleting artifacts",
+                    next_boot_patch.number
+                );
                 let _ = self.delete_patch_artifacts(next_boot_patch.number);
             }
         }
