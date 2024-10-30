@@ -133,7 +133,6 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final state = _state;
     final loading = _isUpToDate is Loading<bool>;
 
     return Scaffold(
@@ -143,11 +142,12 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: Builder(
         builder: (context) {
-          return switch (state) {
+          return switch (_state) {
             Idle<UpdaterState>() =>
               const Center(child: CircularProgressIndicator()),
             Loading() => const Center(child: CircularProgressIndicator()),
-            Loaded<UpdaterState>() => _MyHomeBody(state: state.value),
+            Loaded<UpdaterState>(value: final state) =>
+              _MyHomeBody(state: state),
             Error<UpdaterState>() =>
               const Center(child: Text('Something went wrong')),
           };

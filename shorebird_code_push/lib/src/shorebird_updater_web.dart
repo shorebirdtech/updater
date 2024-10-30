@@ -1,7 +1,11 @@
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
+/// {@template unsupported_platform_exception}
+/// Thrown when an operation is not supported on the current platform.
+/// {@endtemplate}
 class UnsupportedPlatformException extends UpdateException {
+  /// {@macro unsupported_platform_exception}
   const UnsupportedPlatformException()
       : super('Shorebird is not supported on the web.');
 }
