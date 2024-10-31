@@ -62,16 +62,6 @@ enum UpdateStatus {
   unavailable,
 }
 
-/// The types of patches.
-enum PatchType {
-  /// The patch which is currently installed and running on the device.
-  current,
-
-  /// The next patch which was downloaded and is ready to be installed upon a
-  /// restart (see [UpdateStatus.restartRequired]).
-  next,
-}
-
 /// {@template shorebird_updater}
 /// Manage updates for a Shorebird app.
 /// {@endtemplate}
@@ -90,7 +80,10 @@ abstract class ShorebirdUpdater {
   /// Returns information about the specified [PatchType].
   /// Returns `null` if no patch exists for the provided [type].
   /// Returns `null` if the updater is not available.
-  Future<Patch?> readPatch(PatchType type);
+  Future<Patch?> readCurrentPatch();
+
+  /// Returns information about the next patch ()
+  Future<Patch?> readNextPatch();
 
   /// Checks for available updates and returns the [UpdateStatus].
   /// This method should be used to determine the update status before calling
