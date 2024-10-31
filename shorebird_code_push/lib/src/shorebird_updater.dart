@@ -5,39 +5,40 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// Signature for a function that reports download progress.
 typedef OnDownloadProgress = void Function(int received, int total);
 
-/// {@template update_exception}
+/// {@template updater_exception}
 /// Thrown when an error occurs while performing an update.
 /// {@endtemplate}
-class UpdateException implements Exception {
-  /// {@macro update_exception}
-  const UpdateException(this.message);
+class UpdaterException implements Exception {
+  /// {@macro updater_exception}
+  const UpdaterException(this.message);
 
   /// The error message.
   final String message;
 
   @override
-  String toString() => 'UpdateException: $message';
+  String toString() => 'UpdaterException: $message';
 }
 
-/// {@template patch_state}
-/// Information about the current (installed) and next (downloaded) patches.
+/// {@template unsupported_platform_exception}
+/// Thrown when an operation is not supported on the current platform.
 /// {@endtemplate}
-class PatchState {
-  /// {@macro patch_state}
-  const PatchState({this.current, this.next});
+class UnsupportedPlatformException extends UpdaterException {
+  /// {@macro unsupported_platform_exception}
+  const UnsupportedPlatformException()
+      : super('Shorebird is not supported on the current platform.');
+}
 
-  /// The patch number of the currently installed patch.
-  /// This is the patch that the app is currently running.
-  /// Returns null if no patch is installed.
-  final Patch? current;
-
-  /// The patch number of the patch that has been most recently downloaded.
-  /// If no patch has been downloaded, this will be null.
-  /// See also:
-  /// * [ShorebirdUpdater.updateStatus] to determine whether a new patch is
-  ///   available.
-  /// * [ShorebirdUpdater.update] to download a new patch.
-  final Patch? next;
+/// {@template updater_unavailable_exception}
+/// Thrown when an operation is not supported on the current platform.
+/// {@endtemplate}
+class UpdaterUnavailableException extends UpdaterException {
+  /// {@macro updater_unavailable_exception}
+  const UpdaterUnavailableException() : super('''
+The Shorebird updater is not available.
+This occurs when using package:shorebird_code_push in an app that does not
+contain the Shorebird Engine. Most commonly this is due to building with
+`flutter build` or `flutter run` instead of `shorebird release`.
+''');
 }
 
 /// {@template patch}
@@ -62,9 +63,16 @@ enum UpdateStatus {
   /// The app is up to date, but a restart is required for the update to take
   /// effect.
   restartRequired,
+}
 
-  /// The current status is unsupported because the updater is not available.
-  unsupported,
+/// The types of patches.
+enum PatchType {
+  /// The patch which is currently installed and running on the device.
+  current,
+
+  /// The next patch which was downloaded and is ready to be installed upon a
+  /// restart (see [UpdateStatus.restartRequired]).
+  next,
 }
 
 /// {@template shorebird_updater}
@@ -82,24 +90,26 @@ abstract class ShorebirdUpdater {
   ///    contain the Shorebird engine.
   bool get isAvailable;
 
-  /// The current state of the updater which includes the currently installed
-  /// and downloaded patches.
-  Future<Patch?> get currentPatch;
+  /// Returns information about the specified [PatchType].
+  /// Returns `null` if no patch exists for the provided [type].
+  Future<Patch?> readPatch(PatchType type);
 
-  /// The current state of the updater which includes the currently installed
-  /// and downloaded patches.
-  Future<Patch?> get nextPatch;
+  /// Checks for available updates and returns the [UpdateStatus].
+  /// This method should be used to determine the update status before calling
+  /// [update].
+  Future<UpdateStatus> checkForUpdate();
 
-  /// Returns the current [UpdateStatus].
-  Future<UpdateStatus> get updateStatus;
-
-  /// Updates the app to the latest patch.
+  /// Updates the app to the latest patch (if available).
   /// Note: The app must be restarted for the update to take effect.
   ///
   /// [onDownloadProgress] is called with the number of bytes received and the
   /// total number of bytes to be received.
   ///
-  /// Throws an [UpdateException] if an error occurs while updating or if no new
+  /// Throws an [UpdaterException] if an error occurs while updating or if no new
   /// patch is available.
+  ///
+  /// See also:
+  /// * [checkForUpdate], which should be called to check if an update is
+  ///   available before calling this method.
   Future<void> update({OnDownloadProgress? onDownloadProgress});
 }

@@ -38,13 +38,13 @@ class _MyHomePageState extends State<MyHomePage> {
       _isUpdaterAvailable = _updater.isAvailable;
       _currentPatch = AsyncValue.loading();
     });
-    final currentPatch = await _updater.currentPatch;
+    final currentPatch = await _updater.readPatch(PatchType.current);
     setState(() => _currentPatch = AsyncValue.loaded(currentPatch));
   }
 
   Future<void> _checkForUpdate() async {
     try {
-      final status = await _updater.updateStatus;
+      final status = await _updater.checkForUpdate();
       if (!mounted) return;
       if (status == UpdateStatus.outdated) _showUpdateAvailableBanner();
     } catch (_) {}

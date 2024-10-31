@@ -27,43 +27,36 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => _isAvailable;
 
   @override
-  Future<Patch?> get currentPatch async {
+  Future<Patch?> readPatch(PatchType type) async {
+    if (!_isAvailable) throw const UpdaterUnavailableException();
+
     return Isolate.run(
       () {
         try {
-          final currentPatchNumber = _updater.currentPatchNumber();
-          return currentPatchNumber > 0
-              ? Patch(number: currentPatchNumber)
-              : null;
-        } catch (_) {
-          return null;
+          late final int patchNumber;
+          switch (type) {
+            case PatchType.current:
+              patchNumber = _updater.currentPatchNumber();
+            case PatchType.next:
+              patchNumber = _updater.nextPatchNumber();
+          }
+          return patchNumber > 0 ? Patch(number: patchNumber) : null;
+        } catch (error) {
+          throw UpdaterException('$error');
         }
       },
     );
   }
 
   @override
-  Future<Patch?> get nextPatch async {
-    return Isolate.run(
-      () {
-        try {
-          final nextPatchNumber = _updater.nextPatchNumber();
-          return nextPatchNumber > 0 ? Patch(number: nextPatchNumber) : null;
-        } catch (_) {
-          return null;
-        }
-      },
-    );
-  }
-
-  @override
-  Future<UpdateStatus> get updateStatus async {
-    if (!_isAvailable) return UpdateStatus.unsupported;
+  Future<UpdateStatus> checkForUpdate() async {
+    if (!_isAvailable) throw const UpdaterUnavailableException();
 
     final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
-    final (current, next) = await (currentPatch, nextPatch).wait;
+    final (current, next) =
+        await (readPatch(PatchType.current), readPatch(PatchType.next)).wait;
     return next != null && current?.number != next.number
         ? UpdateStatus.restartRequired
         : UpdateStatus.upToDate;
@@ -72,11 +65,19 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   @override
   Future<void> update({OnDownloadProgress? onDownloadProgress}) async {
     final hasUpdate = await Isolate.run(_updater.checkForUpdate);
-    if (!hasUpdate) throw const UpdateException('No updates available.');
+    if (!hasUpdate) {
+      throw const UpdaterException(
+        '''
+No update available.
+update() should only be called when checkForUpdate() returns UpdateStatus.outdated.''',
+      );
+    }
+    // TODO(felangel): report download progress.
     await Isolate.run(_updater.downloadUpdate);
-    final status = await updateStatus;
+    final status = await checkForUpdate();
     if (status != UpdateStatus.restartRequired) {
-      throw const UpdateException('Failed to download update.');
+      // TODO(felangel): surface the underlying error reason.
+      throw const UpdaterException('Failed to download update.');
     }
   }
 }

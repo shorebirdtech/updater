@@ -1,15 +1,6 @@
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
-/// {@template unsupported_platform_exception}
-/// Thrown when an operation is not supported on the current platform.
-/// {@endtemplate}
-class UnsupportedPlatformException extends UpdateException {
-  /// {@macro unsupported_platform_exception}
-  const UnsupportedPlatformException()
-      : super('Shorebird is not supported on the web.');
-}
-
 /// {@template shorebird_updater_web}
 /// The Shorebird web updater.
 /// {@endtemplate}
@@ -24,13 +15,11 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => false;
 
   @override
-  Future<Patch?> get currentPatch => throw const UnsupportedPlatformException();
+  Future<Patch?> readPatch(PatchType type) =>
+      throw const UnsupportedPlatformException();
 
   @override
-  Future<Patch?> get nextPatch => throw const UnsupportedPlatformException();
-
-  @override
-  Future<UpdateStatus> get updateStatus =>
+  Future<UpdateStatus> checkForUpdate() =>
       throw const UnsupportedPlatformException();
 
   @override
