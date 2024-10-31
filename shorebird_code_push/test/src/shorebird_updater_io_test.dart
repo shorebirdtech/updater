@@ -64,11 +64,11 @@ void main() {
           overridePrint((_) async {
             shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
             await expectLater(
-              shorebirdUpdater.readPatch(PatchType.current),
+              shorebirdUpdater.readCurrentPatch(),
               completion(isNull),
             );
             await expectLater(
-              shorebirdUpdater.readPatch(PatchType.next),
+              shorebirdUpdater.readNextPatch(),
               completion(isNull),
             );
           }),
@@ -84,11 +84,11 @@ void main() {
 
         test('returns null', () async {
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.current),
+            shorebirdUpdater.readCurrentPatch(),
             completion(isNull),
           );
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.next),
+            shorebirdUpdater.readNextPatch(),
             completion(isNull),
           );
         });
@@ -105,11 +105,11 @@ void main() {
 
         test('returns correct patch numbers', () async {
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.current),
+            shorebirdUpdater.readCurrentPatch(),
             completion(isNull),
           );
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.next),
+            shorebirdUpdater.readNextPatch(),
             completion(
               isA<Patch>().having(
                 (p) => p.number,
@@ -132,7 +132,7 @@ void main() {
 
         test('returns correct patch numbers', () async {
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.current),
+            shorebirdUpdater.readCurrentPatch(),
             completion(
               isA<Patch>().having(
                 (p) => p.number,
@@ -142,7 +142,7 @@ void main() {
             ),
           );
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.next),
+            shorebirdUpdater.readNextPatch(),
             completion(
               isA<Patch>().having(
                 (p) => p.number,
@@ -167,7 +167,7 @@ void main() {
 
         test('returns correct patch numbers', () async {
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.current),
+            shorebirdUpdater.readCurrentPatch(),
             completion(
               isA<Patch>().having(
                 (p) => p.number,
@@ -177,7 +177,7 @@ void main() {
             ),
           );
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.next),
+            shorebirdUpdater.readNextPatch(),
             completion(
               isA<Patch>().having(
                 (p) => p.number,
@@ -198,7 +198,7 @@ void main() {
 
         test('throws $UpdaterException', () async {
           await expectLater(
-            () => shorebirdUpdater.readPatch(PatchType.next),
+            () => shorebirdUpdater.readNextPatch(),
             throwsA(isA<UpdaterException>()),
           );
         });

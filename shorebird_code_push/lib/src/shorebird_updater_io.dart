@@ -40,19 +40,29 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => _isAvailable;
 
   @override
-  Future<Patch?> readPatch(PatchType type) async {
+  Future<Patch?> readCurrentPatch() async {
     if (!_isAvailable) return null;
 
     return _run(
       () {
         try {
-          late final int patchNumber;
-          switch (type) {
-            case PatchType.current:
-              patchNumber = _updater.currentPatchNumber();
-            case PatchType.next:
-              patchNumber = _updater.nextPatchNumber();
-          }
+          final patchNumber = _updater.currentPatchNumber();
+          return patchNumber > 0 ? Patch(number: patchNumber) : null;
+        } catch (error) {
+          throw UpdaterException('$error');
+        }
+      },
+    );
+  }
+
+  @override
+  Future<Patch?> readNextPatch() async {
+    if (!_isAvailable) return null;
+
+    return _run(
+      () {
+        try {
+          final patchNumber = _updater.nextPatchNumber();
           return patchNumber > 0 ? Patch(number: patchNumber) : null;
         } catch (error) {
           throw UpdaterException('$error');
@@ -68,8 +78,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     final isUpdateAvailable = await _run(_updater.checkForUpdate);
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
-    final (current, next) =
-        await (readPatch(PatchType.current), readPatch(PatchType.next)).wait;
+    final (current, next) = await (readCurrentPatch(), readNextPatch()).wait;
     return next != null && current?.number != next.number
         ? UpdateStatus.restartRequired
         : UpdateStatus.upToDate;

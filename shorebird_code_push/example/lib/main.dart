@@ -38,7 +38,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _isUpdaterAvailable = _updater.isAvailable;
       _currentPatch = AsyncValue.loading();
     });
-    final currentPatch = await _updater.readPatch(PatchType.current);
+    final currentPatch = await _updater.readCurrentPatch();
     setState(() => _currentPatch = AsyncValue.loaded(currentPatch));
   }
 

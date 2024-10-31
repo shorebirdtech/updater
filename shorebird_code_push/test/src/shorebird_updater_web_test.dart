@@ -51,11 +51,11 @@ void main() {
         'returns null',
         overridePrint((_) async {
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.current),
+            shorebirdUpdater.readCurrentPatch(),
             completion(isNull),
           );
           await expectLater(
-            shorebirdUpdater.readPatch(PatchType.next),
+            shorebirdUpdater.readNextPatch(),
             completion(isNull),
           );
         }),

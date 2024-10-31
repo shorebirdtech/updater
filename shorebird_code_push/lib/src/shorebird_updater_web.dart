@@ -17,7 +17,10 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => false;
 
   @override
-  Future<Patch?> readPatch(PatchType type) async => null;
+  Future<Patch?> readCurrentPatch() async => null;
+
+  @override
+  Future<Patch?> readNextPatch() async => null;
 
   @override
   Future<UpdateStatus> checkForUpdate() async => UpdateStatus.unavailable;
