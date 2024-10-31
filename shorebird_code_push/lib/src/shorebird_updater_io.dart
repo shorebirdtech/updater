@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:isolate';
 
+import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
@@ -88,19 +90,12 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<void> update() async {
     if (!_isAvailable) return;
 
-    final hasUpdate = await _run(_updater.checkForUpdate);
-    if (!hasUpdate) {
-      throw const UpdaterException(
-        '''
-No update available.
-update() should only be called when checkForUpdate() returns UpdateStatus.outdated.''',
-      );
-    }
-    await _run(_updater.downloadUpdate);
-    final status = await checkForUpdate();
-    if (status != UpdateStatus.restartRequired) {
-      // TODO(felangel): surface the underlying error reason.
-      throw const UpdaterException('Failed to download update.');
+    final error = await _run(_updater.downloadUpdateWithError);
+    if (error != nullptr) {
+      final reason = error.toDartString();
+      _updater.freeString(error);
+      // TODO: use a struct from rust instead of a string
+      throw UpdaterException(reason);
     }
   }
 }

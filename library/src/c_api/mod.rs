@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use crate::updater;
+use crate::{updater, UpdateStatus};
 
 use self::c_file::CFileProvder;
 
@@ -46,6 +46,17 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
+pub const SHOREBIRD_NO_UPDATE: i32 = 0;
+pub const SHOREBIRD_UPDATE_INSTALLED: i32 = 1;
+pub const SHOREBIRD_UPDATE_HAD_ERROR: i32 = 2;
+pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
+pub const SHOREBIRD_UPDATE_ERROR: i32 = 4;
+
+#[repr(C)]
+pub struct UpdateResult {
+    pub status: i32,
+    pub message: *const libc::c_char,
+}
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FileCallbacks {
@@ -113,11 +124,25 @@ fn log_on_error<F, R>(f: F, context: &str, error_result: R) -> R
 where
     F: FnOnce() -> Result<R, anyhow::Error>,
 {
-    f().unwrap_or_else(|e| {
+    f().unwrap_or_else(|e: anyhow::Error| {
         shorebird_error!("Error {}: {:?}", context, e);
         error_result
     })
 }
+
+// /// Helper function to log errors instead of panicking or returning a result.
+// fn log_on_error2<F, R>(f: F, context: &str) -> R
+// where
+//     F: FnOnce() -> Result<R, anyhow::Error>,
+// {
+//     match f() {
+//         Ok(result) => result,
+//         Err(e) => e.to_string(),
+//     }
+//     // f().unwrap_or_else(|e: anyhow::Error| {
+//     //     shorebird_error!("Error {}: {:?}", context, e);
+//     // })
+// }
 
 /// Configures updater.  First parameter is a struct containing configuration
 /// from the running app.  Second parameter is a YAML string containing
@@ -183,6 +208,13 @@ fn path_to_c_string(path: Option<PathBuf>) -> anyhow::Result<*mut c_char> {
     })
 }
 
+fn to_update_result(status: Result<UpdateStatus>) -> Option<UpdateResult> {
+    let result = match status {
+        Ok(status) => Some(UpdateResult(status as i32, std::ptr::null())),
+        Err(err) => None(),// Conver the err to an UpdateStatus
+    }
+}
+
 /// The path to the patch that will boot on the next run of the app, or NULL if
 /// there is no next patch.
 #[no_mangle]
@@ -212,6 +244,15 @@ pub unsafe extern "C" fn shorebird_free_string(c_string: *mut c_char) {
     }
 }
 
+pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult) {
+    if result.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Box<UpdateResult>::from_raw(result));
+    }
+}
+
 /// Check for an update.  Returns true if an update is available.
 #[no_mangle]
 pub extern "C" fn shorebird_check_for_update() -> bool {
@@ -226,6 +267,21 @@ pub extern "C" fn shorebird_update() {
         "downloading update",
         (),
     );
+}
+
+/// Synchronously download an update if one is available.
+/// Returns an error if one occurs.
+#[no_mangle]
+pub extern "C" fn shorebird_update_with_error() -> *mut libc::c_char {
+    let res = updater::update().map(|result| shorebird_info!("Update result: {}", result));
+
+    match res {
+        Ok(_) => std::ptr::null_mut(),
+        Err(e) => {
+            shorebird_error!("Error downloading update: {:?}", e);
+            allocate_c_string(e.to_string().as_str()).unwrap_or(std::ptr::null_mut())
+        }
+    }
 }
 
 /// Start a thread to download an update if one is available.

@@ -14,6 +14,16 @@
 #endif
 
 
+#define SHOREBIRD_NO_UPDATE 0
+
+#define SHOREBIRD_UPDATE_INSTALLED 1
+
+#define SHOREBIRD_UPDATE_HAD_ERROR 2
+
+#define SHOREBIRD_UPDATE_IS_BAD_PATCH 3
+
+#define SHOREBIRD_UPDATE_ERROR 4
+
 /**
  * Struct containing configuration parameters for the updater.
  * Passed to all updater functions.
@@ -125,6 +135,12 @@ SHOREBIRD_EXPORT bool shorebird_check_for_update(void);
  * Synchronously download an update if one is available.
  */
 SHOREBIRD_EXPORT void shorebird_update(void);
+
+/**
+ * Synchronously download an update if one is available.
+ * Returns an error if one occurs.
+ */
+SHOREBIRD_EXPORT char *shorebird_update_with_error(void);
 
 /**
  * Start a thread to download an update if one is available.
