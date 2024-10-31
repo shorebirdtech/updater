@@ -6,7 +6,9 @@ import 'package:shorebird_code_push/src/updater.dart';
 /// {@endtemplate}
 class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   /// {@macro shorebird_updater_web}
-  ShorebirdUpdaterImpl(this._updater);
+  ShorebirdUpdaterImpl(this._updater) {
+    logShorebirdEngineUnavailableMessage();
+  }
 
   // ignore: unused_field
   final Updater _updater;
@@ -15,15 +17,11 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => false;
 
   @override
-  Future<Patch?> readPatch(PatchType type) =>
-      throw const UnsupportedPlatformException();
+  Future<Patch?> readPatch(PatchType type) async => null;
 
   @override
-  Future<UpdateStatus> checkForUpdate() =>
-      throw const UnsupportedPlatformException();
+  Future<UpdateStatus> checkForUpdate() async => UpdateStatus.unavailable;
 
   @override
-  Future<void> update({OnDownloadProgress? onDownloadProgress}) {
-    throw const UnsupportedPlatformException();
-  }
+  Future<void> update() async {}
 }

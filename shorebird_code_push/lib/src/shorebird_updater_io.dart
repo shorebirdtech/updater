@@ -1,20 +1,31 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
+
+@visibleForTesting
+
+/// Type definition for [Isolate.run].
+typedef IsolateRun = Future<R> Function<R>(
+  FutureOr<R> Function(), {
+  String? debugName,
+});
 
 /// {@template shorebird_updater_io}
 /// The Shorebird web updater.
 /// {@endtemplate}
 class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   /// {@macro shorebird_updater_io}
-  ShorebirdUpdaterImpl(this._updater) {
+  ShorebirdUpdaterImpl(this._updater, {IsolateRun? run})
+      : _run = run ?? Isolate.run {
     try {
       // If the Shorebird Engine is not available, this will throw an exception.
       _updater.currentPatchNumber();
       _isAvailable = true;
     } catch (_) {
+      logShorebirdEngineUnavailableMessage();
       _isAvailable = false;
     }
   }
@@ -23,14 +34,16 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
   final Updater _updater;
 
+  final IsolateRun _run;
+
   @override
   bool get isAvailable => _isAvailable;
 
   @override
   Future<Patch?> readPatch(PatchType type) async {
-    if (!_isAvailable) throw const UpdaterUnavailableException();
+    if (!_isAvailable) return null;
 
-    return Isolate.run(
+    return _run(
       () {
         try {
           late final int patchNumber;
@@ -50,9 +63,9 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
   @override
   Future<UpdateStatus> checkForUpdate() async {
-    if (!_isAvailable) throw const UpdaterUnavailableException();
+    if (!_isAvailable) return UpdateStatus.unavailable;
 
-    final isUpdateAvailable = await Isolate.run(_updater.checkForUpdate);
+    final isUpdateAvailable = await _run(_updater.checkForUpdate);
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
     final (current, next) =
@@ -63,8 +76,10 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<void> update({OnDownloadProgress? onDownloadProgress}) async {
-    final hasUpdate = await Isolate.run(_updater.checkForUpdate);
+  Future<void> update() async {
+    if (!_isAvailable) return;
+
+    final hasUpdate = await _run(_updater.checkForUpdate);
     if (!hasUpdate) {
       throw const UpdaterException(
         '''
@@ -72,8 +87,7 @@ No update available.
 update() should only be called when checkForUpdate() returns UpdateStatus.outdated.''',
       );
     }
-    // TODO(felangel): report download progress.
-    await Isolate.run(_updater.downloadUpdate);
+    await _run(_updater.downloadUpdate);
     final status = await checkForUpdate();
     if (status != UpdateStatus.restartRequired) {
       // TODO(felangel): surface the underlying error reason.
