@@ -77,12 +77,15 @@ abstract class ShorebirdUpdater {
   ///    contain the Shorebird engine.
   bool get isAvailable;
 
-  /// Returns information about the specified [PatchType].
-  /// Returns `null` if no patch exists for the provided [type].
+  /// Returns information about the currently installed patch.
+  /// Returns `null` if no patch has been installed.
   /// Returns `null` if the updater is not available.
   Future<Patch?> readCurrentPatch();
 
-  /// Returns information about the next patch ()
+  /// Returns information about the most recently downloaded patch.
+  /// Returns the same patch as [readCurrentPatch] if no new patch has been
+  /// downloaded.
+  /// Returns `null` if the updater is not available.
   Future<Patch?> readNextPatch();
 
   /// Checks for available updates and returns the [UpdateStatus].
