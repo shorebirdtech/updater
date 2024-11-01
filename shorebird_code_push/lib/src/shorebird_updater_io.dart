@@ -17,7 +17,7 @@ typedef IsolateRun = Future<R> Function<R>(
 });
 
 /// {@template shorebird_updater_io}
-/// The Shorebird web updater.
+/// The Shorebird IO Updater.
 /// {@endtemplate}
 class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   /// {@macro shorebird_updater_io}
