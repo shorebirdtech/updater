@@ -44,23 +44,24 @@ void main() => runApp(const MyApp());
 
 class _MyHomePageState extends State<MyHomePage> {
   @override
-  Future<void> initState() async {
+  void initState() {
     super.initState();
 
     // Get the current patch number and print it to the console.
     // It will be `null` if no patches are installed.
-    final currentPatch = await shorebirdCodePush.readCurrentPatch();
-    print('The current patch number is: ${currentPatch.number}');
+    updater.readCurrentPatch().then((currentPatch) {
+      print('The current patch number is: ${currentPatch.number}');
+    });
   }
 
   Future<void> _checkForUpdates() async {
     // Check whether a new update is available.
-    final status = await shorebirdCodePush.checkForUpdates();
+    final status = await updater.checkForUpdates();
 
     if (status == UpdateStatus.outdated) {
       try {
         // Perform the update
-        await shorebirdCodePush.update();
+        await updater.update();
       } on UpdateException catch (error) {
         // Handle any errors that occur while updating.
       }

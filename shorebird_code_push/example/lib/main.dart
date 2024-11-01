@@ -32,18 +32,17 @@ class _MyHomePageState extends State<MyHomePage> {
   var _currentPatch = AsyncValue<Patch?>.idle();
 
   @override
-  Future<void> initState() async {
+  void initState() {
     super.initState();
     setState(() {
       _isUpdaterAvailable = _updater.isAvailable;
       _currentPatch = AsyncValue.loading();
     });
-    try {
-      final currentPatch = await _updater.readCurrentPatch();
+    _updater.readCurrentPatch().then((currentPatch) {
       setState(() => _currentPatch = AsyncValue.loaded(currentPatch));
-    } catch (error) {
+    }).catchError((Object error) {
       setState(() => _currentPatch = AsyncValue.error(error));
-    }
+    });
   }
 
   Future<void> _checkForUpdate() async {
