@@ -7,11 +7,11 @@ enum UpdateFailureReason {
   /// No update is available.
   noUpdate,
 
-  /// The update failed because the patch failed to install.
-  installFailed,
-
   /// The update failed because the patch could not be downloaded.
   downloadFailed,
+
+  /// The update failed because the patch failed to install.
+  installFailed,
 
   /// The update failed for an unknown reason.
   unknown,
