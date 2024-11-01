@@ -145,9 +145,9 @@ SHOREBIRD_EXPORT void shorebird_update(void);
 
 /**
  * Synchronously download an update if one is available.
- * Returns an error if one occurs.
+ * Returns an [UpdateResult] indicating whether the update was successful.
  */
-SHOREBIRD_EXPORT const struct UpdateResult *shorebird_update_with_error(void);
+SHOREBIRD_EXPORT const struct UpdateResult *shorebird_update_with_result(void);
 
 /**
  * Start a thread to download an update if one is available.

@@ -2450,15 +2450,15 @@ class UpdaterBindings {
       _shorebird_updatePtr.asFunction<void Function()>();
 
   /// Synchronously download an update if one is available.
-  /// Returns an error if one occurs.
-  ffi.Pointer<UpdateResult> shorebird_update_with_error() {
-    return _shorebird_update_with_error();
+  /// Returns an [UpdateResult] indicating whether the update was successful.
+  ffi.Pointer<UpdateResult> shorebird_update_with_result() {
+    return _shorebird_update_with_result();
   }
 
-  late final _shorebird_update_with_errorPtr =
+  late final _shorebird_update_with_resultPtr =
       _lookup<ffi.NativeFunction<ffi.Pointer<UpdateResult> Function()>>(
-          'shorebird_update_with_error');
-  late final _shorebird_update_with_error = _shorebird_update_with_errorPtr
+          'shorebird_update_with_result');
+  late final _shorebird_update_with_result = _shorebird_update_with_resultPtr
       .asFunction<ffi.Pointer<UpdateResult> Function()>();
 
   /// Start a thread to download an update if one is available.

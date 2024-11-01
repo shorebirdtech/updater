@@ -264,9 +264,9 @@ pub extern "C" fn shorebird_update() {
 }
 
 /// Synchronously download an update if one is available.
-/// Returns an error if one occurs.
+/// Returns an [UpdateResult] indicating whether the update was successful.
 #[no_mangle]
-pub extern "C" fn shorebird_update_with_error() -> *const UpdateResult {
+pub extern "C" fn shorebird_update_with_result() -> *const UpdateResult {
     let result = to_update_result(updater::update());
     return Box::into_raw(Box::new(result));
 }

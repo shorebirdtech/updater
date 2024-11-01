@@ -30,9 +30,9 @@ class Updater {
   /// Downloads the latest patch, if available.
   void downloadUpdate() => bindings.shorebird_update();
 
-  /// Downloads the latest patch, if available.
-  Pointer<UpdateResult> downloadUpdateWithError() =>
-      bindings.shorebird_update_with_error();
+  /// Downloads the latest patch, if available and returns an [UpdateResult]
+  /// to indicate whether the update was successful.
+  Pointer<UpdateResult> update() => bindings.shorebird_update_with_result();
 
   /// Frees an update result allocated by the updater.
   void freeUpdateResult(Pointer<UpdateResult> ptr) =>

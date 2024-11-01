@@ -297,7 +297,7 @@ void main() {
       group('when a nullptr result is returned', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          when(() => updater.downloadUpdateWithError()).thenReturn(nullptr);
+          when(() => updater.update()).thenReturn(nullptr);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -312,7 +312,7 @@ void main() {
               ),
             ),
           );
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
         });
       });
 
@@ -322,7 +322,7 @@ void main() {
           final result = calloc.allocate<UpdateResult>(8);
           result.ref.status = 0; // SHOREBIRD_NO_UPDATE
           addTearDown(() => calloc.free(result));
-          when(() => updater.downloadUpdateWithError()).thenReturn(result);
+          when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -337,7 +337,7 @@ void main() {
               ),
             ),
           );
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
@@ -349,7 +349,7 @@ void main() {
           result.ref.status = 2; // SHOREBIRD_UPDATE_HAD_ERROR
           result.ref.message = 'oops'.toNativeUtf8().cast<Char>();
           addTearDown(() => calloc.free(result));
-          when(() => updater.downloadUpdateWithError()).thenReturn(result);
+          when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -364,7 +364,7 @@ void main() {
               ),
             ),
           );
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
@@ -375,7 +375,7 @@ void main() {
           final result = calloc.allocate<UpdateResult>(8);
           result.ref.status = 3; // SHOREBIRD_UPDATE_IS_BAD_PATCH
           addTearDown(() => calloc.free(result));
-          when(() => updater.downloadUpdateWithError()).thenReturn(result);
+          when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -390,7 +390,7 @@ void main() {
               ),
             ),
           );
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
@@ -401,7 +401,7 @@ void main() {
           final result = calloc.allocate<UpdateResult>(8);
           result.ref.status = 4; // SHOREBIRD_UPDATE_ERROR
           addTearDown(() => calloc.free(result));
-          when(() => updater.downloadUpdateWithError()).thenReturn(result);
+          when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -416,7 +416,7 @@ void main() {
               ),
             ),
           );
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
@@ -427,7 +427,7 @@ void main() {
           final result = calloc.allocate<UpdateResult>(8);
           result.ref.status = -1; // invalid status code
           addTearDown(() => calloc.free(result));
-          when(() => updater.downloadUpdateWithError()).thenReturn(result);
+          when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -442,7 +442,7 @@ void main() {
               ),
             ),
           );
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
@@ -453,13 +453,13 @@ void main() {
           final result = calloc.allocate<UpdateResult>(8);
           result.ref.status = 1; // SHOREBIRD_UPDATE_SUCCESS
           addTearDown(() => calloc.free(result));
-          when(() => updater.downloadUpdateWithError()).thenReturn(result);
+          when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
         test('completes', () async {
           await expectLater(shorebirdUpdater.update(), completes);
-          verify(updater.downloadUpdateWithError).called(1);
+          verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });

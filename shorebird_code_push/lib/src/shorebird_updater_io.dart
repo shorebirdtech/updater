@@ -96,7 +96,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     late final Pointer<UpdateResult> result;
 
     try {
-      result = await _run(_updater.downloadUpdateWithError);
+      result = await _run(_updater.update);
 
       if (result == nullptr) {
         const reason = UpdateFailureReason.unknown;
