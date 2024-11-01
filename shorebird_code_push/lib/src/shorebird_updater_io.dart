@@ -108,6 +108,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
         ? result.ref.message.cast<Utf8>().toDartString()
         : 'unknown';
     final message = reason.toFailureMessage(details);
+    _updater.freeUpdateResult(result);
     throw UpdateException(message: message, reason: reason);
   }
 }
