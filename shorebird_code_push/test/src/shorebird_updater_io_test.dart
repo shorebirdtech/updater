@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ffi';
 
 import 'package:mocktail/mocktail.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
@@ -290,9 +291,7 @@ void main() {
       group('when download fails', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          when(() => updater.nextPatchNumber()).thenReturn(0);
-          when(() => updater.checkForUpdate()).thenReturn(true);
-          when(() => updater.downloadUpdateWithError()).thenReturn();
+          when(() => updater.downloadUpdateWithError()).thenReturn(nullptr);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
