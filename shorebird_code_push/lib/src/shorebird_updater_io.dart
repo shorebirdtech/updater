@@ -25,6 +25,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       : _run = run ?? Isolate.run {
     try {
       // If the Shorebird Engine is not available, this will throw an exception.
+      // FIXME: Run this in an isolate or refactor the updater to avoid risking
+      // a hang.
       _updater.currentPatchNumber();
       _isAvailable = true;
     } catch (_) {
