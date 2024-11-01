@@ -245,13 +245,11 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
     if result.is_null() {
         return;
     }
+    let message = (*result).message;
+    if !message.is_null() {
+        shorebird_free_string(message);
+    }
     unsafe {
-        // drop the message if it's not null
-        let message = (*result).message;
-        if !message.is_null() {
-            drop(CString::from_raw((*result).message as *mut c_char));
-        }
-
         drop(Box::from_raw(result));
     }
 }
