@@ -432,24 +432,39 @@ void main() {
 
       group('when an outdated version of the engine is used', () {
         setUp(() {
-          when(() => updater.currentPatchNumber()).thenReturn(0);
+          when(updater.currentPatchNumber).thenReturn(0);
+          when(updater.nextPatchNumber).thenReturn(1);
           when(() => updater.update()).thenThrow(Exception('oops'));
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
-        test('throws $UpdateException', () async {
-          await expectLater(
-            shorebirdUpdater.update,
-            throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'Please upgrade the Shorebird Engine to use this API.',
-              ),
-            ),
-          );
+        test('falls back to downloadUpdate', () async {
+          await expectLater(shorebirdUpdater.update(), completes);
           verify(updater.update).called(1);
+          verify(updater.downloadUpdate).called(1);
           verifyNever(() => updater.freeUpdateResult(any()));
+        });
+
+        group('when update fails', () {
+          setUp(() {
+            when(updater.currentPatchNumber).thenReturn(0);
+            when(updater.nextPatchNumber).thenReturn(0);
+            shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
+          });
+
+          test('throws if legacy update fails', () async {
+            await expectLater(
+              shorebirdUpdater.update,
+              throwsA(
+                isA<UpdateException>().having((e) => e.message, 'message', '''
+Downloading update failed but reason is unknown due to legacy updater.
+Please upgrade the Shorebird Engine for improved error messages.'''),
+              ),
+            );
+            verify(updater.update).called(1);
+            verify(updater.downloadUpdate).called(1);
+            verifyNever(() => updater.freeUpdateResult(any()));
+          });
         });
       });
 

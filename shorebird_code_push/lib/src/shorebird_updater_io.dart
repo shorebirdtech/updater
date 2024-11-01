@@ -96,9 +96,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     try {
       result = await _run(_updater.update);
     } catch (_) {
-      // If the update method is not available, the engine is outdated.
-      const reason = UpdateFailureReason.unsupported;
-      throw UpdateException(message: reason.toFailureMessage(), reason: reason);
+      return _legacyFallback();
     }
 
     try {
@@ -121,6 +119,22 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     } finally {
       _updater.freeUpdateResult(result);
     }
+  }
+
+  // Fallback to downloadUpdate if update is not available.
+  Future<void> _legacyFallback() async {
+    await _run(_updater.downloadUpdate);
+    final (current, next) = await (readCurrentPatch(), readNextPatch()).wait;
+    final status = next != null && current?.number != next.number
+        ? UpdateStatus.restartRequired
+        : UpdateStatus.upToDate;
+    if (status == UpdateStatus.restartRequired) return;
+    throw const UpdateException(
+      message: '''
+Downloading update failed but reason is unknown due to legacy updater.
+Please upgrade the Shorebird Engine for improved error messages.''',
+      reason: UpdateFailureReason.unknown,
+    );
   }
 }
 
@@ -150,8 +164,6 @@ extension on UpdateFailureReason {
         return 'Update available but previously failed to install.';
       case UpdateFailureReason.downloadFailed:
         return 'An error occurred while downloading the patch: $details';
-      case UpdateFailureReason.unsupported:
-        return 'Please upgrade the Shorebird Engine to use this API.';
       case UpdateFailureReason.unknown:
         return 'An unknown error occurred.';
     }

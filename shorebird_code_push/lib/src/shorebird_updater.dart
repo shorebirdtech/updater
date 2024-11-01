@@ -13,9 +13,6 @@ enum UpdateFailureReason {
   /// The update failed because the patch could not be downloaded.
   downloadFailed,
 
-  /// The update failed because the API is unsupported on the current upgrader.
-  unsupported,
-
   /// The update failed for an unknown reason.
   unknown,
 }
