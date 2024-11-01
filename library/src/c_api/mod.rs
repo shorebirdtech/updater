@@ -231,12 +231,12 @@ pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
 /// If this function is called with a non-null pointer, it must be a pointer
 /// returned by the updater library.
 #[no_mangle]
-pub unsafe extern "C" fn shorebird_free_string(c_string: *mut c_char) {
+pub unsafe extern "C" fn shorebird_free_string(c_string: *const c_char) {
     if c_string.is_null() {
         return;
     }
     unsafe {
-        drop(CString::from_raw(c_string));
+        drop(CString::from_raw(c_string as *mut c_char));
     }
 }
 
@@ -247,7 +247,7 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
     }
     let message = (*result).message;
     if !message.is_null() {
-        shorebird_free_string(message as *mut c_char);
+        shorebird_free_string(message);
     }
     unsafe {
         drop(Box::from_raw(result));

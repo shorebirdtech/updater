@@ -129,7 +129,7 @@ SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
  * If this function is called with a non-null pointer, it must be a pointer
  * returned by the updater library.
  */
-SHOREBIRD_EXPORT void shorebird_free_string(char *c_string);
+SHOREBIRD_EXPORT void shorebird_free_string(const char *c_string);
 
 SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 
