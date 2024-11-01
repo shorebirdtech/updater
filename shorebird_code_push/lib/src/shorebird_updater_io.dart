@@ -91,7 +91,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<void> update() async {
     if (!_isAvailable) return;
 
-    late final Pointer<UpdateResult> result;
+    Pointer<UpdateResult> result = nullptr;
 
     try {
       result = await _run(_updater.update);
@@ -112,6 +112,10 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
           : 'unknown';
       final message = reason.toFailureMessage(details);
       throw UpdateException(message: message, reason: reason);
+    } catch (_) {
+      // If the update method is not available, the engine is outdated.
+      const reason = UpdateFailureReason.unsupported;
+      throw UpdateException(message: reason.toFailureMessage(), reason: reason);
     } finally {
       _updater.freeUpdateResult(result);
     }
@@ -144,6 +148,8 @@ extension on UpdateFailureReason {
         return 'Update available but previously failed to install.';
       case UpdateFailureReason.downloadFailed:
         return 'An error occurred while downloading the patch: $details';
+      case UpdateFailureReason.unsupported:
+        return 'Please upgrade the Shorebird Engine to use this API.';
       case UpdateFailureReason.unknown:
         return 'An unknown error occurred.';
     }

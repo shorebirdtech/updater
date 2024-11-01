@@ -430,6 +430,29 @@ void main() {
         });
       });
 
+      group('when an outdated version of the engine is used', () {
+        setUp(() {
+          when(() => updater.currentPatchNumber()).thenReturn(0);
+          when(() => updater.update()).thenThrow(Exception('oops'));
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
+        });
+
+        test('throws $UpdateException', () async {
+          await expectLater(
+            shorebirdUpdater.update,
+            throwsA(
+              isA<UpdateException>().having(
+                (e) => e.message,
+                'message',
+                'Please upgrade the Shorebird Engine to use this API.',
+              ),
+            ),
+          );
+          verify(updater.update).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
+        });
+      });
+
       group('when an unsupported status code is returned', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
