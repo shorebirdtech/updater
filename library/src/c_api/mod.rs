@@ -247,7 +247,7 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
     }
     let message = (*result).message;
     if !message.is_null() {
-        shorebird_free_string(message);
+        shorebird_free_string(message as *mut c_char);
     }
     unsafe {
         drop(Box::from_raw(result));
