@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:ffi';
+// import 'dart:ffi';
 import 'dart:isolate';
 
+// import 'package:ffi/ffi.dart';
 import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
@@ -133,7 +135,7 @@ extension on UpdateFailureReason {
       case UpdateFailureReason.noUpdate:
         return 'No update available.';
       case UpdateFailureReason.badPatch:
-        return 'Downloaded patch is invalid.';
+        return 'Update available but previously failed to install.';
       case UpdateFailureReason.downloadFailed:
         return 'An error occurred while downloading the patch: $details';
       case UpdateFailureReason.unknown:

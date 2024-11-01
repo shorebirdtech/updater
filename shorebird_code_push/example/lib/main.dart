@@ -34,6 +34,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Future<void> initState() async {
     super.initState();
+    await _downloadUpdate();
     setState(() {
       _isUpdaterAvailable = _updater.isAvailable;
       _currentPatch = AsyncValue.loading();
@@ -132,8 +133,8 @@ class _MyHomePageState extends State<MyHomePage> {
       await _updater.update();
       if (!mounted) return;
       _showRestartBanner();
-    } catch (error) {
-      _showErrorBanner(error);
+    } on UpdateException catch (error) {
+      _showErrorBanner(error.message);
     }
   }
 
