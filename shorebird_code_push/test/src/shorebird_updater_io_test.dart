@@ -429,7 +429,7 @@ void main() {
                   .having(
                     (e) => e.reason,
                     'reason',
-                    UpdateFailureReason.badPatch,
+                    UpdateFailureReason.installFailed,
                   ),
             ),
           );

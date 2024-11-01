@@ -150,7 +150,7 @@ extension on int {
       case SHOREBIRD_UPDATE_HAD_ERROR:
         return UpdateFailureReason.downloadFailed;
       case SHOREBIRD_UPDATE_IS_BAD_PATCH:
-        return UpdateFailureReason.badPatch;
+        return UpdateFailureReason.installFailed;
       case SHOREBIRD_UPDATE_ERROR:
         return UpdateFailureReason.unknown;
       default:
