@@ -46,11 +46,11 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
+pub const SHOREBIRD_UPDATE_ERROR: i32 = -1;
 pub const SHOREBIRD_NO_UPDATE: i32 = 0;
 pub const SHOREBIRD_UPDATE_INSTALLED: i32 = 1;
 pub const SHOREBIRD_UPDATE_HAD_ERROR: i32 = 2;
 pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
-pub const SHOREBIRD_UPDATE_ERROR: i32 = 4;
 
 #[repr(C)]
 pub struct UpdateResult {

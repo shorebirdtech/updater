@@ -472,7 +472,7 @@ Please upgrade the Shorebird Engine for improved error messages.'''),
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
           final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
-          result.ref.status = -1; // invalid status code
+          result.ref.status = -42; // invalid status code
           result.ref.message = nullptr;
           addTearDown(() => calloc.free(result));
           when(() => updater.update()).thenReturn(result);

@@ -14,6 +14,8 @@
 #endif
 
 
+#define SHOREBIRD_UPDATE_ERROR -1
+
 #define SHOREBIRD_NO_UPDATE 0
 
 #define SHOREBIRD_UPDATE_INSTALLED 1
@@ -21,8 +23,6 @@
 #define SHOREBIRD_UPDATE_HAD_ERROR 2
 
 #define SHOREBIRD_UPDATE_IS_BAD_PATCH 3
-
-#define SHOREBIRD_UPDATE_ERROR 4
 
 /**
  * Struct containing configuration parameters for the updater.
