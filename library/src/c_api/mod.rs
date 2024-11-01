@@ -268,10 +268,7 @@ pub extern "C" fn shorebird_update() {
 #[no_mangle]
 pub extern "C" fn shorebird_update_with_error() -> *const UpdateResult {
     let result = to_update_result(updater::update());
-    // convert UpdateResult to *const UpdateResult
-    let boxed_result = Box::new(result);
-    let pointer = Box::into_raw(boxed_result);
-    return pointer;
+    return Box::into_raw(Box::new(result));
 }
 
 /// Start a thread to download an update if one is available.
