@@ -169,9 +169,3 @@ extension on UpdateFailureReason {
     }
   }
 }
-
-/*
-
-pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
-pub const SHOREBIRD_UPDATE_ERROR: i32 = 4;
-*/
