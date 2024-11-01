@@ -197,13 +197,22 @@ void main() {
       });
 
       group('when an exception occurs trying to read patches', () {
+        final currentPatchNumberReturnValues = [0, -1];
         setUp(() {
-          when(updater.currentPatchNumber).thenReturn(0);
+          when(updater.currentPatchNumber).thenAnswer((_) {
+            final value = currentPatchNumberReturnValues.removeAt(0);
+            if (value < 0) throw Exception('oops');
+            return value;
+          });
           when(updater.nextPatchNumber).thenThrow(Exception('oops'));
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
         test('throws $ReadPatchException', () async {
+          await expectLater(
+            () => shorebirdUpdater.readCurrentPatch(),
+            throwsA(isA<ReadPatchException>()),
+          );
           await expectLater(
             () => shorebirdUpdater.readNextPatch(),
             throwsA(isA<ReadPatchException>()),
@@ -319,7 +328,7 @@ void main() {
       group('when no update is available', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          final result = calloc.allocate<UpdateResult>(8);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = 0; // SHOREBIRD_NO_UPDATE
           addTearDown(() => calloc.free(result));
           when(() => updater.update()).thenReturn(result);
@@ -345,7 +354,7 @@ void main() {
       group('when an error occurs during download', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          final result = calloc.allocate<UpdateResult>(8);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = 2; // SHOREBIRD_UPDATE_HAD_ERROR
           result.ref.message = 'oops'.toNativeUtf8().cast<Char>();
           addTearDown(() => calloc.free(result));
@@ -372,7 +381,7 @@ void main() {
       group('when the downloaded patch is bad', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          final result = calloc.allocate<UpdateResult>(8);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = 3; // SHOREBIRD_UPDATE_IS_BAD_PATCH
           addTearDown(() => calloc.free(result));
           when(() => updater.update()).thenReturn(result);
@@ -398,7 +407,7 @@ void main() {
       group('when an unknown error occurs', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          final result = calloc.allocate<UpdateResult>(8);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = 4; // SHOREBIRD_UPDATE_ERROR
           addTearDown(() => calloc.free(result));
           when(() => updater.update()).thenReturn(result);
@@ -424,7 +433,7 @@ void main() {
       group('when an unsupported status code is returned', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
-          final result = calloc.allocate<UpdateResult>(8);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = -1; // invalid status code
           addTearDown(() => calloc.free(result));
           when(() => updater.update()).thenReturn(result);
@@ -450,7 +459,7 @@ void main() {
       group('when download succeeds', () {
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(0);
-          final result = calloc.allocate<UpdateResult>(8);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = 1; // SHOREBIRD_UPDATE_SUCCESS
           addTearDown(() => calloc.free(result));
           when(() => updater.update()).thenReturn(result);
