@@ -11,7 +11,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Shorebird Code Push Demo',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
         useMaterial3: true,
       ),
       home: const MyHomePage(),
@@ -34,7 +34,6 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Future<void> initState() async {
     super.initState();
-    await _downloadUpdate();
     setState(() {
       _isUpdaterAvailable = _updater.isAvailable;
       _currentPatch = AsyncValue.loading();
@@ -195,15 +194,13 @@ class _PatchInfo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final heading = patch != null ? '$patch' : 'No patch installed';
-
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: <Widget>[
           const Text('Current patch version:'),
           Text(
-            heading,
+            patch != null ? '${patch!.number}' : 'No patch installed',
             style: theme.textTheme.headlineMedium,
           ),
         ],
