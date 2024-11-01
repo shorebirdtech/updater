@@ -130,20 +130,6 @@ where
     })
 }
 
-// /// Helper function to log errors instead of panicking or returning a result.
-// fn log_on_error2<F, R>(f: F, context: &str) -> R
-// where
-//     F: FnOnce() -> Result<R, anyhow::Error>,
-// {
-//     match f() {
-//         Ok(result) => result,
-//         Err(e) => e.to_string(),
-//     }
-//     // f().unwrap_or_else(|e: anyhow::Error| {
-//     //     shorebird_error!("Error {}: {:?}", context, e);
-//     // })
-// }
-
 /// Configures updater.  First parameter is a struct containing configuration
 /// from the running app.  Second parameter is a YAML string containing
 /// configuration compiled into the app.  Returns true on success and false on

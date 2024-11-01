@@ -189,13 +189,13 @@ class UpdaterBindings {
       _waitpidPtr.asFunction<int Function(int, ffi.Pointer<ffi.Int>, int)>();
 
   int waitid(
-    int arg0,
-    int arg1,
+    idtype_t arg0,
+    Dart__uint32_t arg1,
     ffi.Pointer<siginfo_t> arg2,
     int arg3,
   ) {
     return _waitid(
-      arg0,
+      arg0.value,
       arg1,
       arg2,
       arg3,
@@ -204,8 +204,8 @@ class UpdaterBindings {
 
   late final _waitidPtr = _lookup<
       ffi.NativeFunction<
-          ffi.Int Function(
-              ffi.Int32, id_t, ffi.Pointer<siginfo_t>, ffi.Int)>>('waitid');
+          ffi.Int Function(ffi.UnsignedInt, id_t, ffi.Pointer<siginfo_t>,
+              ffi.Int)>>('waitid');
   late final _waitid = _waitidPtr
       .asFunction<int Function(int, int, ffi.Pointer<siginfo_t>, int)>();
 
@@ -2612,10 +2612,20 @@ final class _opaque_pthread_t extends ffi.Struct {
   external ffi.Array<ffi.Char> __opaque;
 }
 
-abstract class idtype_t {
-  static const int P_ALL = 0;
-  static const int P_PID = 1;
-  static const int P_PGID = 2;
+enum idtype_t {
+  P_ALL(0),
+  P_PID(1),
+  P_PGID(2);
+
+  final int value;
+  const idtype_t(this.value);
+
+  static idtype_t fromValue(int value) => switch (value) {
+        0 => P_ALL,
+        1 => P_PID,
+        2 => P_PGID,
+        _ => throw ArgumentError("Unknown value for idtype_t: $value"),
+      };
 }
 
 final class __darwin_arm_exception_state extends ffi.Struct {
@@ -2630,6 +2640,7 @@ final class __darwin_arm_exception_state extends ffi.Struct {
 }
 
 typedef __uint32_t = ffi.UnsignedInt;
+typedef Dart__uint32_t = int;
 
 final class __darwin_arm_exception_state64 extends ffi.Struct {
   @__uint64_t()
@@ -2643,6 +2654,7 @@ final class __darwin_arm_exception_state64 extends ffi.Struct {
 }
 
 typedef __uint64_t = ffi.UnsignedLongLong;
+typedef Dart__uint64_t = int;
 
 final class __darwin_arm_thread_state extends ffi.Struct {
   @ffi.Array.multi([13])
@@ -2775,6 +2787,7 @@ final class __darwin_sigaltstack extends ffi.Struct {
 }
 
 typedef __darwin_size_t = ffi.UnsignedLong;
+typedef Dart__darwin_size_t = int;
 
 final class __darwin_ucontext extends ffi.Struct {
   @ffi.Int()
@@ -2853,6 +2866,7 @@ final class __siginfo extends ffi.Struct {
 typedef pid_t = __darwin_pid_t;
 typedef __darwin_pid_t = __int32_t;
 typedef __int32_t = ffi.Int;
+typedef Dart__int32_t = int;
 typedef uid_t = __darwin_uid_t;
 typedef __darwin_uid_t = __uint32_t;
 
@@ -2922,6 +2936,7 @@ final class timeval extends ffi.Struct {
 }
 
 typedef __darwin_time_t = ffi.Long;
+typedef Dart__darwin_time_t = int;
 typedef __darwin_suseconds_t = __int32_t;
 
 final class rusage extends ffi.Struct {
@@ -3634,6 +3649,7 @@ final class lldiv_t extends ffi.Struct {
 }
 
 typedef malloc_type_id_t = ffi.UnsignedLongLong;
+typedef Dartmalloc_type_id_t = int;
 
 final class _malloc_zone_t extends ffi.Opaque {}
 
@@ -3643,6 +3659,7 @@ typedef __darwin_dev_t = __int32_t;
 typedef mode_t = __darwin_mode_t;
 typedef __darwin_mode_t = __uint16_t;
 typedef __uint16_t = ffi.UnsignedShort;
+typedef Dart__uint16_t = int;
 
 /// Struct containing configuration parameters for the updater.
 /// Passed to all updater functions.
