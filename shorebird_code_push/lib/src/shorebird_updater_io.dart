@@ -45,29 +45,17 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => _isAvailable;
 
   @override
-  Future<Patch?> readCurrentPatch() async {
-    if (!_isAvailable) return null;
-
-    return _run(
-      () {
-        try {
-          final patchNumber = _updater.currentPatchNumber();
-          return patchNumber > 0 ? Patch(number: patchNumber) : null;
-        } catch (error) {
-          throw ReadPatchException(message: '$error');
-        }
-      },
-    );
-  }
+  Future<Patch?> readCurrentPatch() => _readPatch(_updater.currentPatchNumber);
 
   @override
-  Future<Patch?> readNextPatch() async {
-    if (!_isAvailable) return null;
+  Future<Patch?> readNextPatch() => _readPatch(_updater.nextPatchNumber);
 
+  Future<Patch?> _readPatch(int Function() fn) async {
+    if (!_isAvailable) return null;
     return _run(
       () {
         try {
-          final patchNumber = _updater.nextPatchNumber();
+          final patchNumber = fn();
           return patchNumber > 0 ? Patch(number: patchNumber) : null;
         } catch (error) {
           throw ReadPatchException(message: '$error');
