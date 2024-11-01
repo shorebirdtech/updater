@@ -25,6 +25,10 @@ void main() {
     late Updater updater;
     late ShorebirdUpdaterImpl shorebirdUpdater;
 
+    setUpAll(() {
+      registerFallbackValue(Pointer.fromAddress(0));
+    });
+
     setUp(() {
       updater = _MockUpdater();
     });
@@ -334,6 +338,7 @@ void main() {
             ),
           );
           verify(updater.downloadUpdateWithError).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
 
@@ -360,6 +365,7 @@ void main() {
             ),
           );
           verify(updater.downloadUpdateWithError).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
 
@@ -385,6 +391,7 @@ void main() {
             ),
           );
           verify(updater.downloadUpdateWithError).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
 
@@ -410,6 +417,7 @@ void main() {
             ),
           );
           verify(updater.downloadUpdateWithError).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
 
@@ -435,6 +443,7 @@ void main() {
             ),
           );
           verify(updater.downloadUpdateWithError).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
 
@@ -451,6 +460,7 @@ void main() {
         test('completes', () async {
           await expectLater(shorebirdUpdater.update(), completes);
           verify(updater.downloadUpdateWithError).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });
     });

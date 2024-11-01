@@ -6,6 +6,7 @@ import 'dart:isolate';
 // import 'package:ffi/ffi.dart';
 import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
+import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
@@ -92,24 +93,30 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<void> update() async {
     if (!_isAvailable) return;
 
-    final result = await _run(_updater.downloadUpdateWithError);
+    late final Pointer<UpdateResult> result;
 
-    if (result == nullptr) {
-      const reason = UpdateFailureReason.unknown;
-      final message = reason.toFailureMessage();
-      throw UpdateException(reason: reason, message: message);
+    try {
+      result = await _run(_updater.downloadUpdateWithError);
+
+      if (result == nullptr) {
+        const reason = UpdateFailureReason.unknown;
+        final message = reason.toFailureMessage();
+        throw UpdateException(reason: reason, message: message);
+      }
+
+      final status = result.ref.status;
+
+      if (status == 1) return; // SHOREBIRD_UPDATE_SUCCESS
+
+      final reason = status.toFailureReason();
+      final details = result.ref.message != nullptr
+          ? result.ref.message.cast<Utf8>().toDartString()
+          : 'unknown';
+      final message = reason.toFailureMessage(details);
+      throw UpdateException(message: message, reason: reason);
+    } finally {
+      _updater.freeUpdateResult(result);
     }
-
-    final status = result.ref.status;
-    if (status == 1) return; // SHOREBIRD_UPDATE_SUCCESS
-
-    final reason = status.toFailureReason();
-    final details = result.ref.message != nullptr
-        ? result.ref.message.cast<Utf8>().toDartString()
-        : 'unknown';
-    final message = reason.toFailureMessage(details);
-    _updater.freeUpdateResult(result);
-    throw UpdateException(message: message, reason: reason);
   }
 }
 
