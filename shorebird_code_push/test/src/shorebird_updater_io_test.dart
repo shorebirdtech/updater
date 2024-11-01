@@ -314,11 +314,17 @@ void main() {
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'An unknown error occurred.',
-              ),
+              isA<UpdateException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'An unknown error occurred.',
+                  )
+                  .having(
+                    (e) => e.reason,
+                    'reason',
+                    UpdateFailureReason.unknown,
+                  ),
             ),
           );
           verify(updater.update).called(1);
@@ -330,7 +336,12 @@ void main() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
           final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = SHOREBIRD_NO_UPDATE;
-          addTearDown(() => calloc.free(result));
+          result.ref.message = 'oops'.toNativeUtf8().cast<Char>();
+          addTearDown(() {
+            calloc
+              ..free(result.ref.message)
+              ..free(result);
+          });
           when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
@@ -339,11 +350,17 @@ void main() {
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'No update available.',
-              ),
+              isA<UpdateException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'oops',
+                  )
+                  .having(
+                    (e) => e.reason,
+                    'reason',
+                    UpdateFailureReason.noUpdate,
+                  ),
             ),
           );
           verify(updater.update).called(1);
@@ -357,7 +374,11 @@ void main() {
           final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = SHOREBIRD_UPDATE_HAD_ERROR;
           result.ref.message = 'oops'.toNativeUtf8().cast<Char>();
-          addTearDown(() => calloc.free(result));
+          addTearDown(() {
+            calloc
+              ..free(result.ref.message)
+              ..free(result);
+          });
           when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
@@ -366,11 +387,17 @@ void main() {
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'An error occurred while downloading the patch: oops',
-              ),
+              isA<UpdateException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'oops',
+                  )
+                  .having(
+                    (e) => e.reason,
+                    'reason',
+                    UpdateFailureReason.downloadFailed,
+                  ),
             ),
           );
           verify(updater.update).called(1);
@@ -383,7 +410,12 @@ void main() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
           final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = SHOREBIRD_UPDATE_IS_BAD_PATCH;
-          addTearDown(() => calloc.free(result));
+          result.ref.message = 'oops'.toNativeUtf8().cast<Char>();
+          addTearDown(() {
+            calloc
+              ..free(result.ref.message)
+              ..free(result);
+          });
           when(() => updater.update()).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
@@ -392,11 +424,13 @@ void main() {
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'Update available but previously failed to install.',
-              ),
+              isA<UpdateException>()
+                  .having((e) => e.message, 'message', 'oops')
+                  .having(
+                    (e) => e.reason,
+                    'reason',
+                    UpdateFailureReason.badPatch,
+                  ),
             ),
           );
           verify(updater.update).called(1);
@@ -418,11 +452,17 @@ void main() {
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'An unknown error occurred.',
-              ),
+              isA<UpdateException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'An unknown error occurred.',
+                  )
+                  .having(
+                    (e) => e.reason,
+                    'reason',
+                    UpdateFailureReason.unknown,
+                  ),
             ),
           );
           verify(updater.update).called(1);
@@ -456,9 +496,17 @@ void main() {
             await expectLater(
               shorebirdUpdater.update,
               throwsA(
-                isA<UpdateException>().having((e) => e.message, 'message', '''
+                isA<UpdateException>().having(
+                  (e) => e.message,
+                  'message',
+                  '''
 Downloading update failed but reason is unknown due to legacy updater.
-Please upgrade the Shorebird Engine for improved error messages.'''),
+Please upgrade the Shorebird Engine for improved error messages.''',
+                ).having(
+                  (e) => e.reason,
+                  'reason',
+                  UpdateFailureReason.unknown,
+                ),
               ),
             );
             verify(updater.update).called(1);
@@ -483,11 +531,17 @@ Please upgrade the Shorebird Engine for improved error messages.'''),
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdateException>().having(
-                (e) => e.message,
-                'message',
-                'An unknown error occurred.',
-              ),
+              isA<UpdateException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'An unknown error occurred.',
+                  )
+                  .having(
+                    (e) => e.reason,
+                    'reason',
+                    UpdateFailureReason.unknown,
+                  ),
             ),
           );
           verify(updater.update).called(1);

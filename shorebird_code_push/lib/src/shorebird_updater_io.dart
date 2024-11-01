@@ -101,11 +101,14 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       return _legacyFallback();
     }
 
+    const unknownErrorMessage = 'An unknown error occurred.';
+
     try {
       if (result == nullptr) {
-        const reason = UpdateFailureReason.unknown;
-        final message = reason.toFailureMessage();
-        throw UpdateException(reason: reason, message: message);
+        throw const UpdateException(
+          reason: UpdateFailureReason.unknown,
+          message: unknownErrorMessage,
+        );
       }
 
       final status = result.ref.status;
@@ -113,10 +116,9 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       if (status == SHOREBIRD_UPDATE_INSTALLED) return;
 
       final reason = status.toFailureReason();
-      final details = result.ref.message != nullptr
+      final message = result.ref.message != nullptr
           ? result.ref.message.cast<Utf8>().toDartString()
-          : 'unknown';
-      final message = reason.toFailureMessage(details);
+          : unknownErrorMessage;
       throw UpdateException(message: message, reason: reason);
     } finally {
       _updater.freeUpdateResult(result);
@@ -153,21 +155,6 @@ extension on int {
         return UpdateFailureReason.unknown;
       default:
         return UpdateFailureReason.unknown;
-    }
-  }
-}
-
-extension on UpdateFailureReason {
-  String toFailureMessage([String details = '']) {
-    switch (this) {
-      case UpdateFailureReason.noUpdate:
-        return 'No update available.';
-      case UpdateFailureReason.badPatch:
-        return 'Update available but previously failed to install.';
-      case UpdateFailureReason.downloadFailed:
-        return 'An error occurred while downloading the patch: $details';
-      case UpdateFailureReason.unknown:
-        return 'An unknown error occurred.';
     }
   }
 }

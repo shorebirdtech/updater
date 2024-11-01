@@ -196,10 +196,13 @@ fn path_to_c_string(path: Option<PathBuf>) -> anyhow::Result<*mut c_char> {
 
 fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
     let result = match status {
-        Ok(status) => UpdateResult {
-            status: status as i32,
-            message: std::ptr::null(),
-        },
+        Ok(status) => {
+            let message = status.to_string();
+            return UpdateResult {
+                status: status as i32,
+                message: allocate_c_string(message.as_str()).unwrap(),
+            };
+        }
         Err(err) => UpdateResult {
             status: SHOREBIRD_UPDATE_ERROR,
             message: allocate_c_string(&err.to_string()).unwrap(),
