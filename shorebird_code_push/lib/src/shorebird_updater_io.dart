@@ -95,7 +95,13 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
     try {
       result = await _run(_updater.update);
+    } catch (_) {
+      // If the update method is not available, the engine is outdated.
+      const reason = UpdateFailureReason.unsupported;
+      throw UpdateException(message: reason.toFailureMessage(), reason: reason);
+    }
 
+    try {
       if (result == nullptr) {
         const reason = UpdateFailureReason.unknown;
         final message = reason.toFailureMessage();
@@ -104,7 +110,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
       final status = result.ref.status;
 
-      if (status == 1) return; // SHOREBIRD_UPDATE_SUCCESS
+      if (status == SHOREBIRD_UPDATE_INSTALLED) return;
 
       final reason = status.toFailureReason();
       final details = result.ref.message != nullptr
@@ -112,10 +118,6 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
           : 'unknown';
       final message = reason.toFailureMessage(details);
       throw UpdateException(message: message, reason: reason);
-    } catch (_) {
-      // If the update method is not available, the engine is outdated.
-      const reason = UpdateFailureReason.unsupported;
-      throw UpdateException(message: reason.toFailureMessage(), reason: reason);
     } finally {
       _updater.freeUpdateResult(result);
     }
@@ -125,13 +127,13 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 extension on int {
   UpdateFailureReason toFailureReason() {
     switch (this) {
-      case 0: // SHOREBIRD_NO_UPDATE
+      case SHOREBIRD_NO_UPDATE:
         return UpdateFailureReason.noUpdate;
-      case 2: // SHOREBIRD_UPDATE_HAD_ERROR
+      case SHOREBIRD_UPDATE_HAD_ERROR:
         return UpdateFailureReason.downloadFailed;
-      case 3: // SHOREBIRD_UPDATE_IS_BAD_PATCH
+      case SHOREBIRD_UPDATE_IS_BAD_PATCH:
         return UpdateFailureReason.badPatch;
-      case 4: // SHOREBIRD_UPDATE_ERROR
+      case SHOREBIRD_UPDATE_ERROR:
         return UpdateFailureReason.unknown;
       default:
         return UpdateFailureReason.unknown;
