@@ -26,7 +26,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     try {
       // If the Shorebird Engine is not available, this will throw an exception.
       // FIXME: Run this in an isolate or refactor the updater to avoid risking
-      // a hang.
+      // a hang.  If another thread is also calling into Shorebird at the same time
+      // the underlying Rust code could block getting the config lock.
       _updater.currentPatchNumber();
       _isAvailable = true;
     } catch (_) {
