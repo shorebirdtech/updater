@@ -11,14 +11,5 @@ void main() {
         expect(ShorebirdUpdater.new, returnsNormally);
       }),
     );
-
-    group(UpdaterException, () {
-      test('overrides toString correctly', () {
-        expect(
-          const UpdaterException('message').toString(),
-          equals('UpdaterException: message'),
-        );
-      });
-    });
   });
 }

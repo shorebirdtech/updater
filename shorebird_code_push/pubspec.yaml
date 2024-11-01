@@ -25,9 +25,3 @@ ffigen:
       - "../library/include/updater.h"
   preamble: |
     // ignore_for_file: unused_element, unused_field
-  type-map:
-    native-types:
-      "char":
-        "lib": "pkg_ffi"
-        "c-type": "Utf8"
-        "dart-type": "Utf8"

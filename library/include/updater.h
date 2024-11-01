@@ -79,6 +79,11 @@ typedef struct FileCallbacks {
   void (*close)(void *file_handle);
 } FileCallbacks;
 
+typedef struct UpdateResult {
+  int32_t status;
+  const char *message;
+} UpdateResult;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -126,6 +131,8 @@ SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
  */
 SHOREBIRD_EXPORT void shorebird_free_string(char *c_string);
 
+SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
+
 /**
  * Check for an update.  Returns true if an update is available.
  */
@@ -140,7 +147,7 @@ SHOREBIRD_EXPORT void shorebird_update(void);
  * Synchronously download an update if one is available.
  * Returns an error if one occurs.
  */
-SHOREBIRD_EXPORT char *shorebird_update_with_error(void);
+SHOREBIRD_EXPORT const struct UpdateResult *shorebird_update_with_error(void);
 
 /**
  * Start a thread to download an update if one is available.

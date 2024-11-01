@@ -196,10 +196,10 @@ void main() {
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
-        test('throws $UpdaterException', () async {
+        test('throws $ReadPatchException', () async {
           await expectLater(
             () => shorebirdUpdater.readNextPatch(),
-            throwsA(isA<UpdaterException>()),
+            throwsA(isA<ReadPatchException>()),
           );
         });
       });
@@ -287,36 +287,20 @@ void main() {
         );
       });
 
-      group('when no update is available', () {
-        setUp(() {
-          when(updater.currentPatchNumber).thenReturn(0);
-          when(updater.checkForUpdate).thenReturn(false);
-          shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
-        });
-
-        test('throws $UpdaterException', () async {
-          await expectLater(
-            shorebirdUpdater.update,
-            throwsA(isA<UpdaterException>()),
-          );
-          verifyNever(updater.downloadUpdate);
-        });
-      });
-
       group('when download fails', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
           when(() => updater.nextPatchNumber()).thenReturn(0);
           when(() => updater.checkForUpdate()).thenReturn(true);
-          when(() => updater.downloadUpdate()).thenReturn(null);
+          when(() => updater.downloadUpdateWithError()).thenReturn();
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
-        test('throws $UpdaterException', () async {
+        test('throws $UpdateException', () async {
           await expectLater(
             shorebirdUpdater.update,
             throwsA(
-              isA<UpdaterException>().having(
+              isA<UpdateException>().having(
                 (e) => e.message,
                 'message',
                 'Failed to download update.',

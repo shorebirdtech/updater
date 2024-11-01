@@ -51,7 +51,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
           final patchNumber = _updater.currentPatchNumber();
           return patchNumber > 0 ? Patch(number: patchNumber) : null;
         } catch (error) {
-          throw UpdaterException('$error');
+          throw ReadPatchException(message: '$error');
         }
       },
     );
@@ -67,7 +67,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
           final patchNumber = _updater.nextPatchNumber();
           return patchNumber > 0 ? Patch(number: patchNumber) : null;
         } catch (error) {
-          throw UpdaterException('$error');
+          throw ReadPatchException(message: '$error');
         }
       },
     );
@@ -90,12 +90,60 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<void> update() async {
     if (!_isAvailable) return;
 
-    final error = await _run(_updater.downloadUpdateWithError);
-    if (error != nullptr) {
-      final reason = error.toDartString();
-      _updater.freeString(error);
-      // TODO: use a struct from rust instead of a string
-      throw UpdaterException(reason);
+    final result = await _run(_updater.downloadUpdateWithError);
+
+    if (result == nullptr) {
+      const reason = UpdateFailureReason.unknown;
+      final message = reason.toFailureMessage();
+      throw UpdateException(reason: reason, message: message);
+    }
+
+    final status = result.ref.status;
+    if (status == 1) return; // SHOREBIRD_UPDATE_SUCCESS
+
+    final reason = status.toFailureReason();
+    final details = result.ref.message != nullptr
+        ? result.ref.message.cast<Utf8>().toDartString()
+        : 'unknown';
+    final message = reason.toFailureMessage(details);
+    throw UpdateException(message: message, reason: reason);
+  }
+}
+
+extension on int {
+  UpdateFailureReason toFailureReason() {
+    switch (this) {
+      case 0: // SHOREBIRD_NO_UPDATE
+        return UpdateFailureReason.noUpdate;
+      case 2: // SHOREBIRD_UPDATE_HAD_ERROR
+        return UpdateFailureReason.downloadFailed;
+      case 3: // SHOREBIRD_UPDATE_IS_BAD_PATCH
+        return UpdateFailureReason.badPatch;
+      case 4: // SHOREBIRD_UPDATE_ERROR
+        return UpdateFailureReason.unknown;
+      default:
+        return UpdateFailureReason.unknown;
     }
   }
 }
+
+extension on UpdateFailureReason {
+  String toFailureMessage([String details = '']) {
+    switch (this) {
+      case UpdateFailureReason.noUpdate:
+        return 'No update available.';
+      case UpdateFailureReason.badPatch:
+        return 'Downloaded patch is invalid.';
+      case UpdateFailureReason.downloadFailed:
+        return 'An error occurred while downloading the patch: $details';
+      case UpdateFailureReason.unknown:
+        return 'An unknown error occurred.';
+    }
+  }
+}
+
+/*
+
+pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
+pub const SHOREBIRD_UPDATE_ERROR: i32 = 4;
+*/

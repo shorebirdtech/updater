@@ -208,11 +208,18 @@ fn path_to_c_string(path: Option<PathBuf>) -> anyhow::Result<*mut c_char> {
     })
 }
 
-fn to_update_result(status: Result<UpdateStatus>) -> Option<UpdateResult> {
+fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
     let result = match status {
-        Ok(status) => Some(UpdateResult(status as i32, std::ptr::null())),
-        Err(err) => None(),// Conver the err to an UpdateStatus
-    }
+        Ok(status) => UpdateResult {
+            status: status as i32,
+            message: std::ptr::null(),
+        },
+        Err(err) => UpdateResult {
+            status: SHOREBIRD_UPDATE_ERROR,
+            message: allocate_c_string(&err.to_string()).unwrap(),
+        },
+    };
+    return result;
 }
 
 /// The path to the patch that will boot on the next run of the app, or NULL if
@@ -244,12 +251,14 @@ pub unsafe extern "C" fn shorebird_free_string(c_string: *mut c_char) {
     }
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult) {
     if result.is_null() {
         return;
     }
+    let result = Box::from_raw(result);
     unsafe {
-        drop(Box<UpdateResult>::from_raw(result));
+        drop(CString::from_raw(result.message as *mut c_char));
     }
 }
 
@@ -272,16 +281,12 @@ pub extern "C" fn shorebird_update() {
 /// Synchronously download an update if one is available.
 /// Returns an error if one occurs.
 #[no_mangle]
-pub extern "C" fn shorebird_update_with_error() -> *mut libc::c_char {
-    let res = updater::update().map(|result| shorebird_info!("Update result: {}", result));
-
-    match res {
-        Ok(_) => std::ptr::null_mut(),
-        Err(e) => {
-            shorebird_error!("Error downloading update: {:?}", e);
-            allocate_c_string(e.to_string().as_str()).unwrap_or(std::ptr::null_mut())
-        }
-    }
+pub extern "C" fn shorebird_update_with_error() -> *const UpdateResult {
+    let result = to_update_result(updater::update());
+    // convert UpdateResult to *const UpdateResult
+    let boxed_result = Box::new(result);
+    let pointer = Box::into_raw(boxed_result);
+    return pointer;
 }
 
 /// Start a thread to download an update if one is available.
