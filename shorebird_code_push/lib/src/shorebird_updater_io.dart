@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:ffi';
-// import 'dart:ffi';
 import 'dart:isolate';
 
-// import 'package:ffi/ffi.dart';
 import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
