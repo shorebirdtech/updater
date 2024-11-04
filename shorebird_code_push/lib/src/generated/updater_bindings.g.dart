@@ -607,10 +607,10 @@ class UpdaterBindings {
       .asFunction<ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, int)>();
 
   ffi.Pointer<ffi.Void> valloc(
-    int arg0,
+    int __size,
   ) {
     return _valloc(
-      arg0,
+      __size,
     );
   }
 
@@ -688,6 +688,22 @@ class UpdaterBindings {
           ffi.Int Function(
               ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>)>>('atexit');
   late final _atexit = _atexitPtr.asFunction<
+      int Function(ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>)>();
+
+  int at_quick_exit(
+    ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> arg0,
+  ) {
+    return _at_quick_exit(
+      arg0,
+    );
+  }
+
+  late final _at_quick_exitPtr = _lookup<
+          ffi.NativeFunction<
+              ffi.Int Function(
+                  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>)>>(
+      'at_quick_exit');
+  late final _at_quick_exit = _at_quick_exitPtr.asFunction<
       int Function(ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>)>();
 
   double atof(
@@ -968,6 +984,18 @@ class UpdaterBindings {
               ffi.NativeFunction<
                   ffi.Int Function(
                       ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>)>>)>();
+
+  void quick_exit(
+    int arg0,
+  ) {
+    return _quick_exit(
+      arg0,
+    );
+  }
+
+  late final _quick_exitPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>('quick_exit');
+  late final _quick_exit = _quick_exitPtr.asFunction<void Function(int)>();
 
   int rand() {
     return _rand();
@@ -2656,6 +2684,14 @@ final class __darwin_arm_exception_state64 extends ffi.Struct {
 typedef __uint64_t = ffi.UnsignedLongLong;
 typedef Dart__uint64_t = int;
 
+final class __darwin_arm_exception_state64_v2 extends ffi.Struct {
+  @__uint64_t()
+  external int __far;
+
+  @__uint64_t()
+  external int __esr;
+}
+
 final class __darwin_arm_thread_state extends ffi.Struct {
   @ffi.Array.multi([13])
   external ffi.Array<__uint32_t> __r;
@@ -3579,7 +3615,16 @@ final class rusage_info_v6 extends ffi.Struct {
   @ffi.Uint64()
   external int ri_secure_ptime_in_system;
 
-  @ffi.Array.multi([12])
+  @ffi.Uint64()
+  external int ri_neural_footprint;
+
+  @ffi.Uint64()
+  external int ri_lifetime_max_neural_footprint;
+
+  @ffi.Uint64()
+  external int ri_interval_max_neural_footprint;
+
+  @ffi.Array.multi([9])
   external ffi.Array<ffi.Uint64> ri_reserved;
 }
 
@@ -3603,24 +3648,6 @@ final class proc_rlimit_control_wakeupmon extends ffi.Struct {
 
 typedef id_t = __darwin_id_t;
 typedef __darwin_id_t = __uint32_t;
-
-@ffi.Packed(1)
-final class _OSUnalignedU16 extends ffi.Struct {
-  @ffi.Uint16()
-  external int __val;
-}
-
-@ffi.Packed(1)
-final class _OSUnalignedU32 extends ffi.Struct {
-  @ffi.Uint32()
-  external int __val;
-}
-
-@ffi.Packed(1)
-final class _OSUnalignedU64 extends ffi.Struct {
-  @ffi.Uint64()
-  external int __val;
-}
 
 final class wait extends ffi.Opaque {}
 
@@ -3721,8 +3748,6 @@ final class UpdateResult extends ffi.Struct {
   external ffi.Pointer<ffi.Char> message;
 }
 
-const int __GNUC_VA_LIST = 1;
-
 const int __bool_true_false_are_defined = 1;
 
 const int true1 = 1;
@@ -3790,8 +3815,6 @@ const int __PTHREAD_ONCE_SIZE__ = 8;
 const int __PTHREAD_RWLOCK_SIZE__ = 192;
 
 const int __PTHREAD_RWLOCKATTR_SIZE__ = 16;
-
-const int USER_ADDR_NULL = 0;
 
 const int INT8_MAX = 127;
 
@@ -4033,6 +4056,10 @@ const int __MAC_14_3 = 140300;
 
 const int __MAC_14_4 = 140400;
 
+const int __MAC_14_5 = 140500;
+
+const int __MAC_15_0 = 150000;
+
 const int __IPHONE_2_0 = 20000;
 
 const int __IPHONE_2_1 = 20100;
@@ -4189,6 +4216,10 @@ const int __IPHONE_17_3 = 170300;
 
 const int __IPHONE_17_4 = 170400;
 
+const int __IPHONE_17_5 = 170500;
+
+const int __IPHONE_18_0 = 180000;
+
 const int __WATCHOS_1_0 = 10000;
 
 const int __WATCHOS_2_0 = 20000;
@@ -4280,6 +4311,10 @@ const int __WATCHOS_10_2 = 100200;
 const int __WATCHOS_10_3 = 100300;
 
 const int __WATCHOS_10_4 = 100400;
+
+const int __WATCHOS_10_5 = 100500;
+
+const int __WATCHOS_11_0 = 110000;
 
 const int __TVOS_9_0 = 90000;
 
@@ -4375,6 +4410,10 @@ const int __TVOS_17_3 = 170300;
 
 const int __TVOS_17_4 = 170400;
 
+const int __TVOS_17_5 = 170500;
+
+const int __TVOS_18_0 = 180000;
+
 const int __BRIDGEOS_2_0 = 20000;
 
 const int __BRIDGEOS_3_0 = 30000;
@@ -4425,6 +4464,10 @@ const int __BRIDGEOS_8_3 = 80300;
 
 const int __BRIDGEOS_8_4 = 80400;
 
+const int __BRIDGEOS_8_5 = 80500;
+
+const int __BRIDGEOS_9_0 = 90000;
+
 const int __DRIVERKIT_19_0 = 190000;
 
 const int __DRIVERKIT_20_0 = 200000;
@@ -4449,9 +4492,17 @@ const int __DRIVERKIT_23_3 = 230300;
 
 const int __DRIVERKIT_23_4 = 230400;
 
+const int __DRIVERKIT_23_5 = 230500;
+
+const int __DRIVERKIT_24_0 = 240000;
+
 const int __VISIONOS_1_0 = 10000;
 
 const int __VISIONOS_1_1 = 10100;
+
+const int __VISIONOS_1_2 = 10200;
+
+const int __VISIONOS_2_0 = 20000;
 
 const int MAC_OS_X_VERSION_10_0 = 1000;
 
@@ -4573,9 +4624,13 @@ const int MAC_OS_VERSION_14_3 = 140300;
 
 const int MAC_OS_VERSION_14_4 = 140400;
 
+const int MAC_OS_VERSION_14_5 = 140500;
+
+const int MAC_OS_VERSION_15_0 = 150000;
+
 const int __MAC_OS_X_VERSION_MIN_REQUIRED = 140000;
 
-const int __MAC_OS_X_VERSION_MAX_ALLOWED = 140400;
+const int __MAC_OS_X_VERSION_MAX_ALLOWED = 150000;
 
 const int __ENABLE_LEGACY_MAC_AVAILABILITY = 1;
 
@@ -4656,6 +4711,8 @@ const int SIGINFO = 29;
 const int SIGUSR1 = 30;
 
 const int SIGUSR2 = 31;
+
+const int USER_ADDR_NULL = 0;
 
 const int __DARWIN_OPAQUE_ARM_THREAD_STATE64 = 0;
 
@@ -5007,13 +5064,13 @@ const int __DARWIN_BIG_ENDIAN = 4321;
 
 const int __DARWIN_PDP_ENDIAN = 3412;
 
-const int __DARWIN_BYTE_ORDER = 1234;
-
 const int LITTLE_ENDIAN = 1234;
 
 const int BIG_ENDIAN = 4321;
 
 const int PDP_ENDIAN = 3412;
+
+const int __DARWIN_BYTE_ORDER = 1234;
 
 const int BYTE_ORDER = 1234;
 
