@@ -15,6 +15,33 @@
 
 
 /**
+ * An unknown error occurred while updating. The update was not installed.
+ * This is a catch-all for errors that don't fit into the other categories.
+ */
+#define SHOREBIRD_UPDATE_ERROR -1
+
+/**
+ * No update is available (e.g. the app is already up-to-date)
+ */
+#define SHOREBIRD_NO_UPDATE 0
+
+/**
+ * An update was installed successfully. It will boot from the update on the
+ * next app launch.
+ */
+#define SHOREBIRD_UPDATE_INSTALLED 1
+
+/**
+ * An error occurred while updating. The update was not installed.
+ */
+#define SHOREBIRD_UPDATE_HAD_ERROR 2
+
+/**
+ * The downloaded patch was not installed because it was invalid.
+ */
+#define SHOREBIRD_UPDATE_IS_BAD_PATCH 3
+
+/**
  * Struct containing configuration parameters for the updater.
  * Passed to all updater functions.
  * NOTE: If this struct is changed all language bindings must be updated.
@@ -69,6 +96,11 @@ typedef struct FileCallbacks {
   void (*close)(void *file_handle);
 } FileCallbacks;
 
+typedef struct UpdateResult {
+  int32_t status;
+  const char *message;
+} UpdateResult;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -114,7 +146,9 @@ SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
  * If this function is called with a non-null pointer, it must be a pointer
  * returned by the updater library.
  */
-SHOREBIRD_EXPORT void shorebird_free_string(char *c_string);
+SHOREBIRD_EXPORT void shorebird_free_string(const char *c_string);
+
+SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 
 /**
  * Check for an update.  Returns true if an update is available.
@@ -125,6 +159,12 @@ SHOREBIRD_EXPORT bool shorebird_check_for_update(void);
  * Synchronously download an update if one is available.
  */
 SHOREBIRD_EXPORT void shorebird_update(void);
+
+/**
+ * Synchronously download an update if one is available.
+ * Returns an [UpdateResult] indicating whether the update was successful.
+ */
+SHOREBIRD_EXPORT const struct UpdateResult *shorebird_update_with_result(void);
 
 /**
  * Start a thread to download an update if one is available.
