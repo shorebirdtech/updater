@@ -35,10 +35,15 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+    // Check whether Shorebird is available.
     setState(() => _isUpdaterAvailable = _updater.isAvailable);
+
+    // Read the current patch (if there is one.)
+    // `currentPatch` will be `null` if no patch is installed.
     _updater.readCurrentPatch().then((currentPatch) {
       setState(() => _currentPatch = currentPatch);
     }).catchError((Object error) {
+      // If an error occurs, we log it for now.
       debugPrint('Error reading current patch: $error');
     });
   }
@@ -48,10 +53,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
     try {
       setState(() => _isCheckingForUpdates = true);
+      // Check if there's an update available.
       final status = await _updater.checkForUpdate();
       if (!mounted) return;
+      // If there is an update available, show a banner.
       if (status == UpdateStatus.outdated) _showUpdateAvailableBanner();
     } catch (error) {
+      // If an error occurs, we log it for now.
       debugPrint('Error checking for update: $error');
     } finally {
       setState(() => _isCheckingForUpdates = false);
@@ -137,10 +145,14 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _downloadUpdate() async {
     _showDownloadingBanner();
     try {
+      // Perform the update (e.g download the latest patch).
       await _updater.update();
       if (!mounted) return;
+      // Show a banner to inform the user that the update is ready and that they
+      // need to restart the app.
       _showRestartBanner();
     } on UpdateException catch (error) {
+      // If an error occurs, we show a banner with the error message.
       _showErrorBanner(error.message);
     }
   }
@@ -155,8 +167,8 @@ class _MyHomePageState extends State<MyHomePage> {
         title: const Text('Shorebird Code Push'),
       ),
       body: _isUpdaterAvailable
-          ? _PatchInfo(patch: _currentPatch)
-          : const _MissingShorebirdUpdater(),
+          ? _CurrentPatchVersion(patch: _currentPatch)
+          : const _ShorebirdUnavailable(),
       floatingActionButton: FloatingActionButton(
         onPressed: _isCheckingForUpdates ? null : _checkForUpdate,
         tooltip: 'Check for update',
@@ -168,15 +180,18 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
-class _MissingShorebirdUpdater extends StatelessWidget {
-  const _MissingShorebirdUpdater();
+/// Widget that is mounted when Shorebird is not available.
+class _ShorebirdUnavailable extends StatelessWidget {
+  const _ShorebirdUnavailable();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Center(
       child: Text(
-        'Shorebird Engine not available.',
+        '''
+Shorebird is not available.
+Please make sure the app was generated via `shorebird release` and that it is running in release mode.''',
         style: theme.textTheme.bodyLarge?.copyWith(
           color: theme.colorScheme.error,
         ),
@@ -185,8 +200,9 @@ class _MissingShorebirdUpdater extends StatelessWidget {
   }
 }
 
-class _PatchInfo extends StatelessWidget {
-  const _PatchInfo({required this.patch});
+/// Widget that displays the current patch version.
+class _CurrentPatchVersion extends StatelessWidget {
+  const _CurrentPatchVersion({required this.patch});
 
   final Patch? patch;
 
@@ -208,6 +224,7 @@ class _PatchInfo extends StatelessWidget {
   }
 }
 
+/// A reusable loading indicator.
 class _LoadingIndicator extends StatelessWidget {
   const _LoadingIndicator();
 
