@@ -14,6 +14,8 @@ pub struct YamlConfig {
     pub auto_update: Option<bool>,
     /// Base64-encoded public key for verifying patch hash signatures.
     pub patch_public_key: Option<String>,
+    /// Proxy URL. Remains unused if not set by user.
+    pub proxy_url: Option<String>,
 }
 
 impl YamlConfig {
