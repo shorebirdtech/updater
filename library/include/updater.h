@@ -14,14 +14,31 @@
 #endif
 
 
+/**
+ * An unknown error occurred while updating. The update was not installed.
+ * This is a catch-all for errors that don't fit into the other categories.
+ */
 #define SHOREBIRD_UPDATE_ERROR -1
 
+/**
+ * No update is available (e.g. the app is already up-to-date)
+ */
 #define SHOREBIRD_NO_UPDATE 0
 
+/**
+ * An update was installed successfully. It will boot from the update on the
+ * next app launch.
+ */
 #define SHOREBIRD_UPDATE_INSTALLED 1
 
+/**
+ * An error occurred while updating. The update was not installed.
+ */
 #define SHOREBIRD_UPDATE_HAD_ERROR 2
 
+/**
+ * The downloaded patch was not installed because it was invalid.
+ */
 #define SHOREBIRD_UPDATE_IS_BAD_PATCH 3
 
 /**

@@ -46,10 +46,21 @@ pub struct AppParameters {
     pub code_cache_dir: *const libc::c_char,
 }
 
+/// An unknown error occurred while updating. The update was not installed.
+/// This is a catch-all for errors that don't fit into the other categories.
 pub const SHOREBIRD_UPDATE_ERROR: i32 = -1;
+
+/// No update is available (e.g. the app is already up-to-date)
 pub const SHOREBIRD_NO_UPDATE: i32 = 0;
+
+/// An update was installed successfully. It will boot from the update on the
+/// next app launch.
 pub const SHOREBIRD_UPDATE_INSTALLED: i32 = 1;
+
+/// An error occurred while updating. The update was not installed.
 pub const SHOREBIRD_UPDATE_HAD_ERROR: i32 = 2;
+
+/// The downloaded patch was not installed because it was invalid.
 pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
 
 #[repr(C)]
@@ -124,7 +135,7 @@ fn log_on_error<F, R>(f: F, context: &str, error_result: R) -> R
 where
     F: FnOnce() -> Result<R, anyhow::Error>,
 {
-    f().unwrap_or_else(|e: anyhow::Error| {
+    f().unwrap_or_else(|e| {
         shorebird_error!("Error {}: {:?}", context, e);
         error_result
     })
@@ -200,12 +211,13 @@ fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
             let message = status.to_string();
             return UpdateResult {
                 status: status as i32,
-                message: allocate_c_string(message.as_str()).unwrap(),
+                message: allocate_c_string(message.as_str())
+                    .unwrap_or_else(|_| std::ptr::null_mut()),
             };
         }
         Err(err) => UpdateResult {
             status: SHOREBIRD_UPDATE_ERROR,
-            message: allocate_c_string(&err.to_string()).unwrap(),
+            message: allocate_c_string(&err.to_string()).unwrap_or_else(|_| std::ptr::null_mut()),
         },
     };
     return result;
