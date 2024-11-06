@@ -2467,6 +2467,16 @@ class UpdaterBindings {
   late final _shorebird_check_for_update =
       _shorebird_check_for_updatePtr.asFunction<bool Function()>();
 
+  int shorebird_latest_available_patch() {
+    return _shorebird_latest_available_patch();
+  }
+
+  late final _shorebird_latest_available_patchPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'shorebird_latest_available_patch');
+  late final _shorebird_latest_available_patch =
+      _shorebird_latest_available_patchPtr.asFunction<int Function()>();
+
   /// Synchronously download an update if one is available.
   void shorebird_update() {
     return _shorebird_update();

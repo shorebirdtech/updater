@@ -31,6 +31,7 @@ class _MyHomePageState extends State<MyHomePage> {
   late final bool _isUpdaterAvailable;
   var _isCheckingForUpdates = false;
   Patch? _currentPatch;
+  UpdateTrack? _currentTrack;
 
   @override
   void initState() {
@@ -46,6 +47,16 @@ class _MyHomePageState extends State<MyHomePage> {
       // If an error occurs, we log it for now.
       debugPrint('Error reading current patch: $error');
     });
+
+    // Determine the update track to use.
+    _getUpdateTrack().then((track) {
+      setState(() => _currentTrack = track);
+    });
+  }
+
+  Future<UpdateTrack> _getUpdateTrack() async {
+    // Add custom logic to determine which track to use.
+    return UpdateTrack.stable;
   }
 
   Future<void> _checkForUpdate() async {
@@ -54,7 +65,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       setState(() => _isCheckingForUpdates = true);
       // Check if there's an update available.
-      final status = await _updater.checkForUpdate();
+      final status = await _updater.checkForUpdate(track: _currentTrack);
       if (!mounted) return;
       // If there is an update available, show a banner.
       if (status == UpdateStatus.outdated) _showUpdateAvailableBanner();
@@ -146,7 +157,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _showDownloadingBanner();
     try {
       // Perform the update (e.g download the latest patch).
-      await _updater.update();
+      await _updater.update(track: _currentTrack);
       if (!mounted) return;
       // Show a banner to inform the user that the update is ready and that they
       // need to restart the app.

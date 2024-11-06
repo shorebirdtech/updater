@@ -66,10 +66,11 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<UpdateStatus> checkForUpdate() async {
+  Future<UpdateStatus> checkForUpdate({UpdateTrack? track}) async {
     if (!_isAvailable) return UpdateStatus.unavailable;
 
-    final isUpdateAvailable = await _run(_updater.checkForUpdate);
+    final isUpdateAvailable =
+        await _run(() => _updater.checkForUpdate(track: track));
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
     final (current, next) = await (readCurrentPatch(), readNextPatch()).wait;
@@ -79,13 +80,13 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<void> update() async {
+  Future<void> update({UpdateTrack? track}) async {
     if (!_isAvailable) return;
 
     Pointer<UpdateResult> result = nullptr;
 
     try {
-      result = await _run(_updater.update);
+      result = await _run(() => _updater.update(track: track));
     } catch (_) {
       return _legacyFallback();
     }

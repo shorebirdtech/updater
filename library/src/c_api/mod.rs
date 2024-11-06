@@ -268,8 +268,17 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
 
 /// Check for an update.  Returns true if an update is available.
 #[no_mangle]
-pub extern "C" fn shorebird_check_for_update() -> bool {
-    log_on_error(updater::check_for_update, "checking for update", false)
+pub extern "C" fn shorebird_check_for_update(track: *const char) -> bool {
+    log_on_error(
+        || updater::check_for_update(track),
+        "checking for update",
+        false,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn shorebird_latest_available_patch() -> i32 {
+    panic!("Not implemented");
 }
 
 /// Synchronously download an update if one is available.

@@ -3,6 +3,7 @@ import 'dart:ffi';
 
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
+import 'package:shorebird_code_push/src/shorebird_updater.dart';
 
 /// {@template updater}
 /// A wrapper around the generated [UpdaterBindings] that, when necessary,
@@ -21,7 +22,8 @@ class Updater {
   int currentPatchNumber() => bindings.shorebird_current_boot_patch_number();
 
   /// Whether a new patch is available.
-  bool checkForUpdate() => bindings.shorebird_check_for_update();
+  bool checkForUpdate({UpdateTrack? track}) =>
+      bindings.shorebird_check_for_update();
 
   /// The next patch number that will be loaded. Will be the same as
   /// currentPatchNumber if no new patch is available.
@@ -32,7 +34,8 @@ class Updater {
 
   /// Downloads the latest patch, if available and returns an [UpdateResult]
   /// to indicate whether the update was successful.
-  Pointer<UpdateResult> update() => bindings.shorebird_update_with_result();
+  Pointer<UpdateResult> update({UpdateTrack? track}) =>
+      bindings.shorebird_update_with_result();
 
   /// Frees an update result allocated by the updater.
   void freeUpdateResult(Pointer<UpdateResult> ptr) =>
