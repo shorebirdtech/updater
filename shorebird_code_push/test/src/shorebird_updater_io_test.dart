@@ -285,6 +285,28 @@ void main() {
           );
         });
       });
+
+      group('when a track is provided', () {
+        const track = UpdateTrack.beta;
+
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(0);
+          when(
+            () => updater.checkForDownloadableUpdate(track: track),
+          ).thenReturn(true);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
+        });
+
+        test('forwards the provided track to the underlying updater call',
+            () async {
+          await expectLater(
+            shorebirdUpdater.checkForUpdate(track: track),
+            completion(equals(UpdateStatus.outdated)),
+          );
+          verify(() => updater.checkForDownloadableUpdate(track: track))
+              .called(1);
+        });
+      });
     });
 
     group('update', () {
@@ -562,6 +584,29 @@ Please upgrade the Shorebird Engine for improved error messages.''',
         test('completes', () async {
           await expectLater(shorebirdUpdater.update(), completes);
           verify(updater.update).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
+        });
+      });
+
+      group('when a track is provided', () {
+        const track = UpdateTrack.beta;
+
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(0);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
+          result.ref.status = SHOREBIRD_UPDATE_INSTALLED;
+          addTearDown(() => calloc.free(result));
+          when(() => updater.update(track: track)).thenReturn(result);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
+        });
+
+        test('forwards the provided track to the underlying updater call',
+            () async {
+          await expectLater(
+            shorebirdUpdater.update(track: track),
+            completes,
+          );
+          verify(() => updater.update(track: track)).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });

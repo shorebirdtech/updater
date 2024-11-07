@@ -68,6 +68,7 @@ pub struct UpdateResult {
     pub status: i32,
     pub message: *const libc::c_char,
 }
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FileCallbacks {
