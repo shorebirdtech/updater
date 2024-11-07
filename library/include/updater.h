@@ -153,9 +153,7 @@ SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 /**
  * Check for an update.  Returns true if an update is available.
  */
-SHOREBIRD_EXPORT bool shorebird_check_for_update(const uint32_t *track);
-
-SHOREBIRD_EXPORT int32_t shorebird_latest_available_patch(void);
+SHOREBIRD_EXPORT bool shorebird_check_for_update(const uint32_t *channel);
 
 /**
  * Synchronously download an update if one is available.

@@ -23,6 +23,7 @@ class Updater {
 
   /// Whether a new patch is available.
   bool checkForUpdate({UpdateTrack? track}) =>
+      // TODO: convert the track to a channel and pass it to the bindings.
       bindings.shorebird_check_for_update();
 
   /// The next patch number that will be loaded. Will be the same as

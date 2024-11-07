@@ -1,6 +1,5 @@
 // This file's job is to be the Rust API for the updater.
 
-use std::ffi::CStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
@@ -236,14 +235,11 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 }
 
 /// Synchronously checks for an update and returns true if an update is available.
-pub fn check_for_update(track: &str) -> anyhow::Result<bool> {
+pub fn check_for_update(channel: *const char) -> anyhow::Result<bool> {
     let (request, url, request_fn) = with_config(|config| {
-        let request = PatchCheckRequest::new(config);
-        if !track.is_empty() {
-            request.channel = track.to_string()
-        }
+        // TODO: use the channel in the patch check request
         Ok((
-            request,
+            PatchCheckRequest::new(config),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
