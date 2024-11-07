@@ -21,17 +21,19 @@ class Updater {
   /// The currently active patch number.
   int currentPatchNumber() => bindings.shorebird_current_boot_patch_number();
 
-  /// Whether a new patch is available.
-  bool checkForUpdate({UpdateTrack? track}) =>
-      // TODO: convert the track to a channel and pass it to the bindings.
-      bindings.shorebird_check_for_update();
-
   /// The next patch number that will be loaded. Will be the same as
   /// currentPatchNumber if no new patch is available.
   int nextPatchNumber() => bindings.shorebird_next_boot_patch_number();
 
   /// Downloads the latest patch, if available.
   void downloadUpdate() => bindings.shorebird_update();
+
+  // New Methods added to support v2.0.0 of the Dart APIs //
+
+  /// Whether a new patch is available.
+  bool checkForUpdate({UpdateTrack? track}) =>
+      // TODO: convert the track to a channel and pass it to the bindings.
+      bindings.shorebird_check_for_update();
 
   /// Downloads the latest patch, if available and returns an [UpdateResult]
   /// to indicate whether the update was successful.
