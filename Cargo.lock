@@ -1784,7 +1784,6 @@ dependencies = [
  "once_cell",
  "oslog",
  "pipe",
- "rand 0.8.5",
  "reqwest",
  "ring",
  "serde",
