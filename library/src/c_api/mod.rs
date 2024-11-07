@@ -94,6 +94,13 @@ fn to_rust(c_string: *const libc::c_char) -> anyhow::Result<String> {
     Ok(c_str.to_str()?.to_string())
 }
 
+fn to_rust_option(c_string: *const c_char) -> anyhow::Result<Option<String>> {
+    if c_string.is_null() {
+        return Ok(None);
+    }
+    Ok(Some(to_rust(c_string)?))
+}
+
 /// Converts a Rust string to a C string, caller must free the C string.
 fn allocate_c_string(rust_string: &str) -> anyhow::Result<*mut c_char> {
     let c_str = CString::new(rust_string)?;
@@ -266,11 +273,19 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
     }
 }
 
-/// Check for an update.  Returns true if an update is available.
+/// Check for an update on the first non-null channel of:
+///   1. `c_channel`
+///   2. The channel specified in shorebird.yaml
+///   3. The default "stable" channel
+///
+/// Returns true if an update exists that has not yet been downloaded.
 #[no_mangle]
-pub extern "C" fn shorebird_check_for_update(channel: *const c_char) -> bool {
+pub extern "C" fn shorebird_check_for_downloadable_update(c_channel: *const c_char) -> bool {
     log_on_error(
-        || updater::check_for_update(channel),
+        || {
+            let channel = to_rust_option(c_channel)?;
+            updater::check_for_downloadable_update(channel.as_deref())
+        },
         "checking for update",
         false,
     )
@@ -280,17 +295,25 @@ pub extern "C" fn shorebird_check_for_update(channel: *const c_char) -> bool {
 #[no_mangle]
 pub extern "C" fn shorebird_update() {
     log_on_error(
-        || updater::update().map(|result| shorebird_info!("Update result: {}", result)),
+        || updater::update(None).map(|result| shorebird_info!("Update result: {}", result)),
         "downloading update",
         (),
     );
 }
 
-/// Synchronously download an update if one is available.
+/// Synchronously download an update on the first non-null channel of:
+///   1. `c_channel`
+///   2. The channel specified in shorebird.yaml
+///   3. The default "stable" channel
+///
 /// Returns an [UpdateResult] indicating whether the update was successful.
 #[no_mangle]
-pub extern "C" fn shorebird_update_with_result() -> *const UpdateResult {
-    let result = to_update_result(updater::update());
+pub extern "C" fn shorebird_update_with_result(c_channel: *const c_char) -> *const UpdateResult {
+    let channel = to_rust_option(c_channel);
+    let result = match channel {
+        Ok(channel) => to_update_result(updater::update(channel.as_deref())),
+        Err(err) => to_update_result(Err(err)),
+    };
     return Box::into_raw(Box::new(result));
 }
 
@@ -551,7 +574,7 @@ mod test {
             |_url, _event| Ok(()),
         );
         // There is an update available.
-        assert!(shorebird_check_for_update());
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
 
         // Go ahead and do the update.
         shorebird_update();
@@ -613,10 +636,10 @@ mod test {
             |_url, _event| Ok(()),
         );
         // There is an update available.
-        assert!(shorebird_check_for_update());
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
 
         // Go ahead and do the update.
-        let result = shorebird_update_with_result();
+        let result = shorebird_update_with_result(std::ptr::null());
 
         unsafe {
             assert_eq!(result.read().status, SHOREBIRD_UPDATE_INSTALLED);
@@ -665,7 +688,7 @@ mod test {
         );
 
         // Go ahead and do the update.
-        let result = shorebird_update_with_result();
+        let result = shorebird_update_with_result(std::ptr::null());
 
         unsafe {
             assert_eq!(result.read().status, SHOREBIRD_NO_UPDATE);
@@ -706,7 +729,7 @@ mod test {
         );
 
         // Go ahead and do the update.
-        let result = shorebird_update_with_result();
+        let result = shorebird_update_with_result(std::ptr::null());
 
         unsafe {
             assert_eq!(result.read().status, SHOREBIRD_UPDATE_ERROR);
@@ -753,7 +776,7 @@ mod test {
         );
 
         // Go ahead and do the update.
-        let result = shorebird_update_with_result();
+        let result = shorebird_update_with_result(std::ptr::null());
 
         unsafe {
             assert_eq!(result.read().status, SHOREBIRD_UPDATE_ERROR);
@@ -810,7 +833,7 @@ mod test {
         assert_eq!(shorebird_current_boot_patch_number(), 0);
 
         // There is an update available.
-        assert!(shorebird_check_for_update());
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
         // Go ahead and do the update.
         shorebird_update();
 
@@ -917,7 +940,7 @@ mod test {
             shorebird_start_update_thread();
             // Wait for the thread to start.
             std::thread::sleep(std::time::Duration::from_millis(100));
-            assert!(updater::update().is_err());
+            assert!(updater::update(None).is_err());
         }
         // Unlock the lock, and wait for the thread to finish.
         std::thread::sleep(std::time::Duration::from_millis(100));

@@ -242,7 +242,7 @@ void main() {
       group('when updater has an update available', () {
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(0);
-          when(updater.checkForUpdate).thenReturn(true);
+          when(updater.checkForDownloadableUpdate).thenReturn(true);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -258,7 +258,7 @@ void main() {
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(0);
           when(updater.nextPatchNumber).thenReturn(1);
-          when(updater.checkForUpdate).thenReturn(false);
+          when(updater.checkForDownloadableUpdate).thenReturn(false);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 
@@ -274,7 +274,7 @@ void main() {
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(1);
           when(updater.nextPatchNumber).thenReturn(1);
-          when(updater.checkForUpdate).thenReturn(false);
+          when(updater.checkForDownloadableUpdate).thenReturn(false);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater, run: run);
         });
 

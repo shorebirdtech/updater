@@ -1,6 +1,7 @@
 import 'dart:ffi' as ffi;
 import 'dart:ffi';
 
+import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
@@ -30,15 +31,18 @@ class Updater {
 
   // New Methods added to support v2.0.0 of the Dart APIs //
 
-  /// Whether a new patch is available.
-  bool checkForUpdate({UpdateTrack? track}) =>
-      // TODO: convert the track to a channel and pass it to the bindings.
-      bindings.shorebird_check_for_update();
+  /// Whether a new patch is available for download.
+  bool checkForDownloadableUpdate({UpdateTrack? track}) =>
+      bindings.shorebird_check_for_downloadable_update(
+        track == null ? ffi.nullptr : track.name.toNativeUtf8().cast<Char>(),
+      );
 
   /// Downloads the latest patch, if available and returns an [UpdateResult]
   /// to indicate whether the update was successful.
   Pointer<UpdateResult> update({UpdateTrack? track}) =>
-      bindings.shorebird_update_with_result();
+      bindings.shorebird_update_with_result(
+        track == null ? ffi.nullptr : track.name.toNativeUtf8().cast<Char>(),
+      );
 
   /// Frees an update result allocated by the updater.
   void freeUpdateResult(Pointer<UpdateResult> ptr) =>

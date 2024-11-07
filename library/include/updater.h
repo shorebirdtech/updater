@@ -151,9 +151,15 @@ SHOREBIRD_EXPORT void shorebird_free_string(const char *c_string);
 SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 
 /**
- * Check for an update.  Returns true if an update is available.
+ * Check for an update on the first non-null channel of:
+ *   1. `c_channel`
+ *   2. The channel specified in shorebird.yaml
+ *   3. The default "stable" channel
+ *
+ * Returns true if an update exists that has not yet been downloaded.
  */
-SHOREBIRD_EXPORT bool shorebird_check_for_update(const char *channel);
+SHOREBIRD_EXPORT
+bool shorebird_check_for_downloadable_update(const char *c_channel);
 
 /**
  * Synchronously download an update if one is available.
@@ -161,10 +167,15 @@ SHOREBIRD_EXPORT bool shorebird_check_for_update(const char *channel);
 SHOREBIRD_EXPORT void shorebird_update(void);
 
 /**
- * Synchronously download an update if one is available.
+ * Synchronously download an update on the first non-null channel of:
+ *   1. `c_channel`
+ *   2. The channel specified in shorebird.yaml
+ *   3. The default "stable" channel
+ *
  * Returns an [UpdateResult] indicating whether the update was successful.
  */
-SHOREBIRD_EXPORT const struct UpdateResult *shorebird_update_with_result(void);
+SHOREBIRD_EXPORT
+const struct UpdateResult *shorebird_update_with_result(const char *c_channel);
 
 /**
  * Start a thread to download an update if one is available.

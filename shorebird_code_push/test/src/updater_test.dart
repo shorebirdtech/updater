@@ -38,17 +38,21 @@ void main() {
       });
     });
 
-    group('checkForUpdate', () {
+    group('checkForDownloadableUpdate', () {
       test('forwards the result of shorebird_check_for_update', () {
         when(
-          () => updaterBindings.shorebird_check_for_update(),
+          () => updaterBindings.shorebird_check_for_downloadable_update(
+            nullptr,
+          ),
         ).thenReturn(true);
-        expect(updater.checkForUpdate(), isTrue);
+        expect(updater.checkForDownloadableUpdate(), isTrue);
 
         when(
-          () => updaterBindings.shorebird_check_for_update(),
+          () => updaterBindings.shorebird_check_for_downloadable_update(
+            nullptr,
+          ),
         ).thenReturn(false);
-        expect(updater.checkForUpdate(), isFalse);
+        expect(updater.checkForDownloadableUpdate(), isFalse);
       });
     });
 
@@ -73,10 +77,12 @@ void main() {
     group('update', () {
       test('calls bindings.shorebird_update_with_result', () {
         when(
-          () => updaterBindings.shorebird_update_with_result(),
+          () => updaterBindings.shorebird_update_with_result(nullptr),
         ).thenReturn(nullptr);
         updater.update();
-        verify(() => updaterBindings.shorebird_update_with_result()).called(1);
+        verify(
+          () => updaterBindings.shorebird_update_with_result(nullptr),
+        ).called(1);
       });
     });
 

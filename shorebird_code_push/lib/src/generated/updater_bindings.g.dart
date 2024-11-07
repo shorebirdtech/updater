@@ -2456,20 +2456,26 @@ class UpdaterBindings {
   late final _shorebird_free_update_result = _shorebird_free_update_resultPtr
       .asFunction<void Function(ffi.Pointer<UpdateResult>)>();
 
-  /// Check for an update.  Returns true if an update is available.
-  bool shorebird_check_for_update(
-    ffi.Pointer<ffi.Uint32> channel,
+  /// Check for an update on the first non-null channel of:
+  /// 1. `c_channel`
+  /// 2. The channel specified in shorebird.yaml
+  /// 3. The default "stable" channel
+  ///
+  /// Returns true if an update exists that has not yet been downloaded.
+  bool shorebird_check_for_downloadable_update(
+    ffi.Pointer<ffi.Char> c_channel,
   ) {
-    return _shorebird_check_for_update(
-      channel,
+    return _shorebird_check_for_downloadable_update(
+      c_channel,
     );
   }
 
-  late final _shorebird_check_for_updatePtr =
-      _lookup<ffi.NativeFunction<ffi.Bool Function(ffi.Pointer<ffi.Uint32>)>>(
-          'shorebird_check_for_update');
-  late final _shorebird_check_for_update = _shorebird_check_for_updatePtr
-      .asFunction<bool Function(ffi.Pointer<ffi.Uint32>)>();
+  late final _shorebird_check_for_downloadable_updatePtr =
+      _lookup<ffi.NativeFunction<ffi.Bool Function(ffi.Pointer<ffi.Char>)>>(
+          'shorebird_check_for_downloadable_update');
+  late final _shorebird_check_for_downloadable_update =
+      _shorebird_check_for_downloadable_updatePtr
+          .asFunction<bool Function(ffi.Pointer<ffi.Char>)>();
 
   /// Synchronously download an update if one is available.
   void shorebird_update() {
@@ -2481,17 +2487,26 @@ class UpdaterBindings {
   late final _shorebird_update =
       _shorebird_updatePtr.asFunction<void Function()>();
 
-  /// Synchronously download an update if one is available.
+  /// Synchronously download an update on the first non-null channel of:
+  /// 1. `c_channel`
+  /// 2. The channel specified in shorebird.yaml
+  /// 3. The default "stable" channel
+  ///
   /// Returns an [UpdateResult] indicating whether the update was successful.
-  ffi.Pointer<UpdateResult> shorebird_update_with_result() {
-    return _shorebird_update_with_result();
+  ffi.Pointer<UpdateResult> shorebird_update_with_result(
+    ffi.Pointer<ffi.Char> c_channel,
+  ) {
+    return _shorebird_update_with_result(
+      c_channel,
+    );
   }
 
-  late final _shorebird_update_with_resultPtr =
-      _lookup<ffi.NativeFunction<ffi.Pointer<UpdateResult> Function()>>(
-          'shorebird_update_with_result');
+  late final _shorebird_update_with_resultPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Pointer<UpdateResult> Function(
+              ffi.Pointer<ffi.Char>)>>('shorebird_update_with_result');
   late final _shorebird_update_with_result = _shorebird_update_with_resultPtr
-      .asFunction<ffi.Pointer<UpdateResult> Function()>();
+      .asFunction<ffi.Pointer<UpdateResult> Function(ffi.Pointer<ffi.Char>)>();
 
   /// Start a thread to download an update if one is available.
   void shorebird_start_update_thread() {

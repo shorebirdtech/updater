@@ -69,10 +69,13 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<UpdateStatus> checkForUpdate({UpdateTrack? track}) async {
     if (!_isAvailable) return UpdateStatus.unavailable;
 
+    // First, check to see whether an update is available for download.
     final isUpdateAvailable =
-        await _run(() => _updater.checkForUpdate(track: track));
+        await _run(() => _updater.checkForDownloadableUpdate(track: track));
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
+    // If no new update is available for download, see if a new patch exists
+    // on disk that requires a restart.
     final (current, next) = await (readCurrentPatch(), readNextPatch()).wait;
     return next != null && current?.number != next.number
         ? UpdateStatus.restartRequired
