@@ -132,7 +132,10 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     shorebird_info!("No existing state file found: {:#}, creating new state.", e);
                 }
-                Self::create_new_and_save(storage_dir, release_version, patch_public_key)
+                let mut new =
+                    Self::create_new_and_save(storage_dir, release_version, patch_public_key);
+                let _ = new.patch_manager.reset();
+                new
             }
         }
     }
@@ -444,5 +447,27 @@ mod tests {
         let state = test_state(&tmp_dir, mock_manage_patches);
         assert!(state.is_known_bad_patch(1));
         assert!(!state.is_known_bad_patch(2));
+    }
+
+    #[test]
+    fn load_or_new_on_error_clears_patch_state_on_error() -> Result<()> {
+        let tmp_dir = TempDir::new("example")?;
+
+        // Create a new state, add a patch, and save it.
+        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None);
+        let patch = fake_patch(&tmp_dir, 1);
+        state.install_patch(&patch, "hash", None)?;
+        state.save()?;
+        assert_eq!(state.next_boot_patch().unwrap().number, 1);
+
+        // Corrupt the state file.
+        let state_file = tmp_dir.path().join(STATE_FILE_NAME);
+        std::fs::write(&state_file, "corrupt json")?;
+
+        // Ensure that, by corrupting the file, we've reset the patches state.
+        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None);
+        assert!(state.next_boot_patch().is_none());
+
+        Ok(())
     }
 }
