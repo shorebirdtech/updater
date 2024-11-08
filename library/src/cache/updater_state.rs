@@ -94,7 +94,7 @@ impl UpdaterState {
         release_version: &str,
         patch_public_key: Option<&str>,
     ) -> Self {
-        let state = Self::new(
+        let mut state = Self::new(
             storage_dir.to_owned(),
             release_version.to_owned(),
             patch_public_key,
@@ -102,6 +102,8 @@ impl UpdaterState {
         if let Err(e) = state.save() {
             shorebird_warn!("Error saving state {:?}, ignoring.", e);
         }
+        // Ensure we clear any patch data if we're creating a new state.
+        let _ = state.patch_manager.reset();
         state
     }
 
@@ -112,14 +114,13 @@ impl UpdaterState {
     ) -> Self {
         let load_result = Self::load(storage_dir, patch_public_key);
         match load_result {
-            Ok(mut loaded) => {
+            Ok(loaded) => {
                 if loaded.serialized_state.release_version != release_version {
                     shorebird_info!(
                         "release_version changed {} -> {}, creating new state",
                         loaded.serialized_state.release_version,
                         release_version
                     );
-                    let _ = loaded.patch_manager.reset();
                     return Self::create_new_and_save(
                         storage_dir,
                         release_version,
@@ -132,10 +133,7 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     shorebird_info!("No existing state file found: {:#}, creating new state.", e);
                 }
-                let mut new =
-                    Self::create_new_and_save(storage_dir, release_version, patch_public_key);
-                let _ = new.patch_manager.reset();
-                new
+                Self::create_new_and_save(storage_dir, release_version, patch_public_key)
             }
         }
     }
