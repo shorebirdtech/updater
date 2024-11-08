@@ -94,7 +94,7 @@ impl UpdaterState {
         release_version: &str,
         patch_public_key: Option<&str>,
     ) -> Self {
-        let state = Self::new(
+        let mut state = Self::new(
             storage_dir.to_owned(),
             release_version.to_owned(),
             patch_public_key,
@@ -102,6 +102,8 @@ impl UpdaterState {
         if let Err(e) = state.save() {
             shorebird_warn!("Error saving state {:?}, ignoring.", e);
         }
+        // Ensure we clear any patch data if we're creating a new state.
+        let _ = state.patch_manager.reset();
         state
     }
 
@@ -112,14 +114,13 @@ impl UpdaterState {
     ) -> Self {
         let load_result = Self::load(storage_dir, patch_public_key);
         match load_result {
-            Ok(mut loaded) => {
+            Ok(loaded) => {
                 if loaded.serialized_state.release_version != release_version {
                     shorebird_info!(
                         "release_version changed {} -> {}, creating new state",
                         loaded.serialized_state.release_version,
                         release_version
                     );
-                    let _ = loaded.patch_manager.reset();
                     return Self::create_new_and_save(
                         storage_dir,
                         release_version,
@@ -444,5 +445,27 @@ mod tests {
         let state = test_state(&tmp_dir, mock_manage_patches);
         assert!(state.is_known_bad_patch(1));
         assert!(!state.is_known_bad_patch(2));
+    }
+
+    #[test]
+    fn load_or_new_on_error_clears_patch_state_on_error() -> Result<()> {
+        let tmp_dir = TempDir::new("example")?;
+
+        // Create a new state, add a patch, and save it.
+        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None);
+        let patch = fake_patch(&tmp_dir, 1);
+        state.install_patch(&patch, "hash", None)?;
+        state.save()?;
+        assert_eq!(state.next_boot_patch().unwrap().number, 1);
+
+        // Corrupt the state file.
+        let state_file = tmp_dir.path().join(STATE_FILE_NAME);
+        std::fs::write(&state_file, "corrupt json")?;
+
+        // Ensure that, by corrupting the file, we've reset the patches state.
+        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None);
+        assert!(state.next_boot_patch().is_none());
+
+        Ok(())
     }
 }
