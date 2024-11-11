@@ -56,12 +56,9 @@ impl Default for NetworkHooks {
 }
 
 fn create_client_with_proxy() -> anyhow::Result<reqwest::blocking::Client> {
-    let config = read_config()?;
     let mut client_builder = reqwest::blocking::Client::builder();
-
     // Use system proxy settings
     client_builder = client_builder.proxy(reqwest::Proxy::system());
-
     let client = client_builder.build()?;
     Ok(client)
 }
