@@ -58,20 +58,12 @@ impl Default for NetworkHooks {
 fn create_client_with_proxy() -> anyhow::Result<reqwest::blocking::Client> {
     let config = read_config()?;
     let mut client_builder = reqwest::blocking::Client::builder();
-    
-    if let Some(proxy_url) = config.proxy_url {
-        let proxy = reqwest::Proxy::http(&proxy_url)?;
-        client_builder = client_builder.proxy(proxy);
-    }
-    
+
+    // Use system proxy settings
+    client_builder = client_builder.proxy(reqwest::Proxy::system());
+
     let client = client_builder.build()?;
     Ok(client)
-}
-
-fn read_config() -> anyhow::Result<YamlConfig> {
-    let config_str = std::fs::read_to_string("shorebird.yaml")?;
-    let config: YamlConfig = serde_yaml::from_str(&config_str)?;
-    Ok(config)
 }
 
 pub fn patch_check_request_default(
