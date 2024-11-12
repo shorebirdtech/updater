@@ -242,12 +242,24 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
     with_config(|config| Ok(config.auto_update))
 }
 
-/// Synchronously checks for an update and returns true if an update is available.
-pub fn check_for_update() -> anyhow::Result<bool> {
+/// Synchronously checks for an update on the first non-null channel of:
+///   1. `c_channel`
+///   2. The channel specified in shorebird.yaml
+///   3. The default "stable" channel
+///
+/// Returns true if an update is available for download. Will return false if the update is already
+/// downloaded and ready to install.
+pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bool> {
     let (request, url, request_fn) = with_config(|config| {
-        // Get the required info to make the request.
+        let mut config = config.clone();
+
+        match channel {
+            Some(channel) => config.channel = channel.to_string(),
+            None => {}
+        }
+
         Ok((
-            PatchCheckRequest::new(config),
+            PatchCheckRequest::new(&config),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -319,7 +331,7 @@ fn copy_update_config() -> anyhow::Result<UpdateConfig> {
 
 // Callers must possess the Updater lock, but we don't care about the contents
 // since they're empty.
-fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
+fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
     // Only one copy of Update can be running at a time.
     // Update will take the global Updater lock.
     // Update will need to take the Config lock at times, but will only
@@ -337,7 +349,10 @@ fn update_internal(_: &UpdaterLockState) -> anyhow::Result<UpdateStatus> {
     // Takes Config lock and installs patch.
     // Saves state to disk (holds Config lock while writing).
 
-    let config = copy_update_config()?;
+    let mut config = copy_update_config()?;
+    if channel.is_some() {
+        config.channel = channel.unwrap().to_string();
+    }
 
     // We discard any events if we have more than 3 queued to make sure
     // we don't stall the client.
@@ -460,8 +475,8 @@ fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckRe
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
-pub fn update() -> anyhow::Result<UpdateStatus> {
-    with_updater_thread_lock(update_internal)
+pub fn update(channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
+    with_updater_thread_lock(|lock_state| update_internal(lock_state, channel))
 }
 
 /// Given a path to a patch file, and a base file, apply the patch to the base
@@ -642,7 +657,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 /// and install it if available.
 pub fn start_update_thread() {
     std::thread::spawn(move || {
-        let result = update();
+        let result = update(None);
         let status = match result {
             Ok(status) => status,
             Err(err) => {
@@ -949,7 +964,7 @@ mod tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        let result = super::update()?;
+        let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
         // This is gross.
@@ -1011,7 +1026,7 @@ mod tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        let result = super::update()?;
+        let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
         // This is gross.
@@ -1147,7 +1162,7 @@ mod tests {
         // Make sure we're starting with no next boot patch.
         assert!(updater_state.next_boot_patch().is_none());
 
-        let result = super::update()?;
+        let result = super::update(None)?;
 
         // Ensure that we've skipped the known bad patch.
         assert_eq!(result, crate::UpdateStatus::UpdateIsBadPatch);
@@ -1182,7 +1197,7 @@ mod tests {
 
         install_fake_patch(patch_number)?;
 
-        let update_status = super::update()?;
+        let update_status = super::update(None)?;
 
         assert_eq!(update_status, crate::UpdateStatus::NoUpdate);
 
@@ -1242,7 +1257,7 @@ mod tests {
         })
         .unwrap();
 
-        super::update().unwrap();
+        super::update(None).unwrap();
         // Only 3 events should have been sent.
         event_mock.expect(3).assert();
 
@@ -1296,7 +1311,7 @@ mod tests {
         );
 
         // Invoke check_for_update to kick off a patch check request
-        let _ = std::thread::spawn(crate::check_for_update);
+        let _ = std::thread::spawn(|| crate::check_for_downloadable_update(None));
 
         // Call with_config to get the config lock. This should complete before the patch check request is resolved.
         let config_thread = std::thread::spawn(|| with_config(|_| Ok(())));
@@ -1358,7 +1373,7 @@ mod rollback_tests {
             Ok(())
         })?;
 
-        let update_result = crate::update();
+        let update_result = crate::update(None);
         assert_eq!(update_result.unwrap(), crate::UpdateStatus::NoUpdate);
 
         Ok(())
@@ -1393,7 +1408,7 @@ mod rollback_tests {
             Ok(())
         })?;
 
-        crate::update()?;
+        crate::update(None)?;
 
         with_mut_state(|state| {
             assert!(state.next_boot_patch().is_none());
@@ -1462,7 +1477,7 @@ mod rollback_tests {
             Ok(())
         })?;
 
-        let update_result = crate::update();
+        let update_result = crate::update(None);
         assert_eq!(update_result.unwrap(), crate::UpdateStatus::UpdateInstalled);
 
         with_mut_state(|state| {
@@ -1475,7 +1490,7 @@ mod rollback_tests {
 }
 
 #[cfg(test)]
-mod check_for_update_tests {
+mod check_for_downloadable_update_tests {
     use anyhow::Result;
     use serial_test::serial;
     use tempdir::TempDir;
@@ -1518,7 +1533,7 @@ mod check_for_update_tests {
 
         install_fake_patch(patch_number)?;
 
-        let is_update_available = crate::check_for_update()?;
+        let is_update_available = crate::check_for_downloadable_update(None)?;
         assert!(!is_update_available);
 
         Ok(())
@@ -1536,7 +1551,7 @@ mod check_for_update_tests {
         report_launch_start()?;
         report_launch_failure()?;
 
-        let is_update_available = crate::check_for_update()?;
+        let is_update_available = crate::check_for_downloadable_update(None)?;
         assert!(!is_update_available);
 
         Ok(())
@@ -1550,7 +1565,7 @@ mod check_for_update_tests {
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
-        let is_update_available = crate::check_for_update()?;
+        let is_update_available = crate::check_for_downloadable_update(None)?;
         assert!(is_update_available);
 
         Ok(())
