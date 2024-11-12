@@ -124,6 +124,8 @@ abstract class ShorebirdUpdater {
   Future<UpdateStatus> checkForUpdate({UpdateTrack? track});
 
   /// Updates the app to the latest patch (if available).
+  /// Future will complete once the update is fully downloaded and ready
+  /// to be used on the next app start.
   /// Note: The app must be restarted for the update to take effect.
   /// Note: This method does nothing if the updater is not available.
   ///
