@@ -29,10 +29,10 @@ inputs:
     required: false
     default: "lib"
     description: Directories to report on when collecting coverage
-  platform:
+  example_platform:
     required: false
-    default: "vm"
-    description: Platform to use when running tests
+    default: "web"
+    description: Platform to use when building example
 
 runs:
   using: "composite"
@@ -53,6 +53,11 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}
       run: dart analyze --fatal-warnings ${{inputs.analyze_directories}}
+
+    - name: Build Example
+      working-directory: ${{ inputs.working_directory }}/example
+      shell: ${{ inputs.shell }}
+      run: flutter build ${{ inputs.example_platform }}
 
     - name: Test
       working-directory: ${{ inputs.working_directory }}
