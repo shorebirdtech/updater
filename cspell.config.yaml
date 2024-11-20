@@ -66,3 +66,5 @@ words:
   - xlink
   - zstandard
   - zstd
+  - xcodeproj
+  - pbxproj
