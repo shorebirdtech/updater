@@ -1,3 +1,4 @@
+// cspell:ignore rpkDZSLBRv2jWcc1gQpwdg
 use anyhow::Context;
 use std::fs;
 use std::io::{Cursor, Read};

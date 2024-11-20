@@ -1,3 +1,4 @@
+// cspell:ignore pubin PKCS outform
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use std::path::Path;

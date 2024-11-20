@@ -1,7 +1,70 @@
 $schema: https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json
 version: '0.2'
-ignorePaths: ['build', '**/*.g.dart']
+ignorePaths:
+  - target
+  - build
+  - '**/*.g.dart'
+  # Flutter platform directories with per-platform build files
+  - windows
+  - macos
+  - linux
+  - ios
+  - android
 words:
-  - subosito
+  - aarch
+  - androideabi
+  - apks
+  - armeabi
+  - armv7
+  - autogen
+  - bidiff
+  - bipatch
+  - bootable
+  - buildroot
+  - bundletool
   - carryforward
+  - cbindgen
+  - cdylib
+  - classpath
+  - comde
+  - compatch
+  - Condvar
+  - datadir
+  - declspec
+  - Decompressor
+  - dllexport
+  - dlopen
   - endtemplate
+  - eseidel
+  - ffigen
+  - gclient
+  - hdpi
+  - ifdef
+  - libapp
+  - libc
+  - libflutter
+  - libupdater
+  - logcat
+  - mockall
+  - mocktail
+  - oslog
+  - pubspec
+  - repr
+  - reqwest
+  - rollouts
+  - rustls
+  - rustup
+  - serde
+  - shorebirdtech
+  - sigstore
+  - staticlib
+  - subosito
+  - unbootable
+  - Verdana
+  - vmcode
+  - withf
+  - xlink
+  - zstandard
+  - zstd
+  - xcodeproj
+  - pbxproj
