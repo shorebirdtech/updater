@@ -17,12 +17,11 @@ fn updater_lock() -> &'static std::sync::Mutex<UpdaterLockState> {
 
 // Note: it is not OK to ever ask for the Updater lock *while* holding the
 // UpdateConfig lock because the updater thread *will* block on getting the
-// UpdateConfig lock while holding the Updater lock.  Allowing the inverse
-// could cause a deadlock.  We could add a check for that here by doing a
-// tryLock on the UpdateConfig lock and erroring out if we can't get it, but
-// that would probably have false postives since it is OK for some other call to
-// be holding the UpdateConfig lock while another thread asks for the Updater
-// lock.
+// UpdateConfig lock while holding the Updater lock.  Allowing the inverse could
+// cause a deadlock.  We could add a check for that here by doing a tryLock on
+// the UpdateConfig lock and erroring out if we can't get it, but that would
+// probably have false positives since it is OK for some other call to be
+// holding the UpdateConfig lock while another thread asks for the Updater lock.
 pub fn with_updater_thread_lock<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&UpdaterLockState) -> anyhow::Result<R>,

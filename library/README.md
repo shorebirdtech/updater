@@ -182,7 +182,7 @@ This state machine tracks the process of checking for new patches. It is managed
 by the code in `updater.rs` and does not have any on-disk state. It has the
 following states:
 
-1. Ready - Ready to check for udpates.
+1. Ready - Ready to check for updates.
 2. Send queued events (e.g., report that a patch succeeded or failed to boot)
    a. Move to checking once events, if any, have been reported.
 3. Checking for new patches - A PatchCheckRequest is issued but not completed.
