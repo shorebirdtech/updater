@@ -10,11 +10,11 @@ struct CFile {
 }
 
 #[derive(Clone, Debug)]
-pub struct CFileProvder {
+pub struct CFileProvider {
     pub file_callbacks: FileCallbacks,
 }
 
-impl ExternalFileProvider for CFileProvder {
+impl ExternalFileProvider for CFileProvider {
     fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>> {
         let handle = (self.file_callbacks.open)();
         if handle.is_null() {
@@ -139,7 +139,7 @@ mod test {
     fn test_open() {
         reset_tests();
 
-        let file_provider = CFileProvder {
+        let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
         let handle = file_provider.open().unwrap();
@@ -158,7 +158,7 @@ mod test {
             OPEN_RET = std::ptr::null_mut();
         }
 
-        let file_provider = CFileProvder {
+        let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
         let result = file_provider.open();
@@ -170,7 +170,7 @@ mod test {
     fn test_read() {
         reset_tests();
 
-        let file_provider = CFileProvder {
+        let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
         let mut handle = file_provider.open().unwrap();
@@ -187,7 +187,7 @@ mod test {
     fn test_seek() {
         reset_tests();
 
-        let file_provider = CFileProvder {
+        let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
         let mut handle = file_provider.open().unwrap();
@@ -233,7 +233,7 @@ mod test {
     fn test_seek_err() {
         reset_tests();
 
-        let file_provider = CFileProvder {
+        let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
         let mut handle = file_provider.open().unwrap();

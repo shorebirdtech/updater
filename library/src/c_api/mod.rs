@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use crate::{updater, UpdateStatus};
 
-use self::c_file::CFileProvder;
+use self::c_file::CFileProvider;
 
 mod c_file;
 
@@ -162,7 +162,7 @@ pub extern "C" fn shorebird_init(
     log_on_error(
         || {
             let config = app_config_from_c(c_params)?;
-            let file_provider = Box::new(CFileProvder {
+            let file_provider = Box::new(CFileProvider {
                 file_callbacks: c_file_callbacks,
             });
             let yaml_string = to_rust(c_yaml)?;

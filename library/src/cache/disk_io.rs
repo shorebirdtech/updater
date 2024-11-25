@@ -79,7 +79,7 @@ mod test {
     }
 
     #[test]
-    fn read_errs_if_file_doesnt_exist() {
+    fn read_errs_if_file_does_not_exist() {
         assert!(super::read::<TestStruct, _>(&Path::new("nonexistent.json")).is_err());
     }
 

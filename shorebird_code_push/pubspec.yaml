@@ -1,12 +1,12 @@
 name: shorebird_code_push
 description: Check for and download Shorebird code push updates from your app.
-version: 2.0.0
+version: 2.0.2
 homepage: https://shorebird.dev
 repository: https://github.com/shorebirdtech/updater/tree/main/shorebird_code_push
 
 environment:
   sdk: ">=3.5.4 <4.0.0"
-  flutter: ">=3.24.4"
+  flutter: ">=3.24.5"
 
 dependencies:
   ffi: ^2.0.2
