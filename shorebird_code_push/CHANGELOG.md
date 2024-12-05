@@ -1,3 +1,19 @@
+# 2.0.2
+
+- fix: un-break web platform
+- chore: minor improvements to example
+
+# 2.0.1
+
+- Update the minimum Flutter version from 3.24.4 to 3.24.5 (3.24.4 does not
+  include the updater changes required to support the new API).
+
+# 2.0.0
+
+- **BREAKING**: more updates to the Updater API. We now support Stable, Beta,
+  and Staging tracks for patches, meaning you have more control over who gets
+  your patches and when. Check out the example for a demo.
+
 # 2.0.0-dev.2
 
 - fix: tighten library exports

@@ -57,13 +57,14 @@ struct PatchesState {
 
 /// Abstracts the storage of patches on disk.
 ///
-/// The impementation of this (PatchManager) should only be responsible for translating what is on
-/// disk into a form that is useful for the updater and vice versa. Some business logic has crept in
-/// in the form of validation, and we should consider moving that into a separate module.
+/// The implementation of this (PatchManager) should only be responsible for
+/// translating what is on disk into a form that is useful for the updater and
+/// vice versa. Some business logic has crept in in the form of validation, and
+/// we should consider moving that into a separate module.
 #[cfg_attr(test, automock)]
 pub trait ManagePatches {
-    /// Copies the patch file at file_path to the manager's directory structure sets
-    /// this patch as the next patch to boot.
+    /// Copies the patch file at file_path to the manager's directory structure
+    /// sets this patch as the next patch to boot.
     ///
     /// The explicit lifetime is required for automock to work with Options.
     /// See https://github.com/asomers/mockall/issues/61.
@@ -952,7 +953,7 @@ mod fall_back_tests {
         manager.record_boot_start_for_patch(1)?;
         manager.record_boot_success()?;
         let patch_1_path = manager.patch_artifact_path(1);
-        std::fs::write(patch_1_path, "junkjunkjunk")?;
+        std::fs::write(patch_1_path, "junk junk junk")?;
 
         // Download and fall back from patch 2
         manager.add_patch_for_test(&temp_dir, 2)?;

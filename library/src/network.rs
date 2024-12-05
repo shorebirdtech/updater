@@ -403,7 +403,7 @@ mod tests {
         let result = super::report_event_default(
             // Make the request to an incorrectly formatted URL, which will
             // trigger the same error as a lack of internet connection.
-            &patches_events_url("asdfasdf"),
+            &patches_events_url("does_not_exist"),
             super::CreatePatchEventRequest {
                 event: PatchEvent {
                     app_id: "app_id".to_string(),
