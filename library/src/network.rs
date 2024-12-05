@@ -100,11 +100,7 @@ fn handle_network_result(
             }
         }
         Err(e) => match e.source() {
-            Some(source)
-                if source
-                    .to_string()
-                    .contains("failed to lookup address information") =>
-            {
+            Some(source) if source.to_string().contains("client error (Connect)") => {
                 bail!("Patch check request failed due to network error. Please check your internet connection.");
             }
             _ => bail!(e),
@@ -420,9 +416,6 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.err().unwrap();
-        assert_eq!(
-            error.to_string(),
-            "builder error: relative URL without a base"
-        )
+        assert_eq!(error.to_string(), "builder error")
     }
 }
