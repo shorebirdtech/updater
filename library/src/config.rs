@@ -164,6 +164,8 @@ pub fn current_platform() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::set_config;
     use crate::{network::NetworkHooks, testing_reset_config, AppConfig, ExternalFileProvider};
     use anyhow::Result;
@@ -222,8 +224,11 @@ mod tests {
         )?;
 
         let config = super::with_config(|config| Ok(config.clone())).unwrap();
-        assert_eq!(config.storage_dir.to_str(), Some("/app_storage"));
-        assert_eq!(config.download_dir.to_str(), Some("/code_cache/downloads"));
+        assert_eq!(config.storage_dir, PathBuf::from("/app_storage"));
+        assert_eq!(
+            config.download_dir,
+            PathBuf::from("/").join("code_cache").join("downloads")
+        );
         assert!(config.auto_update);
         assert_eq!(config.channel, "fake_channel");
         assert_eq!(config.app_id, "fake_app_id");
