@@ -67,7 +67,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    name: 🦀 Build ${{ matrix.crate }}
+    name: 🦀 Build ${{ matrix.crate }} ${{ matrix.os }}
 
     steps:
       - name: 📚 Git Checkout
