@@ -84,9 +84,10 @@ jobs:
 
     strategy:
       matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
         package: ${{ fromJSON(needs.changes.outputs.needs_flutter_build) }}
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     name: 🎯 Build ${{ matrix.package }}
 
