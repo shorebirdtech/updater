@@ -67,7 +67,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    name: 🦀 Build ${{ matrix.crate }} ${{ matrix.os }}
+    name: 🦀 Build ${{ matrix.crate }} (${{ matrix.os }})
 
     steps:
       - name: 📚 Git Checkout
@@ -85,12 +85,11 @@ jobs:
 
     strategy:
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
         package: ${{ fromJSON(needs.changes.outputs.needs_flutter_build) }}
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
-    name: 🎯 Build ${{ matrix.package }} (${{ matrix.os }})
+    name: 🎯 Build ${{ matrix.package }}
 
     steps:
       - name: 📚 Git Checkout
