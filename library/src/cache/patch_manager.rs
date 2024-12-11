@@ -530,11 +530,8 @@ mod debug_tests {
     fn patch_manager_is_debug() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
         let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
-        let expected_str = format!(
-            "PatchManager {{ root_dir: \"{}\", patches_state: PatchesState {{ last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, known_bad_patches: {{}} }}, patch_public_key: Some(\"public_key\") }}",
-            temp_dir.path().display()
-        );
-        assert_eq!(format!("{:?}", patch_manager), expected_str);
+        let actual = format!("{:?}", patch_manager);
+        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, known_bad_patches: {} }, patch_public_key: Some("public_key") }"#));
     }
 }
 

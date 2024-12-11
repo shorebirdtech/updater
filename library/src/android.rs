@@ -210,18 +210,29 @@ pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<Pat
 #[cfg(test)]
 mod tests {
     use std::fs::File;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use tempdir::TempDir;
     use zip::write::FileOptions;
     use zip::ZipWriter;
 
+    fn assert_error_is_file_not_found(error: &anyhow::Error) {
+        #[cfg(not(target_os = "windows"))]
+        assert!(error.to_string().contains("No such file or directory"));
+
+        #[cfg(target_os = "windows")]
+        assert!(error
+            .to_string()
+            .contains("The system cannot find the file specified"));
+    }
+
     // Takes a path to the zip to create as well as a list of file names to
     // create in the zip.  The files will be empty.
-    fn create_zip_with_empty_files(zip_path: &Path, files: Vec<&str>) {
+    fn create_zip_with_empty_files(zip_path: &Path, files: Vec<PathBuf>) {
         let file = File::create(zip_path).unwrap();
         let mut zip = ZipWriter::new(file);
         for file in files {
-            zip.start_file(file, FileOptions::default()).unwrap();
+            zip.start_file(file.to_string_lossy(), FileOptions::default())
+                .unwrap();
         }
         zip.finish().unwrap();
     }
@@ -230,7 +241,7 @@ mod tests {
     fn find_and_open_lib_test() {
         let tmp_dir = TempDir::new("example").unwrap();
         let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
-        assert!(error.to_string().contains("No such file or directory"));
+        assert_error_is_file_not_found(&error);
 
         // Write an empty file (invalid apk) to the base apk.
         let base_apk_path = tmp_dir.path().join("base.apk");
@@ -253,12 +264,12 @@ mod tests {
 
         let base_apk_path = tmp_dir.path().join("base.apk");
         let arch = super::android_arch_names();
-        let lib_path = format!("lib/{}/libapp.so", arch.lib_dir);
-        create_zip_with_empty_files(&base_apk_path, vec![&lib_path]);
+        let lib_path = Path::new("lib").join(arch.lib_dir).join("libapp.so");
+        create_zip_with_empty_files(&base_apk_path, vec![lib_path.clone()]);
 
         let zip_location = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap();
         // Success!
-        assert_eq!(zip_location.internal_path, lib_path);
+        assert_eq!(Path::new(&zip_location.internal_path), &lib_path);
         // Otherwise coverage complains that we haven't used the Debug trait
         // even though the Debug trait is required for assert_eq!.
         let debug_str = format!("{:?}", zip_location);
@@ -273,28 +284,28 @@ mod tests {
 
         // Write a base.apk with the wrong arch.
         let base_apk_path = tmp_dir.path().join("base.apk");
-        create_zip_with_empty_files(&base_apk_path, vec!["lib/wrong/libapp.so"]);
+        create_zip_with_empty_files(&base_apk_path, vec![PathBuf::from("lib/wrong/libapp.so")]);
 
         // Write a split apk with the right arch.
         let arch = super::android_arch_names();
         let split_apk_name = format!("app-hdpi{}-release.apk", arch.apk_split);
         let split_apk_path: std::path::PathBuf = tmp_dir.path().join(split_apk_name);
-        let lib_path = format!("lib/{}/libapp.so", arch.lib_dir);
-        create_zip_with_empty_files(&split_apk_path, vec![&lib_path]);
+        let lib_path = Path::new("lib").join(arch.lib_dir).join("libapp.so");
+        create_zip_with_empty_files(&split_apk_path, vec![lib_path.clone()]);
 
         // Write another apk early in the alphabet we skip over since it isn't
         // a split apk.
         let split_apk_path: std::path::PathBuf = tmp_dir.path().join("aaa.apk");
-        create_zip_with_empty_files(&split_apk_path, vec![&lib_path]);
+        create_zip_with_empty_files(&split_apk_path, vec![lib_path.clone()]);
 
         // Write an apk with our arch name but not our library.
         let split_apk_name = format!("aaa{}.apk", arch.apk_split);
-        let split_apk_path: std::path::PathBuf = tmp_dir.path().join(split_apk_name);
+        let split_apk_path = tmp_dir.path().join(split_apk_name);
         create_zip_with_empty_files(&split_apk_path, vec![]);
 
         let zip_location = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap();
         // Success!
-        assert_eq!(zip_location.internal_path, lib_path);
+        assert_eq!(Path::new(&zip_location.internal_path), lib_path);
     }
 
     #[test]
@@ -311,6 +322,6 @@ mod tests {
     fn open_base_lib_test() {
         let tmp_dir = TempDir::new("example").unwrap();
         let error = super::open_base_lib(tmp_dir.path(), "libapp.so").unwrap_err();
-        assert!(error.to_string().contains("No such file or directory"));
+        assert_error_is_file_not_found(&error);
     }
 }
