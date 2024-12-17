@@ -1,0 +1,3 @@
+# The Flutter engine builds with static crt runtime so we need to too to match.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
