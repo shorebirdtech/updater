@@ -22,10 +22,16 @@ pub fn init_logging() {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn init_logging() {
+    let _ = simple_logger::SimpleLogger::new().init();
+}
+
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
-    not(target_os = "macos")
+    not(target_os = "macos"),
+    not(target_os = "windows")
 ))]
 pub fn init_logging() {
     // Nothing to do on non-Android, non-iOS platforms.
