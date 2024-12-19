@@ -151,6 +151,11 @@ SHOREBIRD_EXPORT void shorebird_free_string(const char *c_string);
 SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 
 /**
+ * Check for an update.  Returns true if an update is available.
+ */
+SHOREBIRD_EXPORT bool shorebird_check_for_update(void);
+
+/**
  * Check for an update on the first non-null channel of:
  *   1. `c_channel`
  *   2. The channel specified in shorebird.yaml

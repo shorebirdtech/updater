@@ -274,6 +274,16 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
     }
 }
 
+/// Check for an update.  Returns true if an update is available.
+#[no_mangle]
+pub extern "C" fn shorebird_check_for_update() -> bool {
+    log_on_error(
+        || updater::check_for_downloadable_update(None),
+        "checking for update",
+        false,
+    )
+}
+
 /// Check for an update on the first non-null channel of:
 ///   1. `c_channel`
 ///   2. The channel specified in shorebird.yaml
