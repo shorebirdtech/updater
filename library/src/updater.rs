@@ -320,7 +320,15 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     Ok(Box::new(base_r))
 }
 
-#[cfg(not(any(target_os = "android", test)))]
+#[cfg(all(target_os = "windows", not(test)))]
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    let mut buffer = Vec::new();
+    let mut file = fs::File::open(&config.libapp_path)?;
+    file.read_to_end(&mut buffer)?;
+    Ok(Box::new(Cursor::new(buffer)))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "windows", test)))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     config.file_provider.open()
 }
