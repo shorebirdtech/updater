@@ -313,6 +313,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
 }
 
 impl ReadSeek for Cursor<Vec<u8>> {}
+impl ReadSeek for fs::File {}
 
 #[cfg(any(target_os = "android", test))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
@@ -322,10 +323,8 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
 
 #[cfg(all(target_os = "windows", not(test)))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    let mut buffer = Vec::new();
-    let mut file = fs::File::open(&config.libapp_path)?;
-    file.read_to_end(&mut buffer)?;
-    Ok(Box::new(Cursor::new(buffer)))
+    let file = fs::File::open(&config.libapp_path)?;
+    Ok(Box::new(file))
 }
 
 #[cfg(not(any(target_os = "android", target_os = "windows", test)))]
