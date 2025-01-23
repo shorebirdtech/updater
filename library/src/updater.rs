@@ -317,18 +317,27 @@ impl ReadSeek for fs::File {}
 
 #[cfg(any(target_os = "android", test))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    shorebird_info!("in android patch_base");
     let base_r = crate::android::open_base_lib(&config.libapp_path, "libapp.so")?;
     Ok(Box::new(base_r))
 }
 
-#[cfg(all(target_os = "windows", not(test)))]
+#[cfg(all(
+    any(
+        target_os = "windows",
+        all(target_os = "macos", target_arch = "x86_64"),
+    ),
+    not(test)
+))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    shorebird_info!("in windows patch_base");
     let file = fs::File::open(&config.libapp_path)?;
     Ok(Box::new(file))
 }
 
-#[cfg(not(any(target_os = "android", target_os = "windows", test)))]
+#[cfg(any(target_os = "ios", all(target_os = "macos", target_arch = "aarch64"),))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    shorebird_info!("in ios patch_base");
     config.file_provider.open()
 }
 
@@ -355,6 +364,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // Checks hash of downloaded file.
     // Takes Config lock and installs patch.
     // Saves state to disk (holds Config lock while writing).
+
+    shorebird_info!("In update_internal");
 
     let mut config = copy_update_config()?;
     if channel.is_some() {
@@ -402,6 +413,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         return Ok(UpdateStatus::NoUpdate);
     }
 
+    shorebird_info!("There is an update available.");
+
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
 
     match should_install_patch(patch.number)? {
@@ -409,6 +422,12 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         ShouldInstallPatchCheckResult::PatchKnownBad => return Ok(UpdateStatus::UpdateIsBadPatch),
         ShouldInstallPatchCheckResult::PatchAlreadyInstalled => return Ok(UpdateStatus::NoUpdate),
     }
+
+    shorebird_info!(
+        "Downloading patch {} to {}",
+        patch.number,
+        patch.download_url
+    );
 
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
@@ -418,6 +437,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     let output_path = download_dir.join(format!("{}.full", patch.number));
     let patch_base_rs = patch_base(&config)?;
     inflate(&download_path, patch_base_rs, &output_path)?;
+
+    shorebird_info!("inflated");
 
     // Check the hash before moving into place.
     check_hash(&output_path, &patch.hash).with_context(|| {
@@ -486,8 +507,19 @@ pub fn update(channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
     with_updater_thread_lock(|lock_state| update_internal(lock_state, channel))
 }
 
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
+where
+    RS: Read + Seek,
+{
+    fs::copy(patch_path, output_path)?;
+
+    Ok(())
+}
+
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
