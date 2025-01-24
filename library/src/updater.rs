@@ -327,7 +327,7 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     config.file_provider.open()
 }
 
-#[cfg(all(not(test), not(target_os = "ios")))]
+#[cfg(all(not(test), not(target_os = "ios"), not(target_os = "android")))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     let file = fs::File::open(&config.libapp_path)?;
     Ok(Box::new(file))
