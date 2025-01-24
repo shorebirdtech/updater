@@ -322,15 +322,15 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     Ok(Box::new(base_r))
 }
 
-#[cfg(not(test))]
-fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    let file = fs::File::open(&config.libapp_path)?;
-    Ok(Box::new(file))
-}
-
 #[cfg(target_os = "ios")]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     config.file_provider.open()
+}
+
+#[cfg(all(not(test), not(target_os = "ios")))]
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    let file = fs::File::open(&config.libapp_path)?;
+    Ok(Box::new(file))
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
