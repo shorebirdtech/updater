@@ -315,13 +315,14 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
 impl ReadSeek for Cursor<Vec<u8>> {}
 impl ReadSeek for fs::File {}
 
+// FIXME: these patch_base functions should move to platform-specific modules where they can all be tested.
 #[cfg(any(target_os = "android", test))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     let base_r = crate::android::open_base_lib(&config.libapp_path, "libapp.so")?;
     Ok(Box::new(base_r))
 }
 
-#[cfg(all(any(target_os = "windows", target_os = "macos",), not(test)))]
+#[cfg(not(test))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     let file = fs::File::open(&config.libapp_path)?;
     Ok(Box::new(file))
