@@ -22,7 +22,7 @@ pub fn init_logging() {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn init_logging() {
     let _ = simple_logger::SimpleLogger::new().init();
 }
@@ -30,6 +30,7 @@ pub fn init_logging() {
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
+    not(target_os = "linux"),
     not(target_os = "macos"),
     not(target_os = "windows")
 ))]
