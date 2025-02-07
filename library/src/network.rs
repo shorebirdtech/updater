@@ -222,7 +222,7 @@ pub fn download_to_path(
     url: &str,
     path: &Path,
 ) -> anyhow::Result<()> {
-    shorebird_debug!("Downloading patch from: {}", url);
+    shorebird_info!("Downloading patch from: {}", url);
     // Download the file at the given url to the given path.
     let download_file_hook = network_hooks.download_file_fn;
     let bytes = download_file_hook(url)?;
@@ -233,9 +233,10 @@ pub fn download_to_path(
             .with_context(|| format!("create_dir_all failed for {}", parent.display()))?;
     }
 
-    shorebird_debug!("Writing download to: {:?}", path);
+    shorebird_info!("Writing patch to: {:?}", path);
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
+    shorebird_info!("Wrote patch to: {:?}", path);
     Ok(())
 }
 

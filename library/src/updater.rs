@@ -495,12 +495,11 @@ where
 {
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
-    shorebird_debug!("Patch is compressed, inflating...");
     use std::io::{BufReader, BufWriter};
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
-    shorebird_debug!("Reading patch file: {:?}", patch_path);
+    shorebird_info!("Inflating patch from {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path)
             .context(format!("Failed to open patch file: {:?}", patch_path))?,
@@ -530,6 +529,7 @@ where
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
     std::io::copy(&mut fresh_r, &mut output_w)?;
+    shorebird_info!("Patch successfully applied to {:?}", output_path);
     Ok(())
 }
 
