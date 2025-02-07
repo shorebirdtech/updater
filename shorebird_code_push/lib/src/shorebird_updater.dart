@@ -28,9 +28,7 @@ class ReadPatchException implements Exception {
   final String message;
 
   @override
-  String toString() {
-    return '[ShorebirdUpdater.ReadPatchException] $message';
-  }
+  String toString() => '[ShorebirdUpdater] ReadPatchException: $message';
 }
 
 /// {@template update_exception}
@@ -49,7 +47,7 @@ class UpdateException implements Exception {
 
   @override
   String toString() {
-    return '[ShorebirdUpdater.UpdateException] $message';
+    return '[ShorebirdUpdater] UpdateException: $message (${reason.name})';
   }
 }
 
