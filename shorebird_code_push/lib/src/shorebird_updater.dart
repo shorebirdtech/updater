@@ -26,6 +26,11 @@ class ReadPatchException implements Exception {
 
   /// The human-readable error message.
   final String message;
+
+  @override
+  String toString() {
+    return '[ShorebirdUpdater.ReadPatchException] $message';
+  }
 }
 
 /// {@template update_exception}
@@ -41,6 +46,11 @@ class UpdateException implements Exception {
 
   /// The reason the update failed.
   final UpdateFailureReason reason;
+
+  @override
+  String toString() {
+    return '[ShorebirdUpdater.UpdateException] $message';
+  }
 }
 
 /// Log message when the Shorebird updater is unavailable in the current
