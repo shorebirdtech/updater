@@ -91,7 +91,9 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
     try {
       result = await _run(() => _updater.update(track: track));
-    } on Exception catch (_) {
+      // Explicitly catch all errors/exceptions to ensure we gracefully fallback.
+      // ignore: avoid_catches_without_on_clauses
+    } catch (_) {
       return _legacyFallback();
     }
 
