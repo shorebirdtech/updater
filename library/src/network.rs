@@ -55,12 +55,20 @@ impl Default for NetworkHooks {
     }
 }
 
+fn create_client_with_proxy() -> anyhow::Result<reqwest::blocking::Client> {
+    let mut client_builder = reqwest::blocking::Client::builder();
+    // Use system proxy settings
+    client_builder = client_builder.proxy(reqwest::Proxy::system());
+    let client = client_builder.build()?;
+    Ok(client)
+}
+
 pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
     shorebird_info!("Sending patch check request: {:?}", request);
-    let client = reqwest::blocking::Client::new();
+    let client = create_client_with_proxy()?;
     let result = client.post(url).json(&request).send();
     let response = handle_network_result(result)?.json()?;
     shorebird_debug!("Patch check response: {:?}", response);
@@ -68,7 +76,7 @@ pub fn patch_check_request_default(
 }
 
 pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client_with_proxy()?;
     let result = client.get(url).send();
     let response = handle_network_result(result)?;
     let bytes = response.bytes()?;
@@ -77,7 +85,7 @@ pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client_with_proxy()?;
     let result = client.post(url).json(&request).send();
     handle_network_result(result)?;
     Ok(())
