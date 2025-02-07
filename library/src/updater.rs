@@ -529,6 +529,7 @@ where
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
     std::io::copy(&mut fresh_r, &mut output_w)?;
+    shorebird_info!("Patch successfully applied to {:?}", output_path);
     Ok(())
 }
 

@@ -236,6 +236,7 @@ pub fn download_to_path(
     shorebird_info!("Writing patch to: {:?}", path);
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
+    shorebird_info!("Wrote patch to: {:?}", path);
     Ok(())
 }
 
