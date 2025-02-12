@@ -133,6 +133,7 @@ abstract class ShorebirdUpdater {
   ///
   /// If this detects that the current patch has been rolled back, the current
   /// patch will be uninstalled.
+  /// A separate call to `update()` is required to install new patches.
   Future<UpdateStatus> checkForUpdate({UpdateTrack? track});
 
   /// Updates the app to the latest patch (if available).
