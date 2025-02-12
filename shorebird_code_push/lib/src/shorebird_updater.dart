@@ -130,7 +130,7 @@ abstract class ShorebirdUpdater {
   /// Checks for available updates and returns the [UpdateStatus].
   /// This method should be used to determine the update status before calling
   /// [update].
-  /// 
+  ///
   /// If this detects that the current patch has been rolled back, the current
   /// patch will be uninstalled.
   Future<UpdateStatus> checkForUpdate({UpdateTrack? track});
