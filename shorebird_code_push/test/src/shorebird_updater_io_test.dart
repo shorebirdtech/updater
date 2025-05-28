@@ -287,12 +287,12 @@ void main() {
       });
 
       group('when a track is provided', () {
-        const track = UpdateTrack.beta;
+        const trackName = 'beta';
 
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(0);
           when(
-            () => updater.checkForDownloadableUpdate(track: track),
+            () => updater.checkForDownloadableUpdate(trackName: trackName),
           ).thenReturn(true);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
         });
@@ -300,10 +300,10 @@ void main() {
         test('forwards the provided track to the underlying updater call',
             () async {
           await expectLater(
-            shorebirdUpdater.checkForUpdate(track: track),
+            shorebirdUpdater.checkForUpdate(trackName: trackName),
             completion(equals(UpdateStatus.outdated)),
           );
-          verify(() => updater.checkForDownloadableUpdate(track: track))
+          verify(() => updater.checkForDownloadableUpdate(trackName: trackName))
               .called(1);
         });
       });
@@ -589,24 +589,24 @@ Please upgrade the Shorebird Engine for improved error messages.''',
       });
 
       group('when a track is provided', () {
-        const track = UpdateTrack.beta;
+        const trackName = 'beta';
 
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(0);
           final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
           result.ref.status = SHOREBIRD_UPDATE_INSTALLED;
           addTearDown(() => calloc.free(result));
-          when(() => updater.update(track: track)).thenReturn(result);
+          when(() => updater.update(trackName: trackName)).thenReturn(result);
           shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
         });
 
         test('forwards the provided track to the underlying updater call',
             () async {
           await expectLater(
-            shorebirdUpdater.update(track: track),
+            shorebirdUpdater.update(trackName: trackName),
             completes,
           );
-          verify(() => updater.update(track: track)).called(1);
+          verify(() => updater.update(trackName: trackName)).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });
       });

@@ -134,7 +134,7 @@ abstract class ShorebirdUpdater {
   /// If this detects that the current patch has been rolled back, the current
   /// patch will be uninstalled.
   /// A separate call to `update()` is required to install new patches.
-  Future<UpdateStatus> checkForUpdate({UpdateTrack? track});
+  Future<UpdateStatus> checkForUpdate({String? trackName});
 
   /// Updates the app to the latest patch (if available).
   /// Future will complete once the update is fully downloaded and ready
@@ -148,17 +148,5 @@ abstract class ShorebirdUpdater {
   /// * [isAvailable], which indicates whether the updater is available.
   /// * [checkForUpdate], which should be called to check if an update is
   ///   available before calling this method.
-  Future<void> update({UpdateTrack? track});
-}
-
-/// The track to check for updates on.
-enum UpdateTrack {
-  /// The staging track used for internal testing.
-  staging,
-
-  /// The beta track used for public testing.
-  beta,
-
-  /// The stable track used for general availability.
-  stable,
+  Future<void> update({String? trackName});
 }

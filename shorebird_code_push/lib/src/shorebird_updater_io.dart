@@ -70,12 +70,12 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<UpdateStatus> checkForUpdate({UpdateTrack? track}) async {
+  Future<UpdateStatus> checkForUpdate({String? trackName}) async {
     if (!_isAvailable) return UpdateStatus.unavailable;
 
     // First, check to see whether an update is available for download.
-    final isUpdateAvailable =
-        await _run(() => _updater.checkForDownloadableUpdate(track: track));
+    final isUpdateAvailable = await _run(
+        () => _updater.checkForDownloadableUpdate(trackName: trackName));
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
     // If no new update is available for download, see if a new patch exists
@@ -87,13 +87,13 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<void> update({UpdateTrack? track}) async {
+  Future<void> update({String? trackName}) async {
     if (!_isAvailable) return;
 
     Pointer<UpdateResult> result = nullptr;
 
     try {
-      result = await _run(() => _updater.update(track: track));
+      result = await _run(() => _updater.update(trackName: trackName));
       // Explicitly catch all errors/exceptions to ensure we gracefully fallback.
       // ignore: avoid_catches_without_on_clauses
     } catch (_) {

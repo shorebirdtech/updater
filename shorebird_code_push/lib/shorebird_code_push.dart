@@ -5,5 +5,4 @@ export 'src/shorebird_updater.dart'
         ShorebirdUpdater,
         UpdateException,
         UpdateFailureReason,
-        UpdateStatus,
-        UpdateTrack;
+        UpdateStatus;

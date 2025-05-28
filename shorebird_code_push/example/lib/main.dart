@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
+const stableTrackName = 'stable';
+const betaTrackName = 'beta';
+const stagingTrackName = 'staging';
+
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -29,7 +33,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
   late final bool _isUpdaterAvailable;
-  var _currentTrack = UpdateTrack.stable;
+  var _currentTrack = stableTrackName;
   var _isCheckingForUpdates = false;
   Patch? _currentPatch;
 
@@ -55,7 +59,7 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       setState(() => _isCheckingForUpdates = true);
       // Check if there's an update available.
-      final status = await _updater.checkForUpdate(track: _currentTrack);
+      final status = await _updater.checkForUpdate(trackName: _currentTrack);
       if (!mounted) return;
       // If there is an update available, show a banner.
       switch (status) {
@@ -100,7 +104,7 @@ class _MyHomePageState extends State<MyHomePage> {
       ..showMaterialBanner(
         MaterialBanner(
           content: Text(
-            'Update available for the ${_currentTrack.name} track.',
+            'Update available for the $_currentTrack track.',
           ),
           actions: [
             TextButton(
@@ -123,7 +127,7 @@ class _MyHomePageState extends State<MyHomePage> {
       ..showMaterialBanner(
         MaterialBanner(
           content: Text(
-            'No update available on the ${_currentTrack.name} track.',
+            'No update available on the $_currentTrack track.',
           ),
           actions: [
             TextButton(
@@ -181,7 +185,7 @@ class _MyHomePageState extends State<MyHomePage> {
       // Perform the update (e.g download the latest patch on [_currentTrack]).
       // Note that [track] is optional. Not passing it will default to the
       // stable track.
-      await _updater.update(track: _currentTrack);
+      await _updater.update(trackName: _currentTrack);
       if (!mounted) return;
       // Show a banner to inform the user that the update is ready and that they
       // need to restart the app.
@@ -278,30 +282,30 @@ class _TrackPicker extends StatelessWidget {
     required this.onChanged,
   });
 
-  final UpdateTrack currentTrack;
+  final String currentTrack;
 
-  final ValueChanged<UpdateTrack> onChanged;
+  final ValueChanged<String> onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         const Text('Update track:'),
-        SegmentedButton<UpdateTrack>(
+        SegmentedButton<String>(
           segments: const [
             ButtonSegment(
               label: Text('Stable'),
-              value: UpdateTrack.stable,
+              value: stableTrackName,
             ),
             ButtonSegment(
               label: Text('Beta'),
               icon: Icon(Icons.science),
-              value: UpdateTrack.beta,
+              value: betaTrackName,
             ),
             ButtonSegment(
               label: Text('Staging'),
               icon: Icon(Icons.construction),
-              value: UpdateTrack.staging,
+              value: stagingTrackName,
             ),
           ],
           selected: {currentTrack},

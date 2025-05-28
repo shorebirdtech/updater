@@ -2,7 +2,6 @@ import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 import 'package:mocktail/mocktail.dart';
-import 'package:shorebird_code_push/shorebird_code_push.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 import 'package:test/test.dart';
@@ -67,12 +66,12 @@ void main() {
 
         test('forwards the result of shorebird_check_for_update', () {
           expect(
-            updater.checkForDownloadableUpdate(track: UpdateTrack.beta),
+            updater.checkForDownloadableUpdate(trackName: 'beta'),
             isTrue,
           );
 
           expect(
-            updater.checkForDownloadableUpdate(track: UpdateTrack.stable),
+            updater.checkForDownloadableUpdate(trackName: 'stable'),
             isTrue,
           );
 
