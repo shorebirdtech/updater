@@ -465,7 +465,15 @@ impl ManagePatches for PatchManager {
     }
 
     fn remove_patch(&mut self, patch_number: usize) -> Result<()> {
-        self.try_fall_back_from_patch(patch_number)
+        self.delete_patch_artifacts(patch_number)?;
+        // If the patch to remove is the next boot patch, clear it.
+        if let Some(next_boot_patch) = self.patches_state.next_boot_patch.clone() {
+            if next_boot_patch.number == patch_number {
+                self.patches_state.next_boot_patch = None;
+            }
+        }
+
+        self.save_patches_state()
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -1208,6 +1216,66 @@ mod reset_tests {
 
         // Make sure the directory and artifact files were deleted
         assert!(!path_artifacts_dir.exists());
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod remove_patch_tests {
+    use super::*;
+    use anyhow::{Ok, Result};
+    use tempdir::TempDir;
+
+    #[test]
+    fn deletes_patch_artifacts() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        assert!(manager.remove_patch(1).is_ok());
+        assert!(!manager.patch_dir(1).exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn clears_next_boot_patch_if_it_is_the_removed_patch() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success()?;
+
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+        manager.record_boot_success()?;
+
+        assert!(manager.remove_patch(1).is_ok());
+
+        assert_eq!(manager.patches_state.last_booted_patch.unwrap().number, 2);
+        assert_eq!(manager.patches_state.next_boot_patch.unwrap().number, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_clear_next_boot_patch_if_it_is_not_the_removed_patch() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success()?;
+
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+        manager.record_boot_success()?;
+
+        assert!(manager.remove_patch(2).is_ok());
+
+        assert_eq!(manager.patches_state.last_booted_patch.unwrap().number, 2);
+
+        // Because patch 2 booted successfully, we cleared patch 1, so now have no next boot patch.
+        assert!(manager.patches_state.next_boot_patch.is_none());
 
         Ok(())
     }

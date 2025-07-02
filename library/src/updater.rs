@@ -1428,6 +1428,14 @@ mod rollback_tests {
             Ok(())
         })?;
 
+        with_mut_state(|state| {
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            Ok(())
+        })?;
+
         Ok(())
     }
 
