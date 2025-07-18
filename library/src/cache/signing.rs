@@ -5,6 +5,18 @@ use std::path::Path;
 
 /// Reads the file at `path` and returns the SHA-256 hash of its contents as a String.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, try to compute hash after removing signature for consistency
+        match crate::macos::hash_unsigned_binary(&path) {
+            Ok(hash) => return Ok(hash),
+            Err(_) => {
+                // Fall back to regular hash computation if signature removal fails
+            }
+        }
+    }
+
+    // Regular hash computation (used on non-macOS or as fallback on macOS)
     use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
 
     let mut file = std::fs::File::open(path)?;

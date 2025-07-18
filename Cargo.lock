@@ -1996,6 +1996,7 @@ dependencies = [
  "sha2",
  "simple_logger",
  "tempdir",
+ "tempfile",
  "zip",
 ]
 

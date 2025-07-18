@@ -288,15 +288,44 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
 
     let expected = hex::decode(expected_string).context("Invalid hash string from server.")?;
 
-    // Based on guidance from:
-    // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
+    // On macOS, we need to compare hashes after removing code signatures
+    // to handle the case where the same binary content has different signatures
+    #[cfg(target_os = "macos")]
+    let computed_hash = {
+        // Try to compute hash after removing signature, fall back to regular hash if it fails
+        match crate::macos::hash_unsigned_binary(path) {
+            Ok(hash) => {
+                shorebird_info!("Using unsigned binary hash for comparison on macOS");
+                hash
+            }
+            Err(e) => {
+                shorebird_warn!("Failed to compute unsigned hash, falling back to regular hash: {}", e);
+                // Fall back to regular hash computation
+                let mut file = fs::File::open(path)?;
+                let mut hasher = Sha256::new();
+                std::io::copy(&mut file, &mut hasher)?;
+                let hash = hasher.finalize();
+                hex::encode(hash)
+            }
+        }
+    };
 
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    // Check that the length from copy is the same as the file size?
-    let hash = hasher.finalize();
-    let hash_matches = hash.as_slice() == expected;
+    // On non-macOS platforms, use the regular hash computation
+    #[cfg(not(target_os = "macos"))]
+    let computed_hash = {
+        // Based on guidance from:
+        // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
+        let mut file = fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        let hash = hasher.finalize();
+        hex::encode(hash)
+    };
+
+    let hash_matches = hex::decode(&computed_hash)
+        .map(|computed_bytes| computed_bytes == expected)
+        .unwrap_or(false);
+
     // This is a common error for developers.  We could avoid it entirely
     // by sending the hash of `libapp.so` to the server and having the
     // server only send updates when the hash matches.
@@ -309,7 +338,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
             binary. Path: {:?}, expected: {}, got: {}",
             path,
             expected_string,
-            hex::encode(hash)
+            computed_hash
         );
     }
     shorebird_debug!("Hash match: {:?}", path);

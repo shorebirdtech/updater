@@ -49,6 +49,8 @@ serde_json = "1.0.93"
 serde_yaml = "0.9.19"
 # For computing hashes of patch files for validation.
 sha2 = "0.10.6"
+# For creating temporary files on macOS to handle signature removal
+tempfile = "3.8.0"
 # For decompressing .apk files.
 zip = { version = "0.6.4", default-features = false, features = ["deflate"] }
 

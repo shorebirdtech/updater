@@ -22,6 +22,9 @@ mod yaml;
 #[cfg(any(target_os = "android", test))]
 mod android;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 #[cfg(test)]
 mod test_utils;
 
