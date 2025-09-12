@@ -1,6 +1,6 @@
 # 2.0.5
 
-- chore: Update README.
+- docs: fix Discord badge in `README.md`
 
 # 2.0.4
 
