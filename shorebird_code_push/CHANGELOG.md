@@ -1,3 +1,7 @@
+# 2.0.5
+
+- chore: Update README.
+
 # 2.0.4
 
 - feat: allow for custom UpdateTrack names in addition to stable, staging, and
