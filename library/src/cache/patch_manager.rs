@@ -718,6 +718,14 @@ mod validate_next_boot_patch_tests {
     use tempdir::TempDir;
 
     #[test]
+    fn does_nothing_if_no_next_boot_patch() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        assert!(manager.validate_next_boot_patch().is_ok());
+        Ok(())
+    }
+
+    #[test]
     fn clears_next_boot_patch_if_it_is_not_bootable() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
