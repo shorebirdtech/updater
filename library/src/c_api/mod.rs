@@ -677,6 +677,7 @@ mod test {
         assert_eq!(shorebird_current_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_number(), 1);
 
+        shorebird_validate_next_boot_patch();
         // Read path contents into memory and check against expected.
         let c_path = shorebird_next_boot_patch_path();
         let path = to_rust(c_path).unwrap();
@@ -894,6 +895,7 @@ mod test {
     #[test]
     fn forgot_init() {
         testing_reset_config();
+        shorebird_validate_next_boot_patch();
         assert_eq!(shorebird_next_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_path(), null_mut());
     }
