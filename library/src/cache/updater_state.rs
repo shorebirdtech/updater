@@ -417,6 +417,17 @@ mod tests {
     }
 
     #[test]
+    fn validate_next_boot_patch_forwards_to_patch_manager() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut mock_manage_patches = MockManagePatches::new();
+        mock_manage_patches
+            .expect_validate_next_boot_patch()
+            .returning(|| Ok(()));
+        let mut state = test_state(&tmp_dir, mock_manage_patches);
+        assert!(state.validate_next_boot_patch().is_ok());
+    }
+
+    #[test]
     fn install_patch_forwards_to_patch_manager() {
         let patch_number = 1;
         let tmp_dir = TempDir::new("example").unwrap();
