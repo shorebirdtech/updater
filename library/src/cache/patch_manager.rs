@@ -92,6 +92,10 @@ pub trait ManagePatches {
     /// - we cannot boot from the patch(es) on disk
     fn next_boot_patch(&mut self) -> Option<PatchInfo>;
 
+    /// Performs integrity checks on the next boot patch and updates the state accordingly. Returns
+    /// an error if the patch exists but is not bootable.
+    fn validate_next_boot_patch(&mut self) -> anyhow::Result<()>;
+
     /// Record that we're booting. If we have a next path, updates the last
     /// attempted patch to be the next boot patch.
     fn record_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()>;
@@ -392,11 +396,13 @@ impl ManagePatches for PatchManager {
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
-    fn next_boot_patch(&mut self) -> Option<PatchInfo> {
+    fn validate_next_boot_patch(&mut self) -> anyhow::Result<()> {
         let next_boot_patch = match self.patches_state.next_boot_patch.clone() {
             Some(patch) => patch,
-            None => return None,
+            None => return anyhow::Ok(()),
         };
+
+        shorebird_info!("Validating patch {}", next_boot_patch.number);
 
         if let Err(e) = self.validate_patch_is_bootable(&next_boot_patch) {
             shorebird_error!("Patch {} is not bootable: {}", next_boot_patch.number, e);
@@ -408,8 +414,14 @@ impl ManagePatches for PatchManager {
                     e
                 );
             }
+
+            return Err(e);
         }
 
+        anyhow::Ok(())
+    }
+
+    fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         self.patches_state
             .next_boot_patch
             .as_ref()
@@ -621,7 +633,6 @@ mod last_successfully_booted_patch_tests {
 #[cfg(test)]
 mod next_boot_patch_tests {
     use super::*;
-    use anyhow::Result;
     use tempdir::TempDir;
 
     #[test]
@@ -632,49 +643,18 @@ mod next_boot_patch_tests {
     }
 
     #[test]
-    fn returns_none_if_next_boot_patch_is_not_bootable() -> Result<()> {
+    fn returns_none_patch_if_first_patch_failed_to_boot() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a first patch and pretend it failed to boot.
         manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_failure_for_patch(1)?;
 
-        // Write junk to the artifact, this should render the patch unbootable in the eyes
-        // of the PatchManager.
-        let artifact_path = manager.patch_artifact_path(1);
-        std::fs::write(&artifact_path, "junk")?;
-
+        // Because there is no previous patch, we should not attempt to boot any patch.
         assert!(manager.next_boot_patch().is_none());
-
-        // Ensure the internal state is cleared.
-        assert!(manager.patches_state.next_boot_patch.is_none());
-
-        // The artifact should have been deleted.
-        assert!(!&artifact_path.exists());
-
-        Ok(())
-    }
-
-    #[test]
-    fn clears_current_and_next_on_boot_failure_if_they_are_the_same() -> Result<()> {
-        let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-        let file_path = &temp_dir.path().join("patch1.vmcode");
-        std::fs::write(file_path, patch_file_contents)?;
-        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
-
-        // Write junk to the artifact, this should render the patch unbootable in the eyes
-        // of the PatchManager.
-        let artifact_path = manager.patch_artifact_path(1);
-        std::fs::write(&artifact_path, "junk")?;
-
-        assert!(manager.next_boot_patch().is_none());
-
-        // Ensure the internal state is cleared.
-        assert!(manager.patches_state.next_boot_patch.is_none());
-        assert!(manager.patches_state.last_booted_patch.is_none());
-
-        // The artifact should have been deleted.
-        assert!(!&artifact_path.exists());
+        assert!(manager.is_known_bad_patch(1));
 
         Ok(())
     }
@@ -708,6 +688,88 @@ mod next_boot_patch_tests {
     }
 
     #[test]
+    fn returns_last_booted_patch_if_next_patch_failed_to_boot() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add a first patch and pretend it booted successfully.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success()?;
+
+        // Add a second patch and pretend it failed to boot.
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+        manager.record_boot_failure_for_patch(2)?;
+
+        // Verify that we will next attempt to boot from patch 1.
+        assert_eq!(manager.next_boot_patch().unwrap().number, 1);
+        assert!(!manager.is_known_bad_patch(1));
+        assert!(manager.is_known_bad_patch(2));
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod validate_next_boot_patch_tests {
+    use super::*;
+    use anyhow::Result;
+    use tempdir::TempDir;
+
+    #[test]
+    fn clears_next_boot_patch_if_it_is_not_bootable() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        manager.add_patch_for_test(&temp_dir, 1)?;
+
+        // Write junk to the artifact, this should render the patch unbootable in the eyes
+        // of the PatchManager.
+        let artifact_path = manager.patch_artifact_path(1);
+        std::fs::write(&artifact_path, "junk")?;
+
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_err());
+        assert!(manager.next_boot_patch().is_none());
+
+        // Ensure the internal state is cleared.
+        assert!(manager.patches_state.next_boot_patch.is_none());
+
+        // The artifact should have been deleted.
+        assert!(!&artifact_path.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn clears_current_and_next_on_boot_failure_if_they_are_the_same() -> Result<()> {
+        let patch_file_contents = "patch contents";
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, patch_file_contents)?;
+        assert!(manager.add_patch(1, file_path, "hash", None).is_ok());
+
+        // Write junk to the artifact, this should render the patch unbootable in the eyes
+        // of the PatchManager.
+        let artifact_path = manager.patch_artifact_path(1);
+        std::fs::write(&artifact_path, "junk")?;
+
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_err());
+        assert!(manager.next_boot_patch().is_none());
+
+        // Ensure the internal state is cleared.
+        assert!(manager.patches_state.next_boot_patch.is_none());
+        assert!(manager.patches_state.last_booted_patch.is_none());
+
+        // The artifact should have been deleted.
+        assert!(!&artifact_path.exists());
+
+        Ok(())
+    }
+
+    #[test]
     fn does_not_fall_back_to_last_booted_patch_if_corrupted() -> Result<()> {
         let patch_file_contents = "patch contents";
         let temp_dir = TempDir::new("patch_manager")?;
@@ -731,6 +793,9 @@ mod next_boot_patch_tests {
         let patch_1_artifact_path = manager.patch_artifact_path(1);
         std::fs::write(patch_1_artifact_path, "junk")?;
 
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_err());
+
         // Verify that we will not attempt to boot from either patch.
         assert!(manager.next_boot_patch().is_none());
 
@@ -739,46 +804,6 @@ mod next_boot_patch_tests {
         assert!(!manager.is_known_bad_patch(1));
 
         // Patch 2 failed to boot, so it should be considered bad.
-        assert!(manager.is_known_bad_patch(2));
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_patch_if_first_patch_failed_to_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a first patch and pretend it failed to boot.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-        manager.record_boot_failure_for_patch(1)?;
-
-        // Because there is no previous patch, we should not attempt to boot any patch.
-        assert!(manager.next_boot_patch().is_none());
-        assert!(manager.is_known_bad_patch(1));
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_last_booted_patch_if_next_patch_failed_to_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        // Add a first patch and pretend it booted successfully.
-        manager.add_patch_for_test(&temp_dir, 1)?;
-        manager.record_boot_start_for_patch(1)?;
-        manager.record_boot_success()?;
-
-        // Add a second patch and pretend it failed to boot.
-        manager.add_patch_for_test(&temp_dir, 2)?;
-        manager.record_boot_start_for_patch(2)?;
-        manager.record_boot_failure_for_patch(2)?;
-
-        // Verify that we will next attempt to boot from patch 1.
-        assert_eq!(manager.next_boot_patch().unwrap().number, 1);
-        assert!(!manager.is_known_bad_patch(1));
         assert!(manager.is_known_bad_patch(2));
 
         Ok(())
@@ -806,6 +831,8 @@ mod next_boot_patch_tests {
 
         manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
 
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_err());
         assert!(manager.next_boot_patch().is_none());
 
         Ok(())
@@ -818,6 +845,8 @@ mod next_boot_patch_tests {
 
         manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, None)?;
 
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_err());
         assert!(manager.next_boot_patch().is_none());
 
         Ok(())
@@ -836,6 +865,8 @@ mod next_boot_patch_tests {
             Some(INFLATED_PATCH_HASH),
         )?;
 
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_err());
         assert!(manager.next_boot_patch().is_none());
 
         Ok(())
@@ -849,6 +880,9 @@ mod next_boot_patch_tests {
         manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
 
         assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_ok());
+        assert!(manager.next_boot_patch().is_some());
+
         let patch = manager.next_boot_patch().unwrap();
         assert_eq!(patch.number, 1);
 
@@ -868,6 +902,8 @@ mod next_boot_patch_tests {
             Some("not a valid signature"),
         )?;
 
+        assert!(manager.next_boot_patch().is_some());
+        assert!(manager.validate_next_boot_patch().is_ok());
         assert!(manager.next_boot_patch().is_some());
         let patch = manager.next_boot_patch().unwrap();
         assert_eq!(patch.number, 1);

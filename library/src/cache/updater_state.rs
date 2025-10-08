@@ -193,6 +193,15 @@ impl UpdaterState {
         self.patch_manager.next_boot_patch()
     }
 
+    /// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+    /// will be deleted and the next boot patch will be set to the last successfully booted patch or
+    /// the base release if there is no last successfully booted patch.
+    ///
+    /// Returns an error if the patch fails integrity checks.
+    pub fn validate_next_boot_patch(&mut self) -> anyhow::Result<()> {
+        self.patch_manager.validate_next_boot_patch()
+    }
+
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
     pub fn install_patch(
