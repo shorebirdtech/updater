@@ -193,6 +193,15 @@ impl UpdaterState {
         self.patch_manager.next_boot_patch()
     }
 
+    /// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+    /// will be deleted and the next boot patch will be set to the last successfully booted patch or
+    /// the base release if there is no last successfully booted patch.
+    ///
+    /// Returns an error if the patch fails integrity checks.
+    pub fn validate_next_boot_patch(&mut self) -> anyhow::Result<()> {
+        self.patch_manager.validate_next_boot_patch()
+    }
+
     /// Copies the patch file at file_path to the manager's directory structure sets
     /// this patch as the next patch to boot.
     pub fn install_patch(
@@ -405,6 +414,17 @@ mod tests {
             .return_const(Some(patch.clone()));
         let mut state = test_state(&tmp_dir, mock_manage_patches);
         assert_eq!(state.next_boot_patch(), Some(patch));
+    }
+
+    #[test]
+    fn validate_next_boot_patch_forwards_to_patch_manager() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let mut mock_manage_patches = MockManagePatches::new();
+        mock_manage_patches
+            .expect_validate_next_boot_patch()
+            .returning(|| Ok(()));
+        let mut state = test_state(&tmp_dir, mock_manage_patches);
+        assert!(state.validate_next_boot_patch().is_ok());
     }
 
     #[test]

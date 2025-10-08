@@ -538,6 +538,15 @@ where
     Ok(())
 }
 
+/// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+/// will be deleted and the next boot patch will be set to the last successfully booted patch or
+/// the base release if there is no last successfully booted patch.
+///
+/// Returns an error if the patch fails integrity checks.
+pub fn validate_next_boot_patch() -> anyhow::Result<()> {
+    with_mut_state(|state| state.validate_next_boot_patch())
+}
+
 /// The patch which will be run on next boot (which may still be the same
 /// as the current boot).
 /// This may be changed any time by:
