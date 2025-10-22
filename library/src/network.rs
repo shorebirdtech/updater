@@ -274,6 +274,7 @@ mod tests {
     fn create_patch_install_event_request_serializes() {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
+            client_id: "client_id".to_string(),
             arch: "arch".to_string(),
             patch_number: 1,
             platform: "platform".to_string(),
@@ -286,7 +287,7 @@ mod tests {
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
-            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":null}}"#
+            r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":null}}"#
         )
     }
 
@@ -294,6 +295,7 @@ mod tests {
     fn create_patch_install_event_request_serializes_with_message() {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
+            client_id: "client_id".to_string(),
             arch: "arch".to_string(),
             patch_number: 1,
             platform: "platform".to_string(),
@@ -306,7 +308,7 @@ mod tests {
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
             json_string,
-            r#"{"event":{"app_id":"app_id","arch":"arch","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":"hello"}}"#
+            r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":"hello"}}"#
         )
     }
 
@@ -375,6 +377,7 @@ mod tests {
     fn handle_network_result_no_internet() {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
+            client_id: "client_id".to_string(),
             arch: "arch".to_string(),
             patch_number: 2,
             platform: "platform".to_string(),
@@ -404,6 +407,7 @@ mod tests {
             super::CreatePatchEventRequest {
                 event: PatchEvent {
                     app_id: "app_id".to_string(),
+                    client_id: "client_id".to_string(),
                     arch: "arch".to_string(),
                     patch_number: 2,
                     platform: "platform".to_string(),

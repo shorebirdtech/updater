@@ -219,6 +219,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
+                state.client_id(),
                 Some(
                     format!(
                         "Patch {} was marked currently_booting in init",
@@ -440,8 +441,15 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             patch.number
         );
 
+        let client_id = state.client_id();
         std::thread::spawn(move || {
-            let event = PatchEvent::new(&config, EventType::PatchDownload, patch.number, None);
+            let event = PatchEvent::new(
+                &config,
+                EventType::PatchDownload,
+                patch.number,
+                client_id,
+                None,
+            );
             let report_result = crate::network::send_patch_event(event, &config);
             if let Err(err) = report_result {
                 shorebird_error!("Failed to report patch download: {:?}", err);
@@ -601,10 +609,12 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
+        let client_id = state.client_id();
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
             patch.number,
+            client_id,
             Some(
                 format!(
                     "Install failure reported from engine for patch {}",
@@ -657,11 +667,13 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         }
 
         let config_copy = config.clone();
+        let client_id = state.client_id();
         std::thread::spawn(move || {
             let event = PatchEvent::new(
                 &config_copy,
                 EventType::PatchInstallSuccess,
                 booting_patch.number,
+                client_id,
                 None,
             );
             let report_result = crate::network::send_patch_event(event, &config_copy);
@@ -1261,6 +1273,7 @@ mod tests {
             );
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
+                client_id: "client_id".to_string(),
                 arch: current_arch().to_string(),
                 identifier: EventType::PatchInstallFailure,
                 patch_number: 1,
