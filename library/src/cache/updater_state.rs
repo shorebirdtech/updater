@@ -100,12 +100,11 @@ impl UpdaterState {
     fn load(cache_dir: &Path, patch_public_key: Option<&str>) -> anyhow::Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
         let serialized_state = disk_io::read(&path)?;
-        let state = UpdaterState {
+        Ok(UpdaterState {
             cache_dir: cache_dir.to_path_buf(),
             patch_manager: Box::new(PatchManager::new(cache_dir.to_path_buf(), patch_public_key)),
             serialized_state,
-        };
-        Ok(state)
+        })
     }
 
     /// Initializes a new UpdaterState and saves it to disk.
@@ -347,22 +346,6 @@ mod tests {
             saved_state.serialized_state.client_id
         );
     }
-
-    // #[test]
-    // fn adds_client_id_to_saved_state() {
-    //     let tmp_dir = TempDir::new("example").unwrap();
-    //     let mock_manage_patches = MockManagePatches::new();
-    //     let state = test_state(&tmp_dir, mock_manage_patches);
-
-    //     assert!(state.save().is_ok());
-
-    //     let loaded_state = UpdaterState::load_or_new_on_error(
-    //         &state.cache_dir,
-    //         &state.serialized_state.release_version,
-    //         None,
-    //     );
-    //     assert!(loaded_state.serialized_state.client_id.is_some());
-    // }
 
     // A new UpdaterState is created when the release version is changed, but
     // the client_id should remain the same.
