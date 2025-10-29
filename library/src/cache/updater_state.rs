@@ -368,8 +368,6 @@ mod tests {
 
         let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None);
 
-        // assert!(original_loaded.serialized_state.client_id.is_some());
-        // assert!(new_loaded.serialized_state.client_id.is_some());
         assert_eq!(
             original_loaded.serialized_state.client_id,
             new_loaded.serialized_state.client_id
