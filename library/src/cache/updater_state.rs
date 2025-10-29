@@ -44,7 +44,8 @@ pub struct UpdaterState {
 /// Written out to disk as a json file at STATE_FILE_NAME.
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
-    /// The client ID for this device.
+    /// The client ID for this device. This is assigned on the first launch of this app and persists
+    /// between release versions.
     client_id: String,
     // Per-release state:
     /// The release version this cache corresponds to.
