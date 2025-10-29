@@ -45,7 +45,7 @@ pub struct UpdaterState {
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
     /// The client ID for this device. This is assigned on the first launch of this app and persists
-    /// between release versions.
+    /// between release versions. This is only reset when the app is uninstalled.
     client_id: String,
     // Per-release state:
     /// The release version this cache corresponds to.
