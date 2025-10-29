@@ -44,6 +44,12 @@ pub struct UpdaterState {
 /// Written out to disk as a json file at STATE_FILE_NAME.
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
+    /// The client ID for this device. This is assigned on the first launch of this app and persists
+    /// between release versions. This is only reset when the app is uninstalled.
+    /// Shorebird uses these per-install ids in order to provide you, the customer,
+    /// install-count analytics for your apps. Storage or use of this, and any other,
+    /// information is covered in our privacy policy: https://shorebird.dev/privacy/
+    client_id: String,
     // Per-release state:
     /// The release version this cache corresponds to.
     /// If this does not match the release version we're booting from we will
@@ -52,6 +58,10 @@ struct SerializedState {
     /// Events that have not yet been sent to the server.
     /// Format could change between releases, so this is per-release state.
     queued_events: Vec<PatchEvent>,
+}
+
+fn generate_client_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn is_file_not_found(error: &anyhow::Error) -> bool {
@@ -63,14 +73,27 @@ fn is_file_not_found(error: &anyhow::Error) -> bool {
     false
 }
 
+/// Serialized updater state
+impl UpdaterState {
+    pub fn client_id(&self) -> String {
+        self.serialized_state.client_id.clone()
+    }
+}
+
 /// Lifecycle methods for the updater state.
 impl UpdaterState {
     /// Creates a new `UpdaterState`.
-    fn new(cache_dir: PathBuf, release_version: String, patch_public_key: Option<&str>) -> Self {
+    fn new(
+        cache_dir: PathBuf,
+        release_version: String,
+        patch_public_key: Option<&str>,
+        client_id: String,
+    ) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
             patch_manager: Box::new(PatchManager::new(cache_dir.clone(), patch_public_key)),
             serialized_state: SerializedState {
+                client_id: client_id,
                 release_version,
                 queued_events: Vec::new(),
             },
@@ -93,11 +116,13 @@ impl UpdaterState {
         storage_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
+        client_id: String,
     ) -> Self {
         let mut state = Self::new(
             storage_dir.to_owned(),
             release_version.to_owned(),
             patch_public_key,
+            client_id,
         );
         if let Err(e) = state.save() {
             shorebird_warn!("Error saving state {:?}, ignoring.", e);
@@ -125,6 +150,7 @@ impl UpdaterState {
                         storage_dir,
                         release_version,
                         patch_public_key,
+                        loaded.client_id(),
                     );
                 }
                 loaded
@@ -133,7 +159,12 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     shorebird_info!("No existing state file found: {:#}, creating new state.", e);
                 }
-                Self::create_new_and_save(storage_dir, release_version, patch_public_key)
+                Self::create_new_and_save(
+                    storage_dir,
+                    release_version,
+                    patch_public_key,
+                    generate_client_id(),
+                )
             }
         }
     }
@@ -269,6 +300,7 @@ mod tests {
             cache_dir: tmp_dir.path().to_path_buf(),
             patch_manager: Box::new(patch_manager),
             serialized_state: SerializedState {
+                client_id: "123".to_string(),
                 release_version: "1.0.0+1".to_string(),
                 queued_events: Vec::new(),
             },
@@ -314,12 +346,45 @@ mod tests {
     }
 
     #[test]
+    fn creates_updater_state_with_client_id() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None);
+        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None);
+        assert_eq!(
+            state.serialized_state.client_id,
+            saved_state.serialized_state.client_id
+        );
+    }
+
+    // A new UpdaterState is created when the release version is changed, but
+    // the client_id should remain the same.
+    #[test]
+    fn client_id_does_not_change_if_release_version_changes() {
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        let state = test_state(&tmp_dir, PatchManager::manager_for_test(&tmp_dir));
+        let original_loaded = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            &state.serialized_state.release_version,
+            None,
+        );
+
+        let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None);
+
+        assert_eq!(
+            original_loaded.serialized_state.client_id,
+            new_loaded.serialized_state.client_id
+        );
+    }
+
+    #[test]
     fn does_not_save_cache_dir() {
         let original_tmp_dir = TempDir::new("example").unwrap();
         let original_state = UpdaterState {
             cache_dir: original_tmp_dir.path().to_path_buf(),
             patch_manager: Box::new(PatchManager::manager_for_test(&original_tmp_dir)),
             serialized_state: SerializedState {
+                client_id: "123".to_string(),
                 release_version: "1.0.0+1".to_string(),
                 queued_events: Vec::new(),
             },

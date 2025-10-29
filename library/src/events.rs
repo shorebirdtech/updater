@@ -54,6 +54,9 @@ pub struct PatchEvent {
     /// The architecture we're running (e.g. "aarch64", "x86", "x86_64").
     pub arch: String,
 
+    /// The unique ID of this device.
+    pub client_id: String,
+
     /// The identifier of this event.
     #[serde(rename = "type")]
     pub identifier: EventType,
@@ -81,11 +84,13 @@ impl PatchEvent {
         config: &UpdateConfig,
         event_type: EventType,
         patch_number: usize,
+        client_id: String,
         message: Option<&str>,
     ) -> PatchEvent {
         PatchEvent {
             app_id: config.app_id.clone(),
             arch: current_arch().to_string(),
+            client_id,
             identifier: event_type,
             patch_number,
             platform: current_platform().to_string(),
