@@ -84,13 +84,13 @@ impl UpdaterState {
         cache_dir: PathBuf,
         release_version: String,
         patch_public_key: Option<&str>,
-        client_id: Option<String>,
+        client_id: String,
     ) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
             patch_manager: Box::new(PatchManager::new(cache_dir.clone(), patch_public_key)),
             serialized_state: SerializedState {
-                client_id: client_id.unwrap_or_else(generate_client_id),
+                client_id: client_id,
                 release_version,
                 queued_events: Vec::new(),
             },
@@ -113,7 +113,7 @@ impl UpdaterState {
         storage_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
-        client_id: Option<String>,
+        client_id: String,
     ) -> Self {
         let mut state = Self::new(
             storage_dir.to_owned(),
@@ -147,7 +147,7 @@ impl UpdaterState {
                         storage_dir,
                         release_version,
                         patch_public_key,
-                        Some(loaded.client_id()),
+                        loaded.client_id(),
                     );
                 }
                 loaded
@@ -156,7 +156,12 @@ impl UpdaterState {
                 if !is_file_not_found(&e) {
                     shorebird_info!("No existing state file found: {:#}, creating new state.", e);
                 }
-                Self::create_new_and_save(storage_dir, release_version, patch_public_key, None)
+                Self::create_new_and_save(
+                    storage_dir,
+                    release_version,
+                    patch_public_key,
+                    generate_client_id(),
+                )
             }
         }
     }
