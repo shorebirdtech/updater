@@ -46,6 +46,9 @@ pub struct UpdaterState {
 struct SerializedState {
     /// The client ID for this device. This is assigned on the first launch of this app and persists
     /// between release versions. This is only reset when the app is uninstalled.
+    /// Shorebird uses these per-install ids in order to provide you, the customer,
+    /// install-count analytics for your apps.  Storage or use of this, and any other,
+    /// information is covered in our privacy policy: https://shorebird.dev/privacy/
     client_id: String,
     // Per-release state:
     /// The release version this cache corresponds to.
