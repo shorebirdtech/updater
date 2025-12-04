@@ -1,9 +1,9 @@
 $schema: https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json
-version: '0.2'
+version: "0.2"
 ignorePaths:
   - target
   - build
-  - '**/*.g.dart'
+  - "**/*.g.dart"
   # Flutter platform directories with per-platform build files
   - windows
   - macos
@@ -20,6 +20,7 @@ words:
   - bidiff
   - bipatch
   - bootable
+  - buildlog
   - buildroot
   - bundletool
   - carryforward
@@ -47,11 +48,13 @@ words:
   - logcat
   - mockall
   - mocktail
+  - msvc
   - oslog
   - pubspec
   - repr
   - reqwest
   - rollouts
+  - rustflags
   - rustls
   - rustup
   - serde
@@ -59,6 +62,8 @@ words:
   - sigstore
   - staticlib
   - subosito
+  - swiftpm
+  - symbolication
   - unbootable
   - Verdana
   - vmcode

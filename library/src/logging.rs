@@ -11,7 +11,7 @@ pub fn init_logging() {
     shorebird_debug!("Logging initialized");
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 pub fn init_logging() {
     let init_result = oslog::OsLogger::new("dev.shorebird")
         .level_filter(log::LevelFilter::Info)
@@ -22,7 +22,18 @@ pub fn init_logging() {
     }
 }
 
-#[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub fn init_logging() {
+    let _ = simple_logger::SimpleLogger::new().init();
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_os = "linux"),
+    not(target_os = "macos"),
+    not(target_os = "windows")
+))]
 pub fn init_logging() {
     // Nothing to do on non-Android, non-iOS platforms.
 }

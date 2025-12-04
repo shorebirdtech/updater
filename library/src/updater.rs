@@ -219,6 +219,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
+                state.client_id(),
                 Some(
                     format!(
                         "Patch {} was marked currently_booting in init",
@@ -250,6 +251,8 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 /// Returns true if an update is available for download. Will return false if the update is already
 /// downloaded and ready to install.
 pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bool> {
+    let client_id = with_state(|state| Ok(state.client_id()))?;
+
     let (request, url, request_fn) = with_config(|config| {
         let mut config = config.clone();
 
@@ -259,7 +262,7 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
         }
 
         Ok((
-            PatchCheckRequest::new(&config),
+            PatchCheckRequest::new(&config, &client_id),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -267,6 +270,10 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
 
     let response = request_fn(&url, request)?;
     shorebird_debug!("Patch check response: {:?}", response);
+
+    if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
+        roll_back_patches_if_needed(rolled_back_patches)?;
+    }
 
     if let Some(patch) = response.patch {
         match should_install_patch(patch.number)? {
@@ -313,16 +320,24 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
 }
 
 impl ReadSeek for Cursor<Vec<u8>> {}
+impl ReadSeek for fs::File {}
 
+// FIXME: these patch_base functions should move to platform-specific modules where they can all be tested.
 #[cfg(any(target_os = "android", test))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     let base_r = crate::android::open_base_lib(&config.libapp_path, "libapp.so")?;
     Ok(Box::new(base_r))
 }
 
-#[cfg(not(any(target_os = "android", test)))]
+#[cfg(target_os = "ios")]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     config.file_provider.open()
+}
+
+#[cfg(all(not(test), not(target_os = "ios"), not(target_os = "android")))]
+fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
+    let file = fs::File::open(&config.libapp_path)?;
+    Ok(Box::new(file))
 }
 
 fn copy_update_config() -> anyhow::Result<UpdateConfig> {
@@ -371,7 +386,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             shorebird_error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(PatchCheckRequest::new(&config))
+        Ok(PatchCheckRequest::new(&config, &state.client_id()))
     })?;
 
     // Check for update.
@@ -379,17 +394,9 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
     shorebird_info!("Patch check response: {:?}", response);
 
-    with_mut_state(|state| {
-        if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
-            if !rolled_back_patches.is_empty() {
-                for patch_number in rolled_back_patches {
-                    state.uninstall_patch(patch_number)?;
-                }
-            }
-        }
-
-        Ok(())
-    })?;
+    if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
+        roll_back_patches_if_needed(rolled_back_patches)?;
+    }
 
     if !response.patch_available {
         return Ok(UpdateStatus::NoUpdate);
@@ -436,8 +443,15 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             patch.number
         );
 
+        let client_id = state.client_id();
         std::thread::spawn(move || {
-            let event = PatchEvent::new(&config, EventType::PatchDownload, patch.number, None);
+            let event = PatchEvent::new(
+                &config,
+                EventType::PatchDownload,
+                patch.number,
+                client_id,
+                None,
+            );
             let report_result = crate::network::send_patch_event(event, &config);
             if let Err(err) = report_result {
                 shorebird_error!("Failed to report patch download: {:?}", err);
@@ -448,6 +462,15 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         // we now have a different "next" version of the app from the current
         // booted version (patched or not).
         Ok(UpdateStatus::UpdateInstalled)
+    })
+}
+
+fn roll_back_patches_if_needed(patch_numbers: Vec<usize>) -> anyhow::Result<()> {
+    with_mut_state(|state| {
+        for patch_number in patch_numbers {
+            state.uninstall_patch(patch_number)?;
+        }
+        Ok(())
     })
 }
 
@@ -487,12 +510,11 @@ where
 {
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
-    shorebird_debug!("Patch is compressed, inflating...");
     use std::io::{BufReader, BufWriter};
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
-    shorebird_debug!("Reading patch file: {:?}", patch_path);
+    shorebird_info!("Inflating patch from {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path)
             .context(format!("Failed to open patch file: {:?}", patch_path))?,
@@ -522,7 +544,17 @@ where
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
     std::io::copy(&mut fresh_r, &mut output_w)?;
+    shorebird_info!("Patch successfully applied to {:?}", output_path);
     Ok(())
+}
+
+/// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+/// will be deleted and the next boot patch will be set to the last successfully booted patch or
+/// the base release if there is no last successfully booted patch.
+///
+/// Returns an error if the patch fails integrity checks.
+pub fn validate_next_boot_patch() -> anyhow::Result<()> {
+    with_mut_state(|state| state.validate_next_boot_patch())
 }
 
 /// The patch which will be run on next boot (which may still be the same
@@ -579,10 +611,12 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
+        let client_id = state.client_id();
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
             patch.number,
+            client_id,
             Some(
                 format!(
                     "Install failure reported from engine for patch {}",
@@ -635,11 +669,13 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         }
 
         let config_copy = config.clone();
+        let client_id = state.client_id();
         std::thread::spawn(move || {
             let event = PatchEvent::new(
                 &config_copy,
                 EventType::PatchInstallSuccess,
                 booting_patch.number,
+                client_id,
                 None,
             );
             let report_result = crate::network::send_patch_event(event, &config_copy);
@@ -1239,6 +1275,7 @@ mod tests {
             );
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
+                client_id: "client_id".to_string(),
                 arch: current_arch().to_string(),
                 identifier: EventType::PatchInstallFailure,
                 patch_number: 1,
@@ -1491,28 +1528,34 @@ mod rollback_tests {
 
 #[cfg(test)]
 mod check_for_downloadable_update_tests {
+    use std::vec;
+
     use anyhow::Result;
     use serial_test::serial;
     use tempdir::TempDir;
 
     use crate::{
         network::PatchCheckResponse, report_launch_failure, report_launch_start,
-        test_utils::install_fake_patch, updater::tests::init_for_testing,
+        report_launch_success, test_utils::install_fake_patch, updater::tests::init_for_testing,
+        with_mut_state,
     };
 
     use super::Patch;
 
-    fn mock_server(available_patch_number: usize) -> mockito::ServerGuard {
+    fn mock_server(
+        available_patch_number: Option<usize>,
+        rolled_back_patch_numbers: Option<Vec<usize>>,
+    ) -> mockito::ServerGuard {
         let mut server = mockito::Server::new();
         let check_response = PatchCheckResponse {
-            patch_available: true,
-            patch: Some(Patch {
-                number: available_patch_number,
+            patch_available: available_patch_number.is_some(),
+            patch: available_patch_number.map(|number| Patch {
+                number,
                 hash: "#".to_string(),
                 download_url: "download_url".to_string(),
                 hash_signature: None,
             }),
-            rolled_back_patch_numbers: None,
+            rolled_back_patch_numbers,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1525,9 +1568,22 @@ mod check_for_downloadable_update_tests {
 
     #[serial]
     #[test]
+    fn returns_false_if_no_patch_is_available() -> Result<()> {
+        let server = mock_server(None, None);
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let is_update_available = crate::check_for_downloadable_update(None)?;
+        assert!(!is_update_available);
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
     fn returns_false_if_patch_is_already_installed() -> Result<()> {
         let patch_number = 1;
-        let server = mock_server(patch_number);
+        let server = mock_server(Some(patch_number), None);
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
@@ -1543,7 +1599,7 @@ mod check_for_downloadable_update_tests {
     #[test]
     fn returns_false_if_patch_is_known_bad() -> Result<()> {
         let patch_number = 1;
-        let server = mock_server(patch_number);
+        let server = mock_server(Some(patch_number), None);
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
@@ -1561,12 +1617,43 @@ mod check_for_downloadable_update_tests {
     #[test]
     fn returns_true_if_patch_has_no_issues() -> Result<()> {
         let patch_number = 1;
-        let server = mock_server(patch_number);
+        let server = mock_server(Some(patch_number), None);
         let tmp_dir = TempDir::new("example").unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let is_update_available = crate::check_for_downloadable_update(None)?;
         assert!(is_update_available);
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn rolls_back_patches_if_needed() -> Result<()> {
+        let patch_number = 1;
+        let server = mock_server(None, Some(vec![patch_number]));
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        install_fake_patch(patch_number)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        with_mut_state(|state| {
+            assert_eq!(
+                state.next_boot_patch().map(|p| p.number),
+                Some(patch_number)
+            );
+            Ok(())
+        })?;
+
+        let is_update_available = crate::check_for_downloadable_update(None)?;
+        assert!(!is_update_available);
+
+        with_mut_state(|state| {
+            assert!(state.next_boot_patch().map(|p| p.number).is_none());
+            Ok(())
+        })?;
 
         Ok(())
     }
