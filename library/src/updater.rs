@@ -219,6 +219,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
+                state.client_id(),
                 Some(
                     format!(
                         "Patch {} was marked currently_booting in init",
@@ -250,6 +251,8 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 /// Returns true if an update is available for download. Will return false if the update is already
 /// downloaded and ready to install.
 pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bool> {
+    let client_id = with_state(|state| Ok(state.client_id()))?;
+
     let (request, url, request_fn) = with_config(|config| {
         let mut config = config.clone();
 
@@ -259,7 +262,7 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
         }
 
         Ok((
-            PatchCheckRequest::new(&config),
+            PatchCheckRequest::new(&config, &client_id),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -383,7 +386,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             shorebird_error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(PatchCheckRequest::new(&config))
+        Ok(PatchCheckRequest::new(&config, &state.client_id()))
     })?;
 
     // Check for update.
@@ -440,8 +443,15 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             patch.number
         );
 
+        let client_id = state.client_id();
         std::thread::spawn(move || {
-            let event = PatchEvent::new(&config, EventType::PatchDownload, patch.number, None);
+            let event = PatchEvent::new(
+                &config,
+                EventType::PatchDownload,
+                patch.number,
+                client_id,
+                None,
+            );
             let report_result = crate::network::send_patch_event(event, &config);
             if let Err(err) = report_result {
                 shorebird_error!("Failed to report patch download: {:?}", err);
@@ -538,6 +548,15 @@ where
     Ok(())
 }
 
+/// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+/// will be deleted and the next boot patch will be set to the last successfully booted patch or
+/// the base release if there is no last successfully booted patch.
+///
+/// Returns an error if the patch fails integrity checks.
+pub fn validate_next_boot_patch() -> anyhow::Result<()> {
+    with_mut_state(|state| state.validate_next_boot_patch())
+}
+
 /// The patch which will be run on next boot (which may still be the same
 /// as the current boot).
 /// This may be changed any time by:
@@ -592,10 +611,12 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
+        let client_id = state.client_id();
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
             patch.number,
+            client_id,
             Some(
                 format!(
                     "Install failure reported from engine for patch {}",
@@ -648,11 +669,13 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         }
 
         let config_copy = config.clone();
+        let client_id = state.client_id();
         std::thread::spawn(move || {
             let event = PatchEvent::new(
                 &config_copy,
                 EventType::PatchInstallSuccess,
                 booting_patch.number,
+                client_id,
                 None,
             );
             let report_result = crate::network::send_patch_event(event, &config_copy);
@@ -1252,6 +1275,7 @@ mod tests {
             );
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
+                client_id: "client_id".to_string(),
                 arch: current_arch().to_string(),
                 identifier: EventType::PatchInstallFailure,
                 patch_number: 1,

@@ -64,7 +64,7 @@ The Shorebird Updater is unavailable in the current environment.
 This occurs when using pkg:shorebird_code_push in an app that does not
 contain the Shorebird Engine. Most commonly this is due to building with
 `flutter build` or `flutter run` instead of `shorebird release` or `shorebird preview`.
-It can also occur when running on an unsupported platform (e.g. web or desktop).
+It can also occur when running on an unsupported platform (e.g. web).
 ''');
 }
 
@@ -127,7 +127,8 @@ abstract class ShorebirdUpdater {
   /// Throws a [ReadPatchException] if the read is unsuccessful.
   Future<Patch?> readNextPatch();
 
-  /// Checks for available updates and returns the [UpdateStatus].
+  /// Checks for an available patch on [track] (or [UpdateTrack.stable] if no
+  /// track is specified) and returns the [UpdateStatus].
   /// This method should be used to determine the update status before calling
   /// [update].
   ///
@@ -136,13 +137,17 @@ abstract class ShorebirdUpdater {
   /// A separate call to `update()` is required to install new patches.
   Future<UpdateStatus> checkForUpdate({UpdateTrack? track});
 
-  /// Updates the app to the latest patch (if available).
-  /// Future will complete once the update is fully downloaded and ready
-  /// to be used on the next app start.
+  /// Updates the app to the latest patch available on the specified track, or
+  /// [UpdateTrack.stable] if no track is specified.
+  ///
+  /// If no update is available or the update fails, this method will throw an
+  /// [UpdateException].
+  ///
+  /// The returned Future will complete once the update is fully downloaded and
+  /// ready to be used on the next app start.
+  ///
   /// Note: The app must be restarted for the update to take effect.
   /// Note: This method does nothing if the updater is not available.
-  ///
-  /// Throws an [UpdateException] if a the update call is unsuccessful.
   ///
   /// See also:
   /// * [isAvailable], which indicates whether the updater is available.
@@ -151,14 +156,33 @@ abstract class ShorebirdUpdater {
   Future<void> update({UpdateTrack? track});
 }
 
-/// The track to check for updates on.
-enum UpdateTrack {
-  /// The staging track used for internal testing.
-  staging,
+/// A track to check for updates on.
+///
+/// In addition to the predefined tracks, you can also specify your own track
+/// names by creating an instance of `UpdateTrack` with a custom string value.
+///
+/// For example, if you have a custom track named "my_custom_track", you can
+/// create a patch on that track:
+///
+/// ```sh
+///   shorebird patch android --track my_custom_track
+/// ```
+///
+///  And then check for updates on that track in your app:
+///
+/// ```dart
+///  final status = checkForUpdate(track: UpdateTrack('my_custom_track'));
+/// ```
+extension type const UpdateTrack(String value) {
+  /// Used for internal testing.
+  static const staging = UpdateTrack('staging');
 
-  /// The beta track used for public testing.
-  beta,
+  /// Used for public testing.
+  static const beta = UpdateTrack('beta');
 
-  /// The stable track used for general availability.
-  stable,
+  /// Used for general availability. This is the default track.
+  static const stable = UpdateTrack('stable');
+
+  /// The name of the track.
+  String get name => value;
 }

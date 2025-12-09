@@ -231,6 +231,18 @@ fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
     return result;
 }
 
+/// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+/// will be deleted and the next boot patch will be set to the last successfully booted patch or
+/// the base release if there is no last successfully booted patch.
+#[no_mangle]
+pub extern "C" fn shorebird_validate_next_boot_patch() {
+    log_on_error(
+        || updater::validate_next_boot_patch(),
+        "validating next_boot_patch",
+        (),
+    );
+}
+
 /// The path to the patch that will boot on the next run of the app, or NULL if
 /// there is no next patch.
 #[no_mangle]
@@ -665,6 +677,7 @@ mod test {
         assert_eq!(shorebird_current_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_number(), 1);
 
+        shorebird_validate_next_boot_patch();
         // Read path contents into memory and check against expected.
         let c_path = shorebird_next_boot_patch_path();
         let path = to_rust(c_path).unwrap();
@@ -882,6 +895,7 @@ mod test {
     #[test]
     fn forgot_init() {
         testing_reset_config();
+        shorebird_validate_next_boot_patch();
         assert_eq!(shorebird_next_boot_patch_number(), 0);
         assert_eq!(shorebird_next_boot_patch_path(), null_mut());
     }

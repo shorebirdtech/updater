@@ -134,6 +134,14 @@ SHOREBIRD_EXPORT uintptr_t shorebird_current_boot_patch_number(void);
 SHOREBIRD_EXPORT uintptr_t shorebird_next_boot_patch_number(void);
 
 /**
+ * Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
+ * will be deleted and the next boot patch will be set to the last successfully booted patch or
+ * the base release if there is no last successfully booted patch.
+ */
+SHOREBIRD_EXPORT
+void shorebird_validate_next_boot_patch(void);
+
+/**
  * The path to the patch that will boot on the next run of the app, or NULL if
  * there is no next patch.
  */
