@@ -90,7 +90,7 @@ pub trait ManagePatches {
     /// Returns the next patch to boot, or None if:
     /// - no patches have been downloaded
     /// - we cannot boot from the patch(es) on disk
-    fn next_boot_patch(&mut self) -> Option<PatchInfo>;
+    fn next_boot_patch(&self) -> Option<PatchInfo>;
 
     /// Performs integrity checks on the next boot patch and updates the state accordingly. Returns
     /// an error if the patch exists but is not bootable.
@@ -421,7 +421,7 @@ impl ManagePatches for PatchManager {
         anyhow::Ok(())
     }
 
-    fn next_boot_patch(&mut self) -> Option<PatchInfo> {
+    fn next_boot_patch(&self) -> Option<PatchInfo> {
         self.patches_state
             .next_boot_patch
             .as_ref()
@@ -638,7 +638,7 @@ mod next_boot_patch_tests {
     #[test]
     fn returns_none_if_no_next_boot_patch() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        let manager = PatchManager::manager_for_test(&temp_dir);
         assert!(manager.next_boot_patch().is_none());
     }
 
