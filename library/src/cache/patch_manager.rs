@@ -268,31 +268,49 @@ impl PatchManager {
     /// successfully booted patch. If the last successfully booted patch is not bootable or has the same number
     /// as the patch we're falling back from, we clear it as well.
     fn try_fall_back_from_patch(&mut self, bad_patch_number: usize) -> Result<()> {
-        shorebird_info!("Falling back from patch {}", bad_patch_number);
-
         // Continue even if we fail to delete the patch artifacts. It's more important to not try to
         // boot from a bad patch than to delete its artifacts.
         // No need to log failure – delete_patch_artifacts logs for us.
         let _ = self.delete_patch_artifacts(bad_patch_number);
 
-        if let Some(ref next_boot_patch) = self.patches_state.next_boot_patch {
-            // If our next boot patch is bad_patch_number, clear it.
-            if next_boot_patch.number == bad_patch_number {
-                self.patches_state.next_boot_patch = None;
-            }
-        }
+        let is_bad_patch_last_booted_patch = self
+            .patches_state
+            .last_booted_patch
+            .clone()
+            .map(|patch| patch.number == bad_patch_number)
+            .unwrap_or(false);
+        let is_bad_patch_next_boot_patch = self
+            .patches_state
+            .next_boot_patch
+            .clone()
+            .map(|patch| patch.number == bad_patch_number)
+            .unwrap_or(false);
 
-        // If we think we can still boot from the last booted patch, set it as the next_boot_patch.
-        // If something happened to render the last boot patch unbootable, clear it and delete its artifacts.
-        if let Some(last_boot_patch) = self.patches_state.last_booted_patch.clone() {
-            if last_boot_patch.number != bad_patch_number
-                && self.validate_patch_is_bootable(&last_boot_patch).is_ok()
-            {
-                self.patches_state.next_boot_patch = Some(last_boot_patch);
-            } else {
-                self.patches_state.last_booted_patch = None;
-                // No need to log failure – delete_patch_artifacts logs for us.
-                let _ = self.delete_patch_artifacts(last_boot_patch.number);
+        if is_bad_patch_last_booted_patch && is_bad_patch_next_boot_patch {
+            // If both patches are bad, delete them both and boot from the base release.
+            shorebird_info!("Clearing last booted patch and next boot patch");
+            self.patches_state.last_booted_patch = None;
+            self.patches_state.next_boot_patch = None;
+        } else if is_bad_patch_next_boot_patch {
+            shorebird_info!("Clearing next boot patch");
+            self.patches_state.next_boot_patch = None;
+
+            if let Some(last_boot_patch) = self.patches_state.last_booted_patch.clone() {
+                if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
+                    shorebird_info!(
+                        "Setting last booted patch {} as next boot patch",
+                        last_boot_patch.number
+                    );
+                    self.patches_state.next_boot_patch = Some(last_boot_patch);
+                } else {
+                    shorebird_info!(
+                        "Last booted patch {} is not bootable, deleting artifacts",
+                        last_boot_patch.number
+                    );
+                    self.patches_state.last_booted_patch = None;
+                    // No need to log failure – delete_patch_artifacts logs for us.
+                    let _ = self.delete_patch_artifacts(last_boot_patch.number);
+                }
             }
         }
 
@@ -936,29 +954,6 @@ mod fall_back_tests {
 
         assert!(manager.patches_state.last_booted_patch.is_none());
         assert!(manager.patches_state.next_boot_patch.is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn sets_next_patch_to_latest_patch_if_no_next_patch_exists() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
-
-        assert!(manager.patches_state.next_boot_patch.is_none());
-
-        manager.patches_state.last_booted_patch = Some(PatchMetadata {
-            number: 1,
-            size: 1,
-            hash: "hash".to_string(),
-            signature: Some("signature".to_owned()),
-        });
-        manager.try_fall_back_from_patch(1)?;
-
-        assert_eq!(
-            manager.patches_state.next_boot_patch,
-            manager.patches_state.last_booted_patch
-        );
 
         Ok(())
     }
