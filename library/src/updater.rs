@@ -149,6 +149,7 @@ where
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification_mode,
         );
         f(&state)
     })
@@ -163,6 +164,7 @@ where
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification_mode,
         );
         f(&mut state)
     })
@@ -212,6 +214,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification_mode,
         );
         if let Some(patch) = state.currently_booting_patch() {
             state.record_boot_failure_for_patch(patch.number)?;
@@ -600,6 +603,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification_mode,
         );
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
@@ -641,6 +645,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification_mode,
         );
 
         let booting_patch = match state.currently_booting_patch() {
@@ -852,6 +857,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification_mode,
             );
             assert_eq!(state.next_boot_patch().unwrap().number, 1);
             Ok(())
@@ -1115,6 +1121,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification_mode,
             );
             assert_eq!(
                 state.last_successfully_booted_patch().unwrap().number,
@@ -1145,6 +1152,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification_mode,
             );
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
@@ -1188,6 +1196,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification_mode,
             );
 
             state.record_boot_failure_for_patch(1)?;
@@ -1272,6 +1281,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification_mode,
             );
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
@@ -1303,6 +1313,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification_mode,
             );
             // All 5 events should be cleared, even though only 3 were sent.
             assert_eq!(state.copy_events(10).len(), 0);
