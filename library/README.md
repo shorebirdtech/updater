@@ -231,7 +231,19 @@ patch_verification_mode: strict
 In Strict mode, patch signature verification happens at **boot time**. This
 provides the strongest security guarantee because it detects tampering that
 occurs after installation (e.g., if an attacker modifies the patch file on
-disk between app launches).
+disk between app launches).  However the practical risk to such an attack is
+low, since patches are stored within the app's protected storage, so the
+attacker in this case needs to have already compromised the app itself, or
+the system (e.g. via a rooted device), but if they've done that they can
+already run code as the app, the protection here is for cases where developers
+are concerned that their app might be compromised and they wish to ensure that
+that compromise could not theoretically persist via editing an installed
+patch file.
+
+Strict mode is currently default for Shorebird, however some of our large
+customers requested that we add an install_only mode, since their applications
+were so large (many hundreds of mb) that the hash-verification during boot
+was showing up on profiles.
 
 **Install flow:**
 1. Download patch from server
