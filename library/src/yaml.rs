@@ -29,7 +29,7 @@ pub struct YamlConfig {
     /// Base64-encoded public key for verifying patch hash signatures.
     pub patch_public_key: Option<String>,
     /// When to verify patch signatures. Defaults to "strict" (verify at boot time).
-    pub patch_verification_mode: Option<PatchVerificationMode>,
+    pub patch_verification: Option<PatchVerificationMode>,
 }
 
 impl YamlConfig {
@@ -44,27 +44,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_patch_verification_mode_strict() {
+    fn parses_patch_verification_strict() {
         let yaml = r#"
 app_id: test_app
-patch_verification_mode: strict
+patch_verification: strict
 "#;
         let config = YamlConfig::from_yaml(yaml).unwrap();
         assert_eq!(
-            config.patch_verification_mode,
+            config.patch_verification,
             Some(PatchVerificationMode::Strict)
         );
     }
 
     #[test]
-    fn parses_patch_verification_mode_install_only() {
+    fn parses_patch_verification_install_only() {
         let yaml = r#"
 app_id: test_app
-patch_verification_mode: install_only
+patch_verification: install_only
 "#;
         let config = YamlConfig::from_yaml(yaml).unwrap();
         assert_eq!(
-            config.patch_verification_mode,
+            config.patch_verification,
             Some(PatchVerificationMode::InstallOnly)
         );
     }
@@ -75,10 +75,10 @@ patch_verification_mode: install_only
 app_id: test_app
 "#;
         let config = YamlConfig::from_yaml(yaml).unwrap();
-        assert_eq!(config.patch_verification_mode, None);
+        assert_eq!(config.patch_verification, None);
         // When unwrapped with default, should be Strict
         assert_eq!(
-            config.patch_verification_mode.unwrap_or_default(),
+            config.patch_verification.unwrap_or_default(),
             PatchVerificationMode::Strict
         );
     }

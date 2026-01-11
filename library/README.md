@@ -219,13 +219,13 @@ Changes in this state can be triggered by:
 ### Patch Verification Modes
 
 The updater supports two patch verification modes, configured via
-`patch_verification_mode` in `shorebird.yaml`. Both modes require a
+`patch_verification` in `shorebird.yaml`. Both modes require a
 `patch_public_key` to be configured for signature verification to occur.
 
 #### Strict Mode (default)
 
 ```yaml
-patch_verification_mode: strict
+patch_verification: strict
 ```
 
 In Strict mode, patch signature verification happens at **boot time**. This
@@ -264,7 +264,7 @@ was showing up on profiles from older devices.
 #### Install Only Mode
 
 ```yaml
-patch_verification_mode: install_only
+patch_verification: install_only
 ```
 
 In Install Only mode, patch signature verification happens at **install time**

@@ -510,12 +510,12 @@ mod test {
 
     #[serial]
     #[test]
-    fn init_with_invalid_patch_verification_mode() {
+    fn init_with_invalid_patch_verification() {
         testing_reset_config();
         let tmp_dir = TempDir::new("example").unwrap();
         let c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
-        let c_yaml = c_string("app_id: foo\npatch_verification_mode: bogus_mode");
-        // Invalid patch_verification_mode causes init to fail and return false
+        let c_yaml = c_string("app_id: foo\npatch_verification: bogus_mode");
+        // Invalid patch_verification causes init to fail and return false
         assert!(!shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
         free_c_string(c_yaml);
         free_parameters(c_params);
