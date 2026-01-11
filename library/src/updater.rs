@@ -950,6 +950,39 @@ mod tests {
 
     #[serial]
     #[test]
+    fn init_invalid_patch_verification_mode() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        let yaml = r#"
+app_id: test_app
+patch_verification_mode: bogus_mode
+"#;
+        let result = crate::init(
+            crate::AppConfig {
+                app_storage_dir: cache_dir.clone(),
+                code_cache_dir: cache_dir.clone(),
+                release_version: "1.0.0+1".to_string(),
+                original_libapp_paths: vec!["original_libapp_path".to_string()],
+            },
+            Box::new(FakeExternalFileProvider {}),
+            yaml,
+        );
+        match result {
+            Err(crate::InitError::InvalidArgument(field, msg)) => {
+                assert_eq!(field, "yaml");
+                assert!(
+                    msg.contains("unknown variant"),
+                    "Expected 'unknown variant' in error message, got: {}",
+                    msg
+                );
+            }
+            _ => panic!("Expected InvalidArgument error, got: {:?}", result),
+        }
+    }
+
+    #[serial]
+    #[test]
     fn reports_patch_download_on_update() -> anyhow::Result<()> {
         let mut server = mockito::Server::new();
         let download_url = format!("{}/patch/1", server.url());
