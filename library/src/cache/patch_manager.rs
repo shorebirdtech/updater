@@ -1,4 +1,5 @@
 use super::{disk_io, signing, PatchInfo};
+use crate::yaml::PatchVerificationMode;
 use anyhow::{bail, Context, Result};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
@@ -146,19 +147,28 @@ pub struct PatchManager {
     /// The key used to sign patch hashes for the current release, if any. If this is
     /// not None, all patches must have a signature that can be verified with this key.
     patch_public_key: Option<String>,
+
+    /// Controls when signature verification occurs: at boot time (strict) or only
+    /// at install time (install_only).
+    verification_mode: PatchVerificationMode,
 }
 
 impl PatchManager {
     /// Creates a new PatchManager with the given root directory. This directory is
     /// assumed to exist. The PatchManager will use this directory to store its
     /// state and patch binaries.
-    pub fn new(root_dir: PathBuf, patch_public_key: Option<&str>) -> Self {
+    pub fn new(
+        root_dir: PathBuf,
+        patch_public_key: Option<&str>,
+        verification_mode: PatchVerificationMode,
+    ) -> Self {
         let patches_state = Self::load_patches_state(&root_dir).unwrap_or_default();
 
         Self {
             root_dir,
             patches_state,
             patch_public_key: patch_public_key.map(|s| s.to_owned()),
+            verification_mode,
         }
     }
 
@@ -208,6 +218,7 @@ impl PatchManager {
     /// Checks that the patch with the given number:
     ///   - Has an artifact on disk
     ///   - That artifact on disk is the same size it was when it was installed
+    ///   - In Strict mode: verifies the signature against the hash
     ///
     /// Returns Ok if the patch is bootable, or an error if it is not.
     fn validate_patch_is_bootable(&self, patch: &PatchMetadata) -> Result<()> {
@@ -230,18 +241,21 @@ impl PatchManager {
             );
         }
 
-        if let Some(public_key) = &self.patch_public_key {
-            // If we have a public key, verify that the patch's hash has a signature.
-            let signature = patch
-                .signature
-                .clone()
-                .context("Patch signature is missing")?;
+        // In Strict mode, verify the signature at boot time.
+        // This ensures the patch file hasn't been tampered with since installation.
+        if self.verification_mode == PatchVerificationMode::Strict {
+            if let Some(public_key) = &self.patch_public_key {
+                let signature = patch
+                    .signature
+                    .clone()
+                    .context("Patch signature is missing")?;
 
-            // Check that the signature is valid.
-            let patch_hash = signing::hash_file(&artifact_path)?;
-            signing::check_signature(&patch_hash, &signature, public_key)?;
-        } else {
-            shorebird_info!("No public key provided, skipping signature verification");
+                // Compute the hash of the patch file on disk and verify it matches.
+                let patch_hash = signing::hash_file(&artifact_path)?;
+                signing::check_signature(&patch_hash, &signature, public_key)?;
+            } else {
+                shorebird_info!("No public key provided, skipping signature verification");
+            }
         }
 
         Ok(())
@@ -365,6 +379,15 @@ impl ManagePatches for PatchManager {
     ) -> Result<()> {
         if !file_path.exists() {
             bail!("Patch file {} does not exist", file_path.display());
+        }
+
+        // In InstallOnly mode, verify signature at install time.
+        // In Strict mode, signature verification happens at boot time instead.
+        if self.verification_mode == PatchVerificationMode::InstallOnly {
+            if let Some(public_key) = &self.patch_public_key {
+                let sig = signature.context("Patch signature is missing")?;
+                signing::check_signature(hash, sig, public_key)?;
+            }
         }
 
         let patch_path = self.patch_artifact_path(patch_number);
@@ -513,7 +536,11 @@ impl ManagePatches for PatchManager {
 #[cfg(test)]
 impl PatchManager {
     pub fn manager_for_test(temp_dir: &TempDir) -> PatchManager {
-        PatchManager::new(temp_dir.path().to_owned(), None)
+        PatchManager::new(
+            temp_dir.path().to_owned(),
+            None,
+            PatchVerificationMode::default(),
+        )
     }
 
     pub fn add_patch_for_test(&mut self, temp_dir: &TempDir, patch_number: usize) -> Result<()> {
@@ -547,6 +574,7 @@ mod debug_tests {
     use tempdir::TempDir;
 
     use super::PatchManager;
+    use crate::yaml::PatchVerificationMode;
 
     #[test]
     fn manage_patches_is_debug() {
@@ -559,9 +587,13 @@ mod debug_tests {
     #[test]
     fn patch_manager_is_debug() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        let patch_manager = PatchManager::new(temp_dir.path().to_owned(), Some("public_key"));
+        let patch_manager = PatchManager::new(
+            temp_dir.path().to_owned(),
+            Some("public_key"),
+            PatchVerificationMode::default(),
+        );
         let actual = format!("{:?}", patch_manager);
-        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, known_bad_patches: {} }, patch_public_key: Some("public_key") }"#));
+        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
     }
 }
 
@@ -613,6 +645,116 @@ mod add_patch_tests {
             })
         );
         assert!(!file_path.exists());
+    }
+
+    // InstallOnly mode signature verification tests - these verify that signature
+    // checking happens at install time when using PatchVerificationMode::InstallOnly.
+
+    // The constant values below were generated by taking an arbitrary sha256 hash (INFLATED_PATCH_HASH)
+    // and using openssl to sign it with the private key corresponding to `PUBLIC_KEY`.
+
+    // The base64-encoded public key in a DER format. This is required by ring to verify signatures.
+    // See https://docs.rs/ring/latest/ring/signature/index.html#signing-and-verifying-with-rsa-pkcs1-15-padding
+    const PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
+
+    // The message that was signed. In practice, this will be the sha256 hash of an inflated patch artifact.
+    const INFLATED_PATCH_HASH: &str =
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
+
+    // The base64-encoded signature of `INFLATED_PATCH_HASH` created using the private key corresponding
+    // to `PUBLIC_KEY`.
+    const SIGNATURE: &str = "ZGccldv01XqHQ76bXuKV/9EQnNK0Q+reQ9bJHVnGfLldF+BLRx0divgPfKP5Df9BJPA3dw1Z1VortfepmMGebP3kS593l5zoktu9MIepxvRAFWNKE5PDTIIvCL/ddTPEHt6NNCeD6HLOMLzbEX3cFZa+lq3UymGi0aqA5DlXirJBGtopojc9nOXZ22n/qHNZIHEkGcqKbSMSK9oC55whKHnlJTbCXdmSyDc65B4PcgseqJom1riVK3XGW1YMrSpuMAU+CDT7HhdESmI1UtH1bYeBITfRhQztdDTfti2vJTf2Y+lYC99CFiISgD7f1m0KUcC+VnEAMZSYtgxSk6AX2A==";
+
+    #[test]
+    fn install_only_errs_if_public_key_is_invalid() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some("not a valid key"),
+            PatchVerificationMode::InstallOnly,
+        );
+
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, "patch contents").unwrap();
+
+        // In InstallOnly mode, fails at install time because the public key is invalid
+        let result = manager.add_patch(1, file_path, INFLATED_PATCH_HASH, Some(SIGNATURE));
+        assert!(result.is_err());
+        assert!(manager.next_boot_patch().is_none());
+    }
+
+    #[test]
+    fn install_only_errs_if_signature_is_missing_when_public_key_configured() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::InstallOnly,
+        );
+
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, "patch contents").unwrap();
+
+        // In InstallOnly mode, fails at install time because signature is missing
+        let result = manager.add_patch(1, file_path, INFLATED_PATCH_HASH, None);
+        assert!(result.is_err());
+        assert!(manager.next_boot_patch().is_none());
+    }
+
+    #[test]
+    fn install_only_errs_if_signature_is_invalid() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::InstallOnly,
+        );
+
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, "patch contents").unwrap();
+
+        // Using INFLATED_PATCH_HASH as a signature because it is valid base64, but not a valid signature.
+        // In InstallOnly mode, this fails immediately at install time.
+        let result =
+            manager.add_patch(1, file_path, INFLATED_PATCH_HASH, Some(INFLATED_PATCH_HASH));
+        assert!(result.is_err());
+        assert!(manager.next_boot_patch().is_none());
+    }
+
+    #[test]
+    fn install_only_succeeds_with_valid_signature() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::InstallOnly,
+        );
+
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, "patch contents").unwrap();
+
+        // In InstallOnly mode, signature is verified at install time
+        let result = manager.add_patch(1, file_path, INFLATED_PATCH_HASH, Some(SIGNATURE));
+        assert!(result.is_ok());
+        assert!(manager.next_boot_patch().is_some());
+    }
+
+    #[test]
+    fn install_only_succeeds_with_any_signature_if_no_public_key() {
+        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            None, // No public key configured
+            PatchVerificationMode::InstallOnly,
+        );
+
+        let file_path = &temp_dir.path().join("patch1.vmcode");
+        std::fs::write(file_path, "patch contents").unwrap();
+
+        // Without a public key, signature verification is skipped even in InstallOnly mode
+        let result = manager.add_patch(1, file_path, "hash", Some("not a valid signature"));
+        assert!(result.is_ok());
+        assert!(manager.next_boot_patch().is_some());
     }
 }
 
@@ -850,61 +992,23 @@ mod validate_next_boot_patch_tests {
     // to `PUBLIC_KEY`.
     const SIGNATURE: &str = "ZGccldv01XqHQ76bXuKV/9EQnNK0Q+reQ9bJHVnGfLldF+BLRx0divgPfKP5Df9BJPA3dw1Z1VortfepmMGebP3kS593l5zoktu9MIepxvRAFWNKE5PDTIIvCL/ddTPEHt6NNCeD6HLOMLzbEX3cFZa+lq3UymGi0aqA5DlXirJBGtopojc9nOXZ22n/qHNZIHEkGcqKbSMSK9oC55whKHnlJTbCXdmSyDc65B4PcgseqJom1riVK3XGW1YMrSpuMAU+CDT7HhdESmI1UtH1bYeBITfRhQztdDTfti2vJTf2Y+lYC99CFiISgD7f1m0KUcC+VnEAMZSYtgxSk6AX2A==";
 
-    #[test]
-    fn returns_none_if_public_key_is_invalid() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some("not a valid key"));
+    // Strict mode boot-time signature verification tests.
+    // In Strict mode, signature verification happens at boot time (validate_next_boot_patch),
+    // not at install time. This provides protection against post-install tampering.
 
+    #[test]
+    fn strict_mode_succeeds_with_valid_signature_at_boot_time() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::Strict,
+        );
+
+        // In Strict mode, add_patch does NOT verify signature (that happens at boot time)
         manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
 
-        assert!(manager.next_boot_patch().is_some());
-        assert!(manager.validate_next_boot_patch().is_err());
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_if_patch_is_missing_expected_signature() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some(PUBLIC_KEY));
-
-        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, None)?;
-
-        assert!(manager.next_boot_patch().is_some());
-        assert!(manager.validate_next_boot_patch().is_err());
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_none_if_patch_has_invalid_signature() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some(PUBLIC_KEY));
-
-        // Using MESSAGE as a signature because it is valid base64, but not a valid signature.
-        manager.add_signed_patch_for_test(
-            &temp_dir,
-            1,
-            INFLATED_PATCH_HASH,
-            Some(INFLATED_PATCH_HASH),
-        )?;
-
-        assert!(manager.next_boot_patch().is_some());
-        assert!(manager.validate_next_boot_patch().is_err());
-        assert!(manager.next_boot_patch().is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn returns_patch_if_patch_has_valid_signature() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
-        let mut manager = PatchManager::new(temp_dir.path().to_path_buf(), Some(PUBLIC_KEY));
-
-        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
-
+        // Boot-time validation verifies the signature by computing hash and checking signature
         assert!(manager.next_boot_patch().is_some());
         assert!(manager.validate_next_boot_patch().is_ok());
         assert!(manager.next_boot_patch().is_some());
@@ -916,9 +1020,9 @@ mod validate_next_boot_patch_tests {
     }
 
     #[test]
-    fn returns_patch_with_arbitrary_signature_if_no_public_key() -> Result<()> {
+    fn succeeds_with_arbitrary_signature_if_no_public_key() -> Result<()> {
         let temp_dir = TempDir::new("patch_manager")?;
-        // Create a PatchManager without a public key.
+        // Create a PatchManager without a public key - signature verification is skipped.
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         manager.add_signed_patch_for_test(
@@ -928,11 +1032,101 @@ mod validate_next_boot_patch_tests {
             Some("not a valid signature"),
         )?;
 
+        // Without a public key, boot-time validation only checks file existence and size
         assert!(manager.next_boot_patch().is_some());
         assert!(manager.validate_next_boot_patch().is_ok());
         assert!(manager.next_boot_patch().is_some());
         let patch = manager.next_boot_patch().unwrap();
         assert_eq!(patch.number, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn strict_mode_fails_boot_validation_if_signature_missing() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::Strict,
+        );
+
+        // In Strict mode, add_patch succeeds without signature (no install-time check)
+        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, None)?;
+
+        assert!(manager.next_boot_patch().is_some());
+        // But boot-time validation fails because signature is required
+        assert!(manager.validate_next_boot_patch().is_err());
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn strict_mode_fails_boot_validation_if_signature_invalid() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::Strict,
+        );
+
+        // In Strict mode, add_patch succeeds with invalid signature (no install-time check)
+        manager.add_signed_patch_for_test(
+            &temp_dir,
+            1,
+            INFLATED_PATCH_HASH,
+            Some(INFLATED_PATCH_HASH), // Using hash as signature, which is invalid
+        )?;
+
+        assert!(manager.next_boot_patch().is_some());
+        // But boot-time validation fails because signature doesn't verify
+        assert!(manager.validate_next_boot_patch().is_err());
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn strict_mode_fails_boot_validation_if_public_key_invalid() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some("not a valid key"),
+            PatchVerificationMode::Strict,
+        );
+
+        // In Strict mode, add_patch succeeds (no install-time check)
+        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
+
+        assert!(manager.next_boot_patch().is_some());
+        // But boot-time validation fails because public key can't be used
+        assert!(manager.validate_next_boot_patch().is_err());
+        assert!(manager.next_boot_patch().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn strict_mode_detects_tampered_patch_at_boot_time() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            Some(PUBLIC_KEY),
+            PatchVerificationMode::Strict,
+        );
+
+        // Install a valid patch
+        manager.add_signed_patch_for_test(&temp_dir, 1, INFLATED_PATCH_HASH, Some(SIGNATURE))?;
+
+        // Tamper with the patch file after installation
+        let patch_path = manager.patch_artifact_path(1);
+        std::fs::write(&patch_path, "tampered content")?;
+
+        assert!(manager.next_boot_patch().is_some());
+        // Boot-time validation detects tampering: computed hash doesn't match signature
+        assert!(manager.validate_next_boot_patch().is_err());
+        assert!(manager.next_boot_patch().is_none());
 
         Ok(())
     }

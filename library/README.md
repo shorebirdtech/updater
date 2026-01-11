@@ -214,14 +214,91 @@ Changes in this state can be triggered by:
 
 - Network and Disk are untrusted.
 - Running software (including apk service) is trusted.
-- Patch contents are signed, public key is included in the APK. (not yet implemented)
+- Patch contents are signed, public key is included in the APK.
+
+### Patch Verification Modes
+
+The updater supports two patch verification modes, configured via
+`patch_verification` in `shorebird.yaml`. Both modes require a
+`patch_public_key` to be configured for signature verification to occur.
+
+#### Strict Mode (default)
+
+```yaml
+patch_verification: strict
+```
+
+In Strict mode, patch signature verification happens at **boot time**. This
+provides the strongest security guarantee because it detects any potential
+on-disk tampering to the patch file _after_ installation (e.g., if an attacker
+were to modify the patch file on disk between app launches). However the
+practical risk to such an attack is very low, since patches are stored within
+the app's protected storage. An attacker in this case would need to have already
+compromised the app itself, or the system (e.g. via a rooted device). However if
+an attacker has compromised the system (rooted) they could already modify the
+APK/IPA internals directly. The on-boot protection here is for cases where
+developers are concerned that their app might be compromised and they wish to
+ensure that such a compromise could not theoretically persist itself via editing
+an installed patch file. Such a case is impractical, but we default to the
+strongest-possible security stance regardless.
+
+Strict mode is currently default for Shorebird, however some of our large
+customers requested that we add an install_only mode, since their applications
+were so large (many hundreds of mb) that the hash-verification during boot
+was showing up on profiles from older devices.
+
+**Install flow:**
+
+1. Download patch from server
+2. Inflate patch (apply bidiff to base release)
+3. `check_hash()`: Compute SHA256 of inflated file, verify it matches server-provided hash
+4. Store patch file, hash, and signature to disk
+
+**Boot flow:**
+
+1. Verify patch file exists and size matches stored metadata
+2. `hash_file()`: Re-compute SHA256 of patch file on disk
+3. `check_signature()`: Verify the computed hash has a valid signature using the public key
+4. If verification fails, fall back to last known good patch or base release
+
+#### Install Only Mode
+
+```yaml
+patch_verification: install_only
+```
+
+In Install Only mode, patch signature verification happens at **install time**
+only. This provides faster boot times but does not protect against post-install
+tampering (extremely uncommon). The only case that this does not protect
+against is if _your app itself_ were to accidentally (or through some other
+malicious exploit of your app) modify its own data directory and modify the
+patch files within such.
+
+**Install flow:**
+
+1. Download patch from server
+2. Inflate patch (apply bidiff to base release)
+3. `check_hash()`: Compute SHA256 of inflated file, verify it matches server-provided hash
+4. `check_signature()`: Verify the server-provided hash has a valid signature using the public key
+5. Store patch file, hash, and signature to disk
+
+**Boot flow:**
+
+1. Verify patch file exists and size matches stored metadata
+2. (No signature verification - trusted from install time)
+
+#### Without a Public Key
+
+If no `patch_public_key` is configured, signature verification is skipped in
+both modes. The `check_hash()` step still runs during install to detect
+download corruption, but there is no cryptographic verification that the
+patch came from a trusted source.
 
 ## TODO:
 
 - Add an async API.
 - Write tests for state management.
 - Make state management/filesystem management atomic (and tested).
-- Support validating patches/slots (hashes, signatures, etc).
 
 ## Later-stage update system design docs
 

@@ -1,5 +1,19 @@
 use serde::Deserialize;
 
+/// Controls when patch signature verification occurs.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchVerificationMode {
+    /// Verify patch signature at boot time (default, most secure).
+    /// The patch is verified each time the app boots, ensuring
+    /// the patch file hasn't been tampered with since installation.
+    #[default]
+    Strict,
+    /// Verify patch signature only at install time.
+    /// Faster boot times but less protection against post-install tampering.
+    InstallOnly,
+}
+
 /// Struct for parsing shorebird.yaml.
 #[derive(Deserialize)]
 pub struct YamlConfig {
@@ -14,11 +28,66 @@ pub struct YamlConfig {
     pub auto_update: Option<bool>,
     /// Base64-encoded public key for verifying patch hash signatures.
     pub patch_public_key: Option<String>,
+    /// When to verify patch signatures. Defaults to "strict" (verify at boot time).
+    pub patch_verification: Option<PatchVerificationMode>,
 }
 
 impl YamlConfig {
     /// Read in shorebird.yaml from a string.
     pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
         serde_yaml::from_str(yaml)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_patch_verification_strict() {
+        let yaml = r#"
+app_id: test_app
+patch_verification: strict
+"#;
+        let config = YamlConfig::from_yaml(yaml).unwrap();
+        assert_eq!(
+            config.patch_verification,
+            Some(PatchVerificationMode::Strict)
+        );
+    }
+
+    #[test]
+    fn parses_patch_verification_install_only() {
+        let yaml = r#"
+app_id: test_app
+patch_verification: install_only
+"#;
+        let config = YamlConfig::from_yaml(yaml).unwrap();
+        assert_eq!(
+            config.patch_verification,
+            Some(PatchVerificationMode::InstallOnly)
+        );
+    }
+
+    #[test]
+    fn defaults_to_none_when_not_specified() {
+        let yaml = r#"
+app_id: test_app
+"#;
+        let config = YamlConfig::from_yaml(yaml).unwrap();
+        assert_eq!(config.patch_verification, None);
+        // When unwrapped with default, should be Strict
+        assert_eq!(
+            config.patch_verification.unwrap_or_default(),
+            PatchVerificationMode::Strict
+        );
+    }
+
+    #[test]
+    fn default_verification_mode_is_strict() {
+        assert_eq!(
+            PatchVerificationMode::default(),
+            PatchVerificationMode::Strict
+        );
     }
 }

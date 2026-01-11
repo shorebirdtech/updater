@@ -11,6 +11,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::events::PatchEvent;
+use crate::yaml::PatchVerificationMode;
 
 use super::patch_manager::{ManagePatches, PatchManager};
 use super::{disk_io, PatchInfo};
@@ -87,11 +88,16 @@ impl UpdaterState {
         cache_dir: PathBuf,
         release_version: String,
         patch_public_key: Option<&str>,
+        verification_mode: PatchVerificationMode,
         client_id: String,
     ) -> Self {
         Self {
             cache_dir: cache_dir.clone(),
-            patch_manager: Box::new(PatchManager::new(cache_dir.clone(), patch_public_key)),
+            patch_manager: Box::new(PatchManager::new(
+                cache_dir.clone(),
+                patch_public_key,
+                verification_mode,
+            )),
             serialized_state: SerializedState {
                 client_id: client_id,
                 release_version,
@@ -101,12 +107,20 @@ impl UpdaterState {
     }
 
     /// Loads UpdaterState from disk
-    fn load(cache_dir: &Path, patch_public_key: Option<&str>) -> anyhow::Result<Self> {
+    fn load(
+        cache_dir: &Path,
+        patch_public_key: Option<&str>,
+        verification_mode: PatchVerificationMode,
+    ) -> anyhow::Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
         let serialized_state = disk_io::read(&path)?;
         Ok(UpdaterState {
             cache_dir: cache_dir.to_path_buf(),
-            patch_manager: Box::new(PatchManager::new(cache_dir.to_path_buf(), patch_public_key)),
+            patch_manager: Box::new(PatchManager::new(
+                cache_dir.to_path_buf(),
+                patch_public_key,
+                verification_mode,
+            )),
             serialized_state,
         })
     }
@@ -116,12 +130,14 @@ impl UpdaterState {
         storage_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
+        verification_mode: PatchVerificationMode,
         client_id: String,
     ) -> Self {
         let mut state = Self::new(
             storage_dir.to_owned(),
             release_version.to_owned(),
             patch_public_key,
+            verification_mode,
             client_id,
         );
         if let Err(e) = state.save() {
@@ -136,8 +152,9 @@ impl UpdaterState {
         storage_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
+        verification_mode: PatchVerificationMode,
     ) -> Self {
-        let load_result = Self::load(storage_dir, patch_public_key);
+        let load_result = Self::load(storage_dir, patch_public_key, verification_mode);
         match load_result {
             Ok(loaded) => {
                 if loaded.serialized_state.release_version != release_version {
@@ -150,6 +167,7 @@ impl UpdaterState {
                         storage_dir,
                         release_version,
                         patch_public_key,
+                        verification_mode,
                         loaded.client_id(),
                     );
                 }
@@ -163,6 +181,7 @@ impl UpdaterState {
                     storage_dir,
                     release_version,
                     patch_public_key,
+                    verification_mode,
                     generate_client_id(),
                 )
             }
@@ -326,11 +345,11 @@ mod tests {
         assert!(state.save().is_ok());
 
         let mut state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, &release_version, None);
+            UpdaterState::load_or_new_on_error(&state.cache_dir, &release_version, None, PatchVerificationMode::default());
         assert_eq!(state.next_boot_patch().unwrap().number, 1);
 
         let mut next_version_state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None);
+            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None, PatchVerificationMode::default());
         assert!(next_version_state.next_boot_patch().is_none());
     }
 
@@ -348,8 +367,8 @@ mod tests {
     #[test]
     fn creates_updater_state_with_client_id() {
         let tmp_dir = TempDir::new("example").unwrap();
-        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None);
-        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None);
+        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
+        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
         assert_eq!(
             state.serialized_state.client_id,
             saved_state.serialized_state.client_id
@@ -367,9 +386,10 @@ mod tests {
             &state.cache_dir,
             &state.serialized_state.release_version,
             None,
+            PatchVerificationMode::default(),
         );
 
-        let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None);
+        let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None, PatchVerificationMode::default());
 
         assert_eq!(
             original_loaded.serialized_state.client_id,
@@ -396,7 +416,7 @@ mod tests {
         let new_state_path = new_tmp_dir.path().join(STATE_FILE_NAME);
         std::fs::rename(original_state_path, new_state_path).unwrap();
 
-        let new_state = UpdaterState::load(new_tmp_dir.path(), None).unwrap();
+        let new_state = UpdaterState::load(new_tmp_dir.path(), None, PatchVerificationMode::default()).unwrap();
         assert_eq!(new_state.cache_dir, new_tmp_dir.path());
     }
 
@@ -537,7 +557,7 @@ mod tests {
         let tmp_dir = TempDir::new("example")?;
 
         // Create a new state, add a patch, and save it.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None);
+        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
         let patch = fake_patch(&tmp_dir, 1);
         state.install_patch(&patch, "hash", None)?;
         state.save()?;
@@ -548,7 +568,7 @@ mod tests {
         std::fs::write(&state_file, "corrupt json")?;
 
         // Ensure that, by corrupting the file, we've reset the patches state.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None);
+        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None, PatchVerificationMode::default());
         assert!(state.next_boot_patch().is_none());
 
         Ok(())

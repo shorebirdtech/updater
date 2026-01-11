@@ -149,6 +149,7 @@ where
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification,
         );
         f(&state)
     })
@@ -163,6 +164,7 @@ where
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification,
         );
         f(&mut state)
     })
@@ -212,6 +214,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
             state.record_boot_failure_for_patch(patch.number)?;
@@ -600,6 +603,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification,
         );
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
@@ -641,6 +645,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             &config.storage_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
+            config.patch_verification,
         );
 
         let booting_patch = match state.currently_booting_patch() {
@@ -852,6 +857,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification,
             );
             assert_eq!(state.next_boot_patch().unwrap().number, 1);
             Ok(())
@@ -940,6 +946,39 @@ mod tests {
                 "missing field `app_id`".to_string()
             ))
         );
+    }
+
+    #[serial]
+    #[test]
+    fn init_invalid_patch_verification() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new("example").unwrap();
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        let yaml = r#"
+app_id: test_app
+patch_verification: bogus_mode
+"#;
+        let result = crate::init(
+            crate::AppConfig {
+                app_storage_dir: cache_dir.clone(),
+                code_cache_dir: cache_dir.clone(),
+                release_version: "1.0.0+1".to_string(),
+                original_libapp_paths: vec!["original_libapp_path".to_string()],
+            },
+            Box::new(FakeExternalFileProvider {}),
+            yaml,
+        );
+        match result {
+            Err(crate::InitError::InvalidArgument(field, msg)) => {
+                assert_eq!(field, "yaml");
+                assert!(
+                    msg.contains("unknown variant"),
+                    "Expected 'unknown variant' in error message, got: {}",
+                    msg
+                );
+            }
+            _ => panic!("Expected InvalidArgument error, got: {:?}", result),
+        }
     }
 
     #[serial]
@@ -1115,6 +1154,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification,
             );
             assert_eq!(
                 state.last_successfully_booted_patch().unwrap().number,
@@ -1145,6 +1185,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification,
             );
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
@@ -1188,6 +1229,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification,
             );
 
             state.record_boot_failure_for_patch(1)?;
@@ -1272,6 +1314,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification,
             );
             let fail_event = PatchEvent {
                 app_id: config.app_id.clone(),
@@ -1303,6 +1346,7 @@ mod tests {
                 &config.storage_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
+                config.patch_verification,
             );
             // All 5 events should be cleared, even though only 3 were sent.
             assert_eq!(state.copy_events(10).len(), 0);
