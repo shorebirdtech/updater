@@ -740,15 +740,18 @@ mod add_patch_tests {
     }
 
     #[test]
-    fn succeeds_with_any_signature_if_no_public_key() {
+    fn install_only_succeeds_with_any_signature_if_no_public_key() {
         let temp_dir = TempDir::new("patch_manager").unwrap();
-        // Create a PatchManager without a public key.
-        let mut manager = PatchManager::manager_for_test(&temp_dir);
+        let mut manager = PatchManager::new(
+            temp_dir.path().to_path_buf(),
+            None, // No public key configured
+            PatchVerificationMode::InstallOnly,
+        );
 
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, "patch contents").unwrap();
 
-        // Should succeed even with an invalid signature because no public key is configured
+        // Without a public key, signature verification is skipped even in InstallOnly mode
         let result = manager.add_patch(1, file_path, "hash", Some("not a valid signature"));
         assert!(result.is_ok());
         assert!(manager.next_boot_patch().is_some());
