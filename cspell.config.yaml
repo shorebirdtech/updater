@@ -36,6 +36,7 @@ words:
   - dllexport
   - dlopen
   - EDQUOT
+  - embedders
   - EOCD
   - endtemplate
   - ENOSPC
@@ -70,6 +71,7 @@ words:
   - symbolication
   - unbootable
   - unbooted
+  - usize
   - Verdana
   - vmcode
   - withf
