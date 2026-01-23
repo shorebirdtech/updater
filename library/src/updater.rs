@@ -1785,3 +1785,171 @@ mod check_for_downloadable_update_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod multi_engine_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempdir::TempDir;
+
+    use crate::{
+        report_launch_start, report_launch_success, test_utils::install_fake_patch,
+        updater::tests::init_for_testing, with_mut_state, with_state,
+    };
+
+    /// This test demonstrates what would happen if report_launch_start() is called multiple times.
+    ///
+    /// IMPORTANT: In production, this scenario does NOT occur because:
+    /// - The C++ TryLoadFromPatch() in runtime/shorebird/patch_cache.cc uses std::once_flag
+    /// - This ensures shorebird_report_launch_start() is only called once per process
+    /// - The call happens right before the patched snapshot is actually loaded
+    ///
+    /// This test documents the Rust API behavior in isolation:
+    /// If report_launch_start() IS called multiple times (e.g., from tests or custom embedders):
+    ///
+    /// Scenario:
+    /// 1. Engine A: starts boot (sets currently_booting_patch)
+    /// 2. Engine A: completes boot (clears currently_booting_patch)
+    /// 3. Engine B: starts boot (RE-SETS currently_booting_patch)
+    /// 4. Process is killed before Engine B completes
+    /// 5. On restart, crash recovery sees currently_booting_patch set and marks patch as bad
+    ///
+    /// This would be a FALSE POSITIVE - the patch didn't actually fail.
+    #[serial]
+    #[test]
+    fn multi_engine_false_positive_rollback() -> Result<()> {
+        let tmp_dir = TempDir::new("multi_engine_test").unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        // Install a patch
+        install_fake_patch(1)?;
+
+        // Verify patch is installed and ready to boot
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.currently_booting_patch().is_none());
+            assert!(!state.is_known_bad_patch(1));
+            Ok(())
+        })?;
+
+        // ========================================
+        // Engine A: Full successful boot cycle
+        // ========================================
+        report_launch_start()?;
+
+        with_state(|state| {
+            // currently_booting_patch should be set
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        report_launch_success()?;
+
+        with_state(|state| {
+            // After success, currently_booting_patch should be cleared
+            assert!(state.currently_booting_patch().is_none());
+            // And last_successfully_booted_patch should be set
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            Ok(())
+        })?;
+
+        // ========================================
+        // Engine B: Starts boot but process is killed
+        // ========================================
+        // In real scenario, this is another FlutterEngine in the same process
+        // calling report_launch_start() after Engine A already finished.
+        report_launch_start()?;
+
+        with_state(|state| {
+            // BUG: currently_booting_patch is now set AGAIN!
+            // This is the root cause - Engine B re-set the flag.
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // Process is killed here (Engine B never calls report_launch_success)
+        // We simulate this by reinitializing without completing Engine B's boot.
+
+        // ========================================
+        // New process: Crash recovery kicks in
+        // ========================================
+        init_for_testing(&tmp_dir, None);
+
+        // The patch should NOT be marked as bad (Engine A booted successfully!)
+        // But when report_launch_start() is called multiple times at the Rust level,
+        // the second call re-sets currently_booting_patch, causing a false positive.
+        //
+        // NOTE: The C++ fix in TryLoadFromPatch() uses std::once_flag to prevent
+        // multiple calls, so this scenario cannot happen in production. This test
+        // documents the Rust API behavior when called directly without that guard.
+        with_mut_state(|state| {
+            // When report_launch_start() is called multiple times without a guard,
+            // the patch is incorrectly marked as known bad.
+            assert!(
+                state.is_known_bad_patch(1),
+                "Expected patch to be marked bad when report_launch_start() called twice"
+            );
+
+            // The next_boot_patch is None because patch was marked as bad
+            assert!(
+                state.next_boot_patch().is_none(),
+                "Expected next_boot_patch to be None after patch marked bad"
+            );
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Test that interleaved start/success calls are handled correctly when
+    /// successes come after all starts.
+    ///
+    /// Scenario: start_A, start_B, success_A, [crash]
+    /// This works correctly because success_A clears the flag before the crash.
+    ///
+    /// NOTE: In production, the C++ std::once_flag in TryLoadFromPatch() prevents
+    /// multiple report_launch_start() calls. This test documents Rust API behavior.
+    #[serial]
+    #[test]
+    fn interleaved_boot_calls_success_clears_flag() -> Result<()> {
+        let tmp_dir = TempDir::new("interleaved_test").unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+
+        // start_A
+        report_launch_start()?;
+        // start_B (simulated - same call, re-sets the same flag)
+        report_launch_start()?;
+
+        with_state(|state| {
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // success_A
+        report_launch_success()?;
+
+        with_state(|state| {
+            // Flag is cleared by success_A
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+
+        // Process killed here - success_B never called
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            // This should work correctly because success_A already cleared the flag
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+}
