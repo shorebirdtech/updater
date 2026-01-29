@@ -407,8 +407,8 @@ impl ManagePatches for PatchManager {
         // If a patch was never booted (next_boot_patch != last_booted_patch), we should delete
         // it here before setting next_boot_patch to the new patch.
         if let (Some(last_boot_patch), Some(next_boot_patch)) = (
-            self.patches_state.next_boot_patch.clone(),
             self.patches_state.last_booted_patch.clone(),
+            self.patches_state.next_boot_patch.clone(),
         ) {
             if last_boot_patch.number != next_boot_patch.number {
                 shorebird_info!(
@@ -843,6 +843,39 @@ mod next_boot_patch_tests {
 
         // Verify that we will next attempt to boot from patch 1.
         assert_eq!(manager.next_boot_patch().unwrap().number, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn adding_patch_deletes_unbooted_patch_not_last_booted() -> Result<()> {
+        let temp_dir = TempDir::new("patch_manager")?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Add patch 1 and boot it successfully.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success()?;
+
+        // Add patch 2 (not booted yet).
+        manager.add_patch_for_test(&temp_dir, 2)?;
+
+        let patch_1_artifact = manager.patch_artifact_path(1);
+        let patch_2_artifact = manager.patch_artifact_path(2);
+        assert!(patch_1_artifact.exists());
+        assert!(patch_2_artifact.exists());
+
+        // Add patch 3 — should delete patch 2 (unbooted), NOT patch 1 (last booted).
+        manager.add_patch_for_test(&temp_dir, 3)?;
+
+        assert!(
+            patch_1_artifact.exists(),
+            "Last booted patch 1 artifacts should NOT be deleted"
+        );
+        assert!(
+            !patch_2_artifact.exists(),
+            "Unbooted patch 2 artifacts should be deleted"
+        );
 
         Ok(())
     }
