@@ -1,7 +1,7 @@
 // This file's job is to deal with the update_server and network side
 // of the updater library.
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
@@ -10,6 +10,7 @@ use std::string::ToString;
 
 use crate::config::{current_arch, current_platform, UpdateConfig};
 use crate::events::PatchEvent;
+use crate::file_errors::{FileOperation, IoResultExt};
 
 pub fn patches_check_url(base_url: &str) -> String {
     format!("{base_url}/api/v1/patches/check")
@@ -234,12 +235,14 @@ pub fn download_to_path(
     if let Some(parent) = path.parent() {
         shorebird_debug!("Creating download directory: {:?}", parent);
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("create_dir_all failed for {}", parent.display()))?;
+            .with_file_context(FileOperation::CreateDir, parent)?;
     }
 
     shorebird_info!("Writing patch to: {:?}", path);
-    let mut file = File::create(path)?;
-    file.write_all(&bytes)?;
+    let mut file = File::create(path)
+        .with_file_context(FileOperation::CreateFile, path)?;
+    file.write_all(&bytes)
+        .with_file_context(FileOperation::WriteFile, path)?;
     shorebird_info!("Wrote patch to: {:?}", path);
     Ok(())
 }

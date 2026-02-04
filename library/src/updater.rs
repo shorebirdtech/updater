@@ -6,6 +6,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use crate::file_errors::{FileOperation, IoResultExt};
 use dyn_clone::DynClone;
 
 use crate::cache::{PatchInfo, UpdaterState};
@@ -297,9 +298,11 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
-    let mut file = fs::File::open(path)?;
+    let mut file = fs::File::open(path)
+        .with_file_context(FileOperation::ReadFile, path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
+    std::io::copy(&mut file, &mut hasher)
+        .with_file_context(FileOperation::ReadFile, path)?;
     // Check that the length from copy is the same as the file size?
     let hash = hasher.finalize();
     let hash_matches = hash.as_slice() == expected;
@@ -339,7 +342,8 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
 
 #[cfg(all(not(test), not(target_os = "ios"), not(target_os = "android")))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    let file = fs::File::open(&config.libapp_path)?;
+    let file = fs::File::open(&config.libapp_path)
+        .with_file_context(FileOperation::ReadFile, &config.libapp_path)?;
     Ok(Box::new(file))
 }
 
@@ -520,9 +524,10 @@ where
     shorebird_info!("Inflating patch from {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path)
-            .context(format!("Failed to open patch file: {:?}", patch_path))?,
+            .with_file_context(FileOperation::ReadFile, patch_path)?,
     );
-    let output_file_w = fs::File::create(output_path)?;
+    let output_file_w = fs::File::create(output_path)
+        .with_file_context(FileOperation::CreateFile, output_path)?;
 
     // Set up a pipe to connect the writing from the decompression thread
     // to the reading of the decompressed patch data on this thread.
@@ -542,11 +547,13 @@ where
     });
 
     // Do the patch, using the uncompressed patch data from the pipe.
-    let mut fresh_r = bipatch::Reader::new(patch_r, base_r)?;
+    let mut fresh_r = bipatch::Reader::new(patch_r, base_r)
+        .context("Failed to initialize patch reader")?;
 
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
-    std::io::copy(&mut fresh_r, &mut output_w)?;
+    std::io::copy(&mut fresh_r, &mut output_w)
+        .with_file_context(FileOperation::WriteFile, output_path)?;
     shorebird_info!("Patch successfully applied to {:?}", output_path);
     Ok(())
 }

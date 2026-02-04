@@ -1,6 +1,7 @@
 use super::{disk_io, signing, PatchInfo};
 use crate::yaml::PatchVerificationMode;
 use anyhow::{bail, Context, Result};
+use crate::file_errors::{FileOperation, IoResultExt};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -231,7 +232,8 @@ impl PatchManager {
             );
         }
 
-        let artifact_size_on_disk = std::fs::metadata(&artifact_path)?.len();
+        let artifact_size_on_disk = std::fs::metadata(&artifact_path)
+            .with_file_context(FileOperation::GetMetadata, &artifact_path)?.len();
         if artifact_size_on_disk != patch.size {
             bail!(
                 "Patch {} has size {} on disk, but expected size {}",
@@ -275,7 +277,7 @@ impl PatchManager {
                 shorebird_error!("Failed to delete patch dir {}: {}", patch_dir.display(), e);
                 e
             })
-            .with_context(|| format!("Failed to delete patch dir {}", &patch_dir.display()))
+            .with_file_context(FileOperation::DeleteDir, &patch_dir)
     }
 
     /// Deletes artifacts for the provided bad_patch_number and attempts to set the next_boot_patch to the last
@@ -392,14 +394,17 @@ impl ManagePatches for PatchManager {
 
         let patch_path = self.patch_artifact_path(patch_number);
 
-        std::fs::create_dir_all(self.patch_dir(patch_number))
-            .with_context(|| format!("create_dir_all failed for {}", patch_path.display()))?;
+        let patch_dir = self.patch_dir(patch_number);
+        std::fs::create_dir_all(&patch_dir)
+            .with_file_context(FileOperation::CreateDir, &patch_dir)?;
 
-        std::fs::rename(file_path, &patch_path)?;
+        std::fs::rename(file_path, &patch_path)
+            .with_file_context(FileOperation::RenameFile, file_path)?;
 
         let new_patch = PatchMetadata {
             number: patch_number,
-            size: std::fs::metadata(&patch_path)?.len(),
+            size: std::fs::metadata(&patch_path)
+                .with_file_context(FileOperation::GetMetadata, &patch_path)?.len(),
             hash: hash.to_owned(),
             signature: signature.map(|s| s.to_owned()),
         };
@@ -524,12 +529,9 @@ impl ManagePatches for PatchManager {
     fn reset(&mut self) -> Result<()> {
         self.patches_state = PatchesState::default();
         self.save_patches_state()?;
-        std::fs::remove_dir_all(self.patches_dir()).with_context(|| {
-            format!(
-                "Failed to delete patches dir {}",
-                self.patches_dir().display()
-            )
-        })
+        let patches_dir = self.patches_dir();
+        std::fs::remove_dir_all(&patches_dir)
+            .with_file_context(FileOperation::DeleteDir, &patches_dir)
     }
 }
 

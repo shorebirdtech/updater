@@ -12,6 +12,7 @@ pub mod c_api;
 mod cache;
 mod config;
 mod events;
+mod file_errors;
 mod logging;
 mod network;
 mod time;
