@@ -169,22 +169,162 @@ mod tests {
     use super::*;
     use std::io::{Error, ErrorKind};
 
-    #[test]
-    fn test_permission_denied_message() {
-        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
-        let path = Path::new("/data/data/com.example/cache/test.txt");
-        let message = enhance_io_error(&error, FileOperation::CreateFile, path);
+    // ==================== FileOperation Display Tests ====================
 
-        assert!(message.contains("Failed to create file"));
-        assert!(message.contains("/data/data/com.example/cache/test.txt"));
-        assert!(message.contains("Permission denied"));
-        assert!(message.contains("Possible cause"));
+    #[test]
+    fn test_operation_display_all_variants() {
+        assert_eq!(format!("{}", FileOperation::CreateDir), "create directory");
+        assert_eq!(format!("{}", FileOperation::CreateFile), "create file");
+        assert_eq!(format!("{}", FileOperation::WriteFile), "write to file");
+        assert_eq!(format!("{}", FileOperation::ReadFile), "read file");
+        assert_eq!(format!("{}", FileOperation::DeleteFile), "delete file");
+        assert_eq!(format!("{}", FileOperation::DeleteDir), "delete directory");
+        assert_eq!(format!("{}", FileOperation::RenameFile), "rename/move file");
+        assert_eq!(format!("{}", FileOperation::GetMetadata), "get file metadata");
+    }
+
+    // ==================== enhance_io_error Tests ====================
+
+    #[test]
+    fn test_enhance_io_error_includes_operation_path_and_error() {
+        let error = Error::new(ErrorKind::Other, "some error");
+        let path = Path::new("/some/path/file.txt");
+        let message = enhance_io_error(&error, FileOperation::ReadFile, path);
+
+        assert!(message.contains("Failed to read file"));
+        assert!(message.contains("/some/path/file.txt"));
+        assert!(message.contains("some error"));
     }
 
     #[test]
-    fn test_not_found_message() {
+    fn test_enhance_io_error_no_hint_for_unknown_error() {
+        let error = Error::new(ErrorKind::Other, "unknown error");
+        let path = Path::new("/path/file.txt");
+        let message = enhance_io_error(&error, FileOperation::ReadFile, path);
+
+        // Should not contain "Possible cause" for unknown errors
+        assert!(!message.contains("Possible cause"));
+    }
+
+    // ==================== Permission Denied Tests ====================
+
+    #[test]
+    fn test_permission_denied_create_dir() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/dir");
+        let message = enhance_io_error(&error, FileOperation::CreateDir, path);
+
+        assert!(message.contains("Failed to create directory"));
+        assert!(message.contains("write access"));
+    }
+
+    #[test]
+    fn test_permission_denied_create_file() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/file.txt");
+        let message = enhance_io_error(&error, FileOperation::CreateFile, path);
+
+        assert!(message.contains("Failed to create file"));
+        assert!(message.contains("write access"));
+    }
+
+    #[test]
+    fn test_permission_denied_write_file() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/file.txt");
+        let message = enhance_io_error(&error, FileOperation::WriteFile, path);
+
+        assert!(message.contains("Failed to write to file"));
+        assert!(message.contains("write access"));
+    }
+
+    #[test]
+    fn test_permission_denied_read_file() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/file.txt");
+        let message = enhance_io_error(&error, FileOperation::ReadFile, path);
+
+        assert!(message.contains("Failed to read file"));
+        assert!(message.contains("read access"));
+    }
+
+    #[test]
+    fn test_permission_denied_delete_file() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/file.txt");
+        let message = enhance_io_error(&error, FileOperation::DeleteFile, path);
+
+        assert!(message.contains("Failed to delete file"));
+        assert!(message.contains("permission to delete"));
+    }
+
+    #[test]
+    fn test_permission_denied_delete_dir() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/dir");
+        let message = enhance_io_error(&error, FileOperation::DeleteDir, path);
+
+        assert!(message.contains("Failed to delete directory"));
+        assert!(message.contains("permission to delete"));
+    }
+
+    #[test]
+    fn test_permission_denied_rename_file() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/file.txt");
+        let message = enhance_io_error(&error, FileOperation::RenameFile, path);
+
+        assert!(message.contains("Failed to rename/move file"));
+        assert!(message.contains("permission to move"));
+    }
+
+    #[test]
+    fn test_permission_denied_get_metadata() {
+        let error = Error::new(ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/file.txt");
+        let message = enhance_io_error(&error, FileOperation::GetMetadata, path);
+
+        assert!(message.contains("Failed to get file metadata"));
+        assert!(message.contains("permission to access"));
+        assert!(message.contains("metadata"));
+    }
+
+    // ==================== Not Found Tests ====================
+
+    #[test]
+    fn test_not_found_create_dir() {
         let error = Error::new(ErrorKind::NotFound, "No such file or directory");
-        let path = Path::new("/nonexistent/path/file.txt");
+        let path = Path::new("/nonexistent/parent/newdir");
+        let message = enhance_io_error(&error, FileOperation::CreateDir, path);
+
+        assert!(message.contains("Failed to create directory"));
+        assert!(message.contains("parent directory may not exist"));
+    }
+
+    #[test]
+    fn test_not_found_create_file() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/parent/file.txt");
+        let message = enhance_io_error(&error, FileOperation::CreateFile, path);
+
+        assert!(message.contains("Failed to create file"));
+        assert!(message.contains("parent directory may not exist"));
+    }
+
+    #[test]
+    fn test_not_found_write_file() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/file.txt");
+        let message = enhance_io_error(&error, FileOperation::WriteFile, path);
+
+        assert!(message.contains("Failed to write to file"));
+        assert!(message.contains("parent directory may not exist"));
+    }
+
+    #[test]
+    fn test_not_found_read_file() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/file.txt");
         let message = enhance_io_error(&error, FileOperation::ReadFile, path);
 
         assert!(message.contains("Failed to read file"));
@@ -192,18 +332,183 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_full_message() {
+    fn test_not_found_delete_file() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/file.txt");
+        let message = enhance_io_error(&error, FileOperation::DeleteFile, path);
+
+        assert!(message.contains("Failed to delete file"));
+        assert!(message.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_not_found_delete_dir() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/dir");
+        let message = enhance_io_error(&error, FileOperation::DeleteDir, path);
+
+        assert!(message.contains("Failed to delete directory"));
+        assert!(message.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_not_found_rename_file() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/file.txt");
+        let message = enhance_io_error(&error, FileOperation::RenameFile, path);
+
+        assert!(message.contains("Failed to rename/move file"));
+        assert!(message.contains("source file or destination directory may not exist"));
+    }
+
+    #[test]
+    fn test_not_found_get_metadata() {
+        let error = Error::new(ErrorKind::NotFound, "No such file or directory");
+        let path = Path::new("/nonexistent/file.txt");
+        let message = enhance_io_error(&error, FileOperation::GetMetadata, path);
+
+        assert!(message.contains("Failed to get file metadata"));
+        assert!(message.contains("does not exist"));
+    }
+
+    // ==================== Other Error Kind Tests ====================
+
+    #[test]
+    fn test_already_exists_error() {
+        let error = Error::new(ErrorKind::AlreadyExists, "File exists");
+        let path = Path::new("/existing/file.txt");
+        let message = enhance_io_error(&error, FileOperation::CreateFile, path);
+
+        assert!(message.contains("Failed to create file"));
+        assert!(message.contains("already exists"));
+    }
+
+    #[test]
+    fn test_storage_full_error() {
         let error = Error::new(ErrorKind::StorageFull, "No space left on device");
         let path = Path::new("/data/file.txt");
         let message = enhance_io_error(&error, FileOperation::WriteFile, path);
 
+        assert!(message.contains("Failed to write to file"));
         assert!(message.contains("storage is full"));
+        assert!(message.contains("Free up space"));
     }
 
     #[test]
-    fn test_operation_display() {
-        assert_eq!(format!("{}", FileOperation::CreateDir), "create directory");
-        assert_eq!(format!("{}", FileOperation::WriteFile), "write to file");
-        assert_eq!(format!("{}", FileOperation::RenameFile), "rename/move file");
+    fn test_read_only_filesystem_error() {
+        let error = Error::new(ErrorKind::ReadOnlyFilesystem, "Read-only file system");
+        let path = Path::new("/readonly/file.txt");
+        let message = enhance_io_error(&error, FileOperation::WriteFile, path);
+
+        assert!(message.contains("Failed to write to file"));
+        assert!(message.contains("read-only"));
+    }
+
+    // ==================== OS Error Code Tests ====================
+
+    #[test]
+    fn test_get_os_error_hint_enospc() {
+        // Test the get_os_error_hint function directly for ENOSPC (28)
+        let hint = get_os_error_hint(28);
+        assert!(hint.contains("ENOSPC"));
+        assert!(hint.contains("storage is full"));
+    }
+
+    #[test]
+    fn test_get_os_error_hint_erofs() {
+        // Test the get_os_error_hint function directly for EROFS (30)
+        let hint = get_os_error_hint(30);
+        assert!(hint.contains("EROFS"));
+        assert!(hint.contains("read-only"));
+    }
+
+    #[test]
+    fn test_get_os_error_hint_edquot() {
+        // Test the get_os_error_hint function directly for EDQUOT (122)
+        let hint = get_os_error_hint(122);
+        assert!(hint.contains("EDQUOT"));
+        assert!(hint.contains("quota"));
+    }
+
+    #[test]
+    fn test_get_os_error_hint_unknown_code() {
+        // Unknown error codes should return empty string
+        let hint = get_os_error_hint(9999);
+        assert!(hint.is_empty());
+    }
+
+    #[test]
+    fn test_os_error_unknown_code_in_enhance() {
+        // Use an unlikely error code that won't map to a known ErrorKind
+        let error = Error::from_raw_os_error(9999);
+        let path = Path::new("/data/file.txt");
+        let message = enhance_io_error(&error, FileOperation::WriteFile, path);
+
+        // Should not have a "Possible cause" hint for unknown OS errors
+        assert!(!message.contains("Possible cause"));
+    }
+
+    // ==================== IoResultExt Trait Tests ====================
+
+    #[test]
+    fn test_io_result_ext_ok() {
+        let result: std::io::Result<i32> = Ok(42);
+        let path = Path::new("/some/path");
+
+        let converted = result.with_file_context(FileOperation::ReadFile, path);
+
+        assert!(converted.is_ok());
+        assert_eq!(converted.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_io_result_ext_err() {
+        let result: std::io::Result<i32> =
+            Err(Error::new(ErrorKind::PermissionDenied, "Permission denied"));
+        let path = Path::new("/protected/file.txt");
+
+        let converted = result.with_file_context(FileOperation::ReadFile, path);
+
+        assert!(converted.is_err());
+        let err_string = converted.unwrap_err().to_string();
+        assert!(err_string.contains("Failed to read file"));
+        assert!(err_string.contains("/protected/file.txt"));
+    }
+
+    #[test]
+    fn test_io_result_ext_preserves_error_chain() {
+        let result: std::io::Result<i32> =
+            Err(Error::new(ErrorKind::NotFound, "No such file"));
+        let path = Path::new("/missing/file.txt");
+
+        let converted = result.with_file_context(FileOperation::ReadFile, path);
+        let err = converted.unwrap_err();
+
+        // The error chain should contain both the enhanced message and the original error
+        let err_string = format!("{:?}", err);
+        assert!(err_string.contains("No such file"));
+        assert!(err_string.contains("Failed to read file"));
+    }
+
+    // ==================== FileOperation Debug/Clone Tests ====================
+
+    #[test]
+    fn test_file_operation_debug() {
+        assert_eq!(format!("{:?}", FileOperation::CreateDir), "CreateDir");
+        assert_eq!(format!("{:?}", FileOperation::ReadFile), "ReadFile");
+    }
+
+    #[test]
+    fn test_file_operation_clone() {
+        let op = FileOperation::WriteFile;
+        let cloned = op;
+        assert_eq!(format!("{}", op), format!("{}", cloned));
+    }
+
+    #[test]
+    fn test_file_operation_copy() {
+        let op1 = FileOperation::DeleteDir;
+        let op2 = op1; // Copy
+        assert_eq!(format!("{}", op1), format!("{}", op2));
     }
 }
