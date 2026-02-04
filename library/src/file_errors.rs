@@ -1,6 +1,5 @@
 // This module provides enhanced error messages for file operations.
-// It detects specific error types and provides more helpful context,
-// especially for Android-specific issues like SELinux and Work Profiles.
+// It detects specific error types and provides more helpful context.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -86,40 +85,22 @@ fn get_error_hint(error: &std::io::Error, operation: FileOperation) -> String {
 
 /// Returns hints specific to permission denied errors.
 fn get_permission_denied_hint(operation: FileOperation) -> String {
-    let base_hint = match operation {
+    match operation {
         FileOperation::CreateDir | FileOperation::CreateFile | FileOperation::WriteFile => {
-            "The app may not have write access to this location"
+            "The app may not have write access to this location.".to_string()
         }
         FileOperation::ReadFile => {
-            "The app may not have read access to this file"
+            "The app may not have read access to this file.".to_string()
         }
         FileOperation::DeleteFile | FileOperation::DeleteDir => {
-            "The app may not have permission to delete this item"
+            "The app may not have permission to delete this item.".to_string()
         }
         FileOperation::RenameFile => {
-            "The app may not have permission to move files in this location"
+            "The app may not have permission to move files in this location.".to_string()
         }
         FileOperation::GetMetadata => {
-            "The app may not have permission to access this file's metadata"
+            "The app may not have permission to access this file's metadata.".to_string()
         }
-    };
-
-    // Add Android-specific hints
-    #[cfg(target_os = "android")]
-    {
-        format!(
-            "{}. On Android, this can also be caused by: \
-            (1) SELinux policy restrictions, \
-            (2) the app running in a Work Profile with isolated storage, \
-            (3) MDM/Knox security policies, or \
-            (4) app cloning features (e.g., Dual Messenger).",
-            base_hint
-        )
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        base_hint.to_string()
     }
 }
 
