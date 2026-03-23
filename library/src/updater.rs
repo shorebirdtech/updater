@@ -449,9 +449,11 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         resume_from,
     )?;
 
-    // Update sidecar with the now-known size.
+    // Update sidecar with the now-known total size.
+    // content_length is already the total file size (from Content-Range for
+    // 206, or Content-Length for 200).
     let dl_state = DownloadState {
-        expected_size: dl_result.content_length.map(|cl| cl + resume_from),
+        expected_size: dl_result.content_length,
         ..dl_state
     };
     download_state::write_download_state(&download_path, &dl_state)?;
@@ -459,6 +461,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // Validate download size if Content-Length was provided.
     if let Some(expected) = dl_state.expected_size {
         if dl_result.total_bytes != expected {
+            // Corrupted — clean up so next attempt starts fresh.
+            cleanup_download_artifacts(&download_path);
             bail!(
                 "Download size mismatch: expected {} bytes, got {}",
                 expected,

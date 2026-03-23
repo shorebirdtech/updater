@@ -78,6 +78,8 @@ pub fn patch_check_request_default(
     Ok(parsed)
 }
 
+/// Default download implementation that streams to a file with Range header
+/// support for resuming partial downloads.
 pub fn download_to_path_default(
     url: &str,
     dest: &Path,
@@ -85,35 +87,51 @@ pub fn download_to_path_default(
 ) -> anyhow::Result<DownloadResult> {
     let mut request = ureq::get(url);
     if resume_from > 0 {
-        request = request.header("Range", &format!("bytes={}-", resume_from));
+        request = request.header("Range", &format!("bytes={resume_from}-"));
     }
     let result = request.call();
     let response = handle_network_result(result)?;
+    let status = response.status();
 
-    let content_length = response
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
+    // Determine total file size from headers.
+    let content_length = if status == 206 {
+        // 206: parse total from Content-Range: bytes start-end/total
+        response
+            .headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit('/').next())
+            .and_then(|v| v.parse::<u64>().ok())
+    } else {
+        // 200: Content-Length is the full file size.
+        response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+    };
 
-    let mut file = if resume_from > 0 {
+    // Only resume (append) when the server actually returned 206.
+    // If the server ignored our Range header and returned 200, start fresh.
+    let mut file = if status == 206 && resume_from > 0 {
         let mut f = OpenOptions::new()
             .write(true)
             .open(dest)
             .with_file_context(FileOperation::WriteFile, dest)?;
-        f.seek(SeekFrom::End(0))
+        f.seek(SeekFrom::Start(resume_from))
             .with_file_context(FileOperation::WriteFile, dest)?;
         f
     } else {
+        // Fresh download (200 OK or server ignored Range): create/truncate.
         File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
     };
 
     std::io::copy(&mut response.into_body().as_reader(), &mut file)
         .with_file_context(FileOperation::WriteFile, dest)?;
 
-    let total_bytes = file
-        .seek(SeekFrom::End(0))
-        .with_file_context(FileOperation::ReadFile, dest)?;
+    let total_bytes = std::fs::metadata(dest)
+        .with_file_context(FileOperation::ReadFile, dest)?
+        .len();
 
     Ok(DownloadResult {
         total_bytes,
@@ -287,7 +305,7 @@ pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Res
 }
 
 /// Downloads the file at `url` to `path`, optionally resuming from byte offset
-/// `resume_from`.
+/// `resume_from`. Ensures the parent directory exists before downloading.
 pub fn download_to_path(
     network_hooks: &NetworkHooks,
     url: &str,
@@ -295,6 +313,9 @@ pub fn download_to_path(
     resume_from: u64,
 ) -> anyhow::Result<DownloadResult> {
     shorebird_info!("Downloading patch from: {}", url);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
+    }
     let download_hook = network_hooks.download_to_path_fn;
     let result = download_hook(url, path, resume_from)?;
     shorebird_info!(
