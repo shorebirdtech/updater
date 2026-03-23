@@ -173,7 +173,17 @@ fn parse_content_range_total(headers: &ureq::http::HeaderMap) -> Option<u64> {
 }
 
 #[cfg(test)]
-/// Unit tests can call this to mock out the network calls.
+/// Panicking placeholder for tests that should never reach the download step.
+pub const UNEXPECTED_DOWNLOAD: DownloadToPathFn = |_, _, _| panic!("unexpected download call");
+
+#[cfg(test)]
+/// Panicking placeholder for tests that should never reach the report step.
+pub const UNEXPECTED_REPORT: ReportEventFn = |_, _| panic!("unexpected report event call");
+
+#[cfg(test)]
+/// Unit tests can call this to mock out the network calls. Use
+/// `UNEXPECTED_DOWNLOAD` or `UNEXPECTED_REPORT` for hooks that should
+/// not be called in a given test.
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
     download_to_path_fn: DownloadToPathFn,

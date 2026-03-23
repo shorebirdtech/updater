@@ -390,7 +390,9 @@ pub extern "C" fn shorebird_report_launch_success() {
 mod test {
     use super::*;
     use crate::{
-        network::{testing_set_network_hooks, DownloadResult, PatchCheckResponse},
+        network::{
+            testing_set_network_hooks, DownloadResult, PatchCheckResponse, UNEXPECTED_DOWNLOAD,
+        },
         test_utils::write_fake_apk,
     };
     use anyhow::Ok;
@@ -739,9 +741,7 @@ mod test {
                     rolled_back_patch_numbers: None,
                 })
             },
-            |_url, _dest: &Path, _resume_from: u64| {
-                panic!("download should not be called when no patch is available")
-            },
+            UNEXPECTED_DOWNLOAD,
             |_url, _event| Ok(()),
         );
 
@@ -775,9 +775,7 @@ mod test {
         // set up the network hooks — patch check fails, so download should never be called.
         testing_set_network_hooks(
             |_url, _request| Err(anyhow::anyhow!("Error")),
-            |_url, _dest: &Path, _resume_from: u64| {
-                panic!("download should not be called when patch check fails")
-            },
+            UNEXPECTED_DOWNLOAD,
             |_url, _event| Ok(()),
         );
 
@@ -994,9 +992,7 @@ mod test {
                     rolled_back_patch_numbers: None,
                 })
             },
-            |_url, _dest: &Path, _resume_from: u64| {
-                panic!("download should not be called in this test")
-            },
+            UNEXPECTED_DOWNLOAD,
             |_url, _event| Ok(()),
         );
         {
