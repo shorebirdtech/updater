@@ -440,6 +440,41 @@ mod tests {
     }
 
     #[test]
+    fn handle_download_result_ok() {
+        let http_response = http::response::Builder::new()
+            .status(200)
+            .body("".to_string())
+            .unwrap();
+        let response = reqwest::blocking::Response::from(http_response);
+        assert!(super::handle_download_result(Ok(response)).is_ok());
+    }
+
+    #[test]
+    fn handle_download_result_partial_content() {
+        let http_response = http::response::Builder::new()
+            .status(206)
+            .body("".to_string())
+            .unwrap();
+        let response = reqwest::blocking::Response::from(http_response);
+        assert!(super::handle_download_result(Ok(response)).is_ok());
+    }
+
+    #[test]
+    fn handle_download_result_not_ok() {
+        let http_response = http::response::Builder::new()
+            .status(500)
+            .body("".to_string())
+            .unwrap();
+        let response = reqwest::blocking::Response::from(http_response);
+        let result = super::handle_download_result(Ok(response));
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Request failed with status: 500 Internal Server Error"
+        );
+    }
+
+    #[test]
     fn handle_network_result_ok() {
         let body = ureq::Body::builder()
             .mime_type("text/plain")
