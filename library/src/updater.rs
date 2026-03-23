@@ -1791,6 +1791,77 @@ patch_verification: bogus_mode
     }
 
     #[test]
+    fn compute_resume_offset_mismatched_hash() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, vec![0u8; 500]).unwrap();
+
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "oldhash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Same URL but different hash (patch was re-created) → fresh download.
+        assert_eq!(
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "newhash"),
+            0
+        );
+    }
+
+    #[test]
+    fn compute_resume_offset_mismatched_patch_number() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, vec![0u8; 500]).unwrap();
+
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "somehash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Same URL but different patch number → fresh download.
+        assert_eq!(
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 2, "somehash"),
+            0
+        );
+    }
+
+    #[test]
+    fn compute_resume_offset_corrupt_sidecar() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, vec![0u8; 500]).unwrap();
+
+        // Write garbage to the sidecar file.
+        let sidecar = crate::download_state::sidecar_path(&download_path);
+        fs::write(&sidecar, "not valid json").unwrap();
+
+        // Corrupt sidecar → fresh download.
+        assert_eq!(
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            0
+        );
+    }
+
+    #[test]
     fn compute_resume_offset_empty_file() {
         let tmp = TempDir::new("test").unwrap();
         let download_path = tmp.path().join("downloads/1");
