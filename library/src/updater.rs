@@ -5,12 +5,13 @@ use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
 use crate::file_errors::{FileOperation, IoResultExt};
+use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
+use crate::download_state::{self, DownloadState};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest};
@@ -21,7 +22,7 @@ use crate::yaml::YamlConfig;
 // Expose testing_reset_config for integration tests.
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{DownloadFileFn, Patch, PatchCheckRequestFn};
+pub use crate::network::{DownloadToPathFn, Patch, PatchCheckRequestFn};
 
 #[derive(Debug, PartialEq)]
 pub enum UpdateStatus {
@@ -298,11 +299,9 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
-    let mut file = fs::File::open(path)
-        .with_file_context(FileOperation::ReadFile, path)?;
+    let mut file = fs::File::open(path).with_file_context(FileOperation::ReadFile, path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .with_file_context(FileOperation::ReadFile, path)?;
+    std::io::copy(&mut file, &mut hasher).with_file_context(FileOperation::ReadFile, path)?;
     // Check that the length from copy is the same as the file size?
     let hash = hasher.finalize();
     let hash_matches = hash.as_slice() == expected;
@@ -425,8 +424,48 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     );
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
+
+    // Compute resume offset (checks sidecar for matching URL/patch).
+    let resume_from = compute_resume_offset(&download_path, &patch.download_url, patch.number);
+
+    // Ensure the download directory exists.
+    std::fs::create_dir_all(&download_dir)
+        .with_file_context(FileOperation::CreateDir, &download_dir)?;
+
+    // Write sidecar *before* downloading so we can resume on crash.
+    let dl_state = DownloadState {
+        url: patch.download_url.clone(),
+        patch_number: patch.number,
+        expected_size: None,
+        expected_hash: patch.hash.clone(),
+    };
+    download_state::write_download_state(&download_path, &dl_state)?;
+
     // Consider supporting allowing the system to download for us (e.g. iOS).
-    download_to_path(&config.network_hooks, &patch.download_url, &download_path)?;
+    let dl_result = download_to_path(
+        &config.network_hooks,
+        &patch.download_url,
+        &download_path,
+        resume_from,
+    )?;
+
+    // Update sidecar with the now-known size.
+    let dl_state = DownloadState {
+        expected_size: dl_result.content_length.map(|cl| cl + resume_from),
+        ..dl_state
+    };
+    download_state::write_download_state(&download_path, &dl_state)?;
+
+    // Validate download size if Content-Length was provided.
+    if let Some(expected) = dl_state.expected_size {
+        if dl_result.total_bytes != expected {
+            bail!(
+                "Download size mismatch: expected {} bytes, got {}",
+                expected,
+                dl_result.total_bytes
+            );
+        }
+    }
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
     let patch_base_rs = patch_base(&config)?;
@@ -455,6 +494,9 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             "Patch {} successfully downloaded. It will be launched when the app next restarts.",
             patch.number
         );
+
+        // Clean up download artifacts now that installation succeeded.
+        cleanup_download_artifacts(&download_path);
 
         let client_id = state.client_id();
         std::thread::spawn(move || {
@@ -508,6 +550,44 @@ fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckRe
     }
 
     Ok(ShouldInstallPatchCheckResult::PatchOkToInstall)
+}
+
+/// Determines how many bytes of a prior partial download we can resume from.
+/// Returns 0 if we should start fresh.
+fn compute_resume_offset(download_path: &Path, url: &str, patch_number: usize) -> u64 {
+    // Check for a sidecar file describing a prior download attempt.
+    let prior_state = match download_state::read_download_state(download_path) {
+        Ok(Some(state)) => state,
+        _ => return 0,
+    };
+
+    // Only resume if the URL and patch number match.
+    if prior_state.url != url || prior_state.patch_number != patch_number {
+        shorebird_info!("Download state mismatch, starting fresh.");
+        return 0;
+    }
+
+    // Check that the partial file exists and has some content.
+    match std::fs::metadata(download_path) {
+        Ok(meta) if meta.len() > 0 => {
+            shorebird_info!("Resuming download from byte {}", meta.len());
+            meta.len()
+        }
+        _ => 0,
+    }
+}
+
+/// Removes the compressed download file and its sidecar after a successful
+/// install.
+fn cleanup_download_artifacts(download_path: &Path) {
+    if let Err(e) = download_state::delete_download_state(download_path) {
+        shorebird_error!("Failed to delete download sidecar: {:?}", e);
+    }
+    if download_path.exists() {
+        if let Err(e) = std::fs::remove_file(download_path) {
+            shorebird_error!("Failed to delete download file: {:?}", e);
+        }
+    }
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
@@ -571,11 +651,10 @@ where
     // PipeReader/Writer errors instead of file open errors.
     shorebird_info!("Inflating patch from {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
-        fs::File::open(patch_path)
-            .with_file_context(FileOperation::ReadFile, patch_path)?,
+        fs::File::open(patch_path).with_file_context(FileOperation::ReadFile, patch_path)?,
     );
-    let output_file_w = fs::File::create(output_path)
-        .with_file_context(FileOperation::CreateFile, output_path)?;
+    let output_file_w =
+        fs::File::create(output_path).with_file_context(FileOperation::CreateFile, output_path)?;
 
     // Set up a pipe to connect the writing from the decompression thread
     // to the reading of the decompressed patch data on this thread.
@@ -590,8 +669,8 @@ where
     });
 
     // Do the patch, using the uncompressed patch data from the pipe.
-    let mut fresh_r = bipatch::Reader::new(patch_r, base_r)
-        .context("Failed to initialize patch reader")?;
+    let mut fresh_r =
+        bipatch::Reader::new(patch_r, base_r).context("Failed to initialize patch reader")?;
 
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
@@ -788,6 +867,7 @@ pub fn start_update_thread() {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
+    use std::path::Path;
     use std::{fs, thread, time::Duration};
     use tempfile::TempDir;
 
@@ -1604,13 +1684,18 @@ patch_verification: bogus_mode
                 // If we have not yet finished with the config lock, this test has failed.
                 unreachable!("If the test has not terminated before this, set_config is likely being blocked by a patch check request, which should not happen");
             },
-            download_file_fn: |_url| Ok([].to_vec()),
+            download_to_path_fn: |_url, _dest: &Path, _resume_from: u64| {
+                Ok(crate::network::DownloadResult {
+                    total_bytes: 0,
+                    content_length: None,
+                })
+            },
             report_event_fn: |_url, _event| Ok(()),
         };
 
         testing_set_network_hooks(
             hooks.patch_check_request_fn,
-            hooks.download_file_fn,
+            hooks.download_to_path_fn,
             hooks.report_event_fn,
         );
 

@@ -3,8 +3,8 @@
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::string::ToString;
 
@@ -21,8 +21,18 @@ fn patches_events_url(base_url: &str) -> String {
 }
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
-pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
+pub type DownloadToPathFn =
+    fn(url: &str, dest: &Path, resume_from: u64) -> anyhow::Result<DownloadResult>;
 pub type ReportEventFn = fn(&str, CreatePatchEventRequest) -> anyhow::Result<()>;
+
+/// Result of a download operation.
+#[derive(Debug, Clone)]
+pub struct DownloadResult {
+    /// Total bytes written to the file (including any previously downloaded bytes on resume).
+    pub total_bytes: u64,
+    /// The Content-Length from the server response, if present.
+    pub content_length: Option<u64>,
+}
 
 /// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -30,7 +40,7 @@ pub struct NetworkHooks {
     /// The function to call to send a patch check request.
     pub patch_check_request_fn: PatchCheckRequestFn,
     /// The function to call to download a file.
-    pub download_file_fn: DownloadFileFn,
+    pub download_to_path_fn: DownloadToPathFn,
     /// The function to call to report patch install success.
     pub report_event_fn: ReportEventFn,
 }
@@ -40,7 +50,7 @@ impl core::fmt::Debug for NetworkHooks {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkHooks")
             .field("patch_check_request_fn", &"<fn>")
-            .field("download_file_fn", &"<fn>")
+            .field("download_to_path_fn", &"<fn>")
             .field("report_event_fn", &"<fn>")
             .finish()
     }
@@ -50,7 +60,7 @@ impl Default for NetworkHooks {
     fn default() -> Self {
         Self {
             patch_check_request_fn: patch_check_request_default,
-            download_file_fn: download_file_default,
+            download_to_path_fn: download_to_path_default,
             report_event_fn: report_event_default,
         }
     }
@@ -68,13 +78,47 @@ pub fn patch_check_request_default(
     Ok(parsed)
 }
 
-pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
-    let result = ureq::get(url).call();
+pub fn download_to_path_default(
+    url: &str,
+    dest: &Path,
+    resume_from: u64,
+) -> anyhow::Result<DownloadResult> {
+    let mut request = ureq::get(url);
+    if resume_from > 0 {
+        request = request.header("Range", &format!("bytes={}-", resume_from));
+    }
+    let result = request.call();
     let response = handle_network_result(result)?;
-    let mut bytes = Vec::new();
-    response.into_body().as_reader().read_to_end(&mut bytes)?;
-    // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
-    Ok(bytes)
+
+    let content_length = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+
+    let mut file = if resume_from > 0 {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .open(dest)
+            .with_file_context(FileOperation::WriteFile, dest)?;
+        f.seek(SeekFrom::End(0))
+            .with_file_context(FileOperation::WriteFile, dest)?;
+        f
+    } else {
+        File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
+    };
+
+    std::io::copy(&mut response.into_body().as_reader(), &mut file)
+        .with_file_context(FileOperation::WriteFile, dest)?;
+
+    let total_bytes = file
+        .seek(SeekFrom::End(0))
+        .with_file_context(FileOperation::ReadFile, dest)?;
+
+    Ok(DownloadResult {
+        total_bytes,
+        content_length,
+    })
 }
 
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
@@ -105,18 +149,43 @@ fn handle_network_result(
     }
 }
 
+/// Like handle_network_result, but also accepts 206 Partial Content (for Range
+/// requests).
+fn handle_download_result(
+    result: Result<reqwest::blocking::Response, reqwest::Error>,
+) -> anyhow::Result<reqwest::blocking::Response> {
+    use std::error::Error;
+
+    match result {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT {
+                Ok(response)
+            } else {
+                bail!("Request failed with status: {}", status)
+            }
+        }
+        Err(e) => match e.source() {
+            Some(source) if source.to_string().contains("client error (Connect)") => {
+                bail!("Patch check request failed due to network error. Please check your internet connection.");
+            }
+            _ => bail!(e),
+        },
+    }
+}
+
 #[cfg(test)]
 /// Unit tests can call this to mock out the network calls.
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
-    download_file_fn: DownloadFileFn,
+    download_to_path_fn: DownloadToPathFn,
     report_event_fn: ReportEventFn,
 ) {
     crate::config::with_config_mut(|maybe_config| match maybe_config {
         Some(config) => {
             config.network_hooks = NetworkHooks {
                 patch_check_request_fn,
-                download_file_fn,
+                download_to_path_fn,
                 report_event_fn,
             };
         }
@@ -217,34 +286,23 @@ pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Res
     report_event_fn(url, request)
 }
 
-/// Downloads the file at `url` to `path`.
+/// Downloads the file at `url` to `path`, optionally resuming from byte offset
+/// `resume_from`.
 pub fn download_to_path(
     network_hooks: &NetworkHooks,
     url: &str,
     path: &Path,
-) -> anyhow::Result<()> {
+    resume_from: u64,
+) -> anyhow::Result<DownloadResult> {
     shorebird_info!("Downloading patch from: {}", url);
-    // Download the file at the given url to the given path.
-    let download_file_hook = network_hooks.download_file_fn;
-    let bytes = download_file_hook(url)?;
-    // Ensure the download directory exists.
-    if let Some(parent) = path.parent() {
-        shorebird_debug!("Creating download directory: {:?}", parent);
-        std::fs::create_dir_all(parent)
-            .with_file_context(FileOperation::CreateDir, parent)?;
-    }
-
+    let download_hook = network_hooks.download_to_path_fn;
+    let result = download_hook(url, path, resume_from)?;
     shorebird_info!(
-        "Writing {} bytes to: {:?}",
-        bytes.len(),
-        path
+        "Downloaded patch to: {:?} ({} bytes)",
+        path,
+        result.total_bytes
     );
-    let mut file = File::create(path)
-        .with_file_context(FileOperation::CreateFile, path)?;
-    file.write_all(&bytes)
-        .with_file_context(FileOperation::WriteFile, path)?;
-    shorebird_info!("Wrote {} bytes to: {:?}", bytes.len(), path);
-    Ok(())
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -337,7 +395,7 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        let result = (network_hooks.download_file_fn)("");
+        let result = (network_hooks.download_to_path_fn)("", std::path::Path::new("/tmp/test"), 0);
         assert!(result.is_err());
     }
 
@@ -346,7 +404,7 @@ mod tests {
         let network_hooks = super::NetworkHooks::default();
         let debug = format!("{:?}", network_hooks);
         assert!(debug.contains("patch_check_request_fn"));
-        assert!(debug.contains("download_file_fn"));
+        assert!(debug.contains("download_to_path_fn"));
         assert!(debug.contains("report_event_fn"));
     }
 
