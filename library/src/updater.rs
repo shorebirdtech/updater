@@ -437,6 +437,12 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     std::fs::create_dir_all(&download_dir)
         .with_file_context(FileOperation::CreateDir, &download_dir)?;
 
+    // Clean up any orphaned files in the download directory. We own this
+    // directory entirely, so anything that isn't for the current patch is
+    // stale (e.g. from a prior patch number, a crashed inflate, or a
+    // partial download for a patch that's since been replaced).
+    clean_download_dir(&download_dir, patch.number);
+
     // Write sidecar *before* downloading so we can resume on crash.
     let dl_state = DownloadState {
         url: patch.download_url.clone(),
@@ -593,6 +599,41 @@ fn compute_resume_offset(
             meta.len()
         }
         _ => 0,
+    }
+}
+
+/// Removes everything in `download_dir` except files belonging to
+/// `current_patch_number`. We own this directory entirely, so anything
+/// unrecognized or from a different patch number is safe to delete.
+fn clean_download_dir(download_dir: &Path, current_patch_number: usize) {
+    let entries = match fs::read_dir(download_dir) {
+        Ok(entries) => entries,
+        Err(_) => return, // Directory may not exist yet.
+    };
+
+    let current_prefix = current_patch_number.to_string();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+
+        // Keep files that belong to the current patch:
+        //   "{number}", "{number}.full", "{number}.download.json"
+        if name == current_prefix
+            || name == format!("{current_prefix}.full")
+            || name == format!("{current_prefix}.download.json")
+        {
+            continue;
+        }
+
+        // Everything else is an orphan — delete it.
+        let path = entry.path();
+        if path.is_file() {
+            if let Err(e) = fs::remove_file(&path) {
+                shorebird_error!("Failed to clean up orphaned file {:?}: {:?}", path, e);
+            } else {
+                shorebird_info!("Cleaned up orphaned download file: {:?}", path);
+            }
+        }
     }
 }
 
@@ -1810,6 +1851,49 @@ patch_verification: bogus_mode
         let download_path = tmp.path().join("downloads/1");
         // Should not panic when files don't exist.
         super::cleanup_download_artifacts(&download_path);
+    }
+
+    #[test]
+    fn clean_download_dir_removes_orphans_keeps_current() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_dir = tmp.path().join("downloads");
+        fs::create_dir_all(&download_dir).unwrap();
+
+        // Files for current patch (number 3) — should be kept.
+        fs::write(download_dir.join("3"), b"compressed").unwrap();
+        fs::write(download_dir.join("3.full"), b"inflated").unwrap();
+        fs::write(download_dir.join("3.download.json"), b"{}").unwrap();
+
+        // Files for old patches — should be deleted.
+        fs::write(download_dir.join("1"), b"old compressed").unwrap();
+        fs::write(download_dir.join("1.full"), b"old inflated").unwrap();
+        fs::write(download_dir.join("1.download.json"), b"{}").unwrap();
+        fs::write(download_dir.join("2"), b"old compressed").unwrap();
+
+        // Unrecognized file — should be deleted.
+        fs::write(download_dir.join("garbage.tmp"), b"junk").unwrap();
+
+        super::clean_download_dir(&download_dir, 3);
+
+        // Current patch files preserved.
+        assert!(download_dir.join("3").exists());
+        assert!(download_dir.join("3.full").exists());
+        assert!(download_dir.join("3.download.json").exists());
+
+        // Old and unrecognized files removed.
+        assert!(!download_dir.join("1").exists());
+        assert!(!download_dir.join("1.full").exists());
+        assert!(!download_dir.join("1.download.json").exists());
+        assert!(!download_dir.join("2").exists());
+        assert!(!download_dir.join("garbage.tmp").exists());
+    }
+
+    #[test]
+    fn clean_download_dir_noop_when_dir_missing() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_dir = tmp.path().join("nonexistent");
+        // Should not panic.
+        super::clean_download_dir(&download_dir, 1);
     }
 
     #[serial]
