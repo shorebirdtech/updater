@@ -1726,7 +1726,7 @@ patch_verification: bogus_mode
 
         // No sidecar, no partial file → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
             0
         );
     }
@@ -1747,14 +1747,14 @@ patch_verification: bogus_mode
                 url: "http://example.com/patch".to_string(),
                 patch_number: 1,
                 expected_size: Some(1000),
-                expected_hash: "somehash".to_string(),
+                expected_hash: "abc123".to_string(),
             },
         )
         .unwrap();
 
         // Should resume from 500 bytes.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
             500
         );
     }
@@ -1773,7 +1773,7 @@ patch_verification: bogus_mode
                 url: "http://example.com/old-patch".to_string(),
                 patch_number: 1,
                 expected_size: None,
-                expected_hash: "somehash".to_string(),
+                expected_hash: "abc123".to_string(),
             },
         )
         .unwrap();
@@ -1784,7 +1784,7 @@ patch_verification: bogus_mode
                 &download_path,
                 "http://example.com/new-patch",
                 1,
-                "somehash"
+                "abc123"
             ),
             0
         );
@@ -1804,14 +1804,14 @@ patch_verification: bogus_mode
                 url: "http://example.com/patch".to_string(),
                 patch_number: 1,
                 expected_size: None,
-                expected_hash: "oldhash".to_string(),
+                expected_hash: "hash_old".to_string(),
             },
         )
         .unwrap();
 
         // Same URL but different hash (patch was re-created) → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "newhash"),
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "hash_new"),
             0
         );
     }
@@ -1830,14 +1830,14 @@ patch_verification: bogus_mode
                 url: "http://example.com/patch".to_string(),
                 patch_number: 1,
                 expected_size: None,
-                expected_hash: "somehash".to_string(),
+                expected_hash: "abc123".to_string(),
             },
         )
         .unwrap();
 
         // Same URL but different patch number → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 2, "somehash"),
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 2, "abc123"),
             0
         );
     }
@@ -1856,7 +1856,7 @@ patch_verification: bogus_mode
 
         // Corrupt sidecar → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
             0
         );
     }
@@ -1876,14 +1876,14 @@ patch_verification: bogus_mode
                 url: "http://example.com/patch".to_string(),
                 patch_number: 1,
                 expected_size: None,
-                expected_hash: "somehash".to_string(),
+                expected_hash: "abc123".to_string(),
             },
         )
         .unwrap();
 
         // Empty file → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
             0
         );
     }
@@ -1901,7 +1901,7 @@ patch_verification: bogus_mode
                 url: "http://example.com/patch".to_string(),
                 patch_number: 1,
                 expected_size: None,
-                expected_hash: "somehash".to_string(),
+                expected_hash: "abc123".to_string(),
             },
         )
         .unwrap();
@@ -2042,7 +2042,7 @@ patch_verification: bogus_mode
                     patch_available: true,
                     patch: Some(Patch {
                         number: 1,
-                        hash: "somehash".to_string(),
+                        hash: "abc123".to_string(),
                         download_url: "http://example.com/patch/1".to_string(),
                         hash_signature: None,
                     }),
@@ -2282,7 +2282,7 @@ patch_verification: bogus_mode
                 url: "http://old-cdn.example.com/patch/1".to_string(),
                 patch_number: 1,
                 expected_size: None,
-                expected_hash: "oldhash".to_string(),
+                expected_hash: "hash_old".to_string(),
             },
         )
         .unwrap();
