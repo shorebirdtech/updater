@@ -425,8 +425,13 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
 
-    // Compute resume offset (checks sidecar for matching URL/patch).
-    let resume_from = compute_resume_offset(&download_path, &patch.download_url, patch.number);
+    // Compute resume offset (checks sidecar for matching URL/patch/hash).
+    let resume_from = compute_resume_offset(
+        &download_path,
+        &patch.download_url,
+        patch.number,
+        &patch.hash,
+    );
 
     // Ensure the download directory exists.
     std::fs::create_dir_all(&download_dir)
@@ -437,6 +442,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         url: patch.download_url.clone(),
         patch_number: patch.number,
         expected_size: None,
+        expected_hash: patch.hash.clone(),
     };
     download_state::write_download_state(&download_path, &dl_state)?;
 
@@ -557,15 +563,25 @@ fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckRe
 
 /// Determines how many bytes of a prior partial download we can resume from.
 /// Returns 0 if we should start fresh.
-fn compute_resume_offset(download_path: &Path, url: &str, patch_number: usize) -> u64 {
+fn compute_resume_offset(
+    download_path: &Path,
+    url: &str,
+    patch_number: usize,
+    expected_hash: &str,
+) -> u64 {
     // Check for a sidecar file describing a prior download attempt.
     let prior_state = match download_state::read_download_state(download_path) {
         Ok(Some(state)) => state,
         _ => return 0,
     };
 
-    // Only resume if the URL and patch number match.
-    if prior_state.url != url || prior_state.patch_number != patch_number {
+    // Only resume if URL, patch number, and hash all match. The hash check
+    // catches the case where a patch is deleted and re-added with the same
+    // number — the URL might stay the same but the content differs.
+    if prior_state.url != url
+        || prior_state.patch_number != patch_number
+        || prior_state.expected_hash != expected_hash
+    {
         shorebird_info!("Download state mismatch, starting fresh.");
         return 0;
     }
@@ -1659,6 +1675,362 @@ patch_verification: bogus_mode
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn compute_resume_offset_no_sidecar() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        // No sidecar, no partial file → fresh download.
+        assert_eq!(
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            0
+        );
+    }
+
+    #[test]
+    fn compute_resume_offset_matching_sidecar() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        // Write partial file.
+        fs::write(&download_path, vec![0u8; 500]).unwrap();
+
+        // Write matching sidecar.
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch".to_string(),
+                patch_number: 1,
+                expected_size: Some(1000),
+                expected_hash: "somehash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Should resume from 500 bytes.
+        assert_eq!(
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            500
+        );
+    }
+
+    #[test]
+    fn compute_resume_offset_mismatched_url() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, vec![0u8; 500]).unwrap();
+
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/old-patch".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "somehash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Different URL → fresh download.
+        assert_eq!(
+            super::compute_resume_offset(
+                &download_path,
+                "http://example.com/new-patch",
+                1,
+                "somehash"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn compute_resume_offset_empty_file() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        // Write empty file.
+        fs::write(&download_path, []).unwrap();
+
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "somehash".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Empty file → fresh download.
+        assert_eq!(
+            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "somehash"),
+            0
+        );
+    }
+
+    #[test]
+    fn cleanup_download_artifacts_removes_file_and_sidecar() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, b"partial data").unwrap();
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "somehash".to_string(),
+            },
+        )
+        .unwrap();
+
+        let sidecar = crate::download_state::sidecar_path(&download_path);
+        assert!(download_path.exists());
+        assert!(sidecar.exists());
+
+        super::cleanup_download_artifacts(&download_path);
+
+        assert!(!download_path.exists());
+        assert!(!sidecar.exists());
+    }
+
+    #[test]
+    fn cleanup_download_artifacts_noop_when_missing() {
+        let tmp = TempDir::new("test").unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        // Should not panic when files don't exist.
+        super::cleanup_download_artifacts(&download_path);
+    }
+
+    #[serial]
+    #[test]
+    fn successful_update_cleans_up_download_artifacts() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new();
+        let download_url = format!("{}/patch/1", server.url());
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: 1,
+                download_url: download_url.to_string(),
+                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
+                    .to_string(),
+                hash_signature: None,
+            }),
+            rolled_back_patch_numbers: None,
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        let _ = server
+            .mock("GET", "/patch/1")
+            .with_status(200)
+            .with_body(
+                // Generated by `string_patch "hello world" "hello tests"`
+                [
+                    40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0,
+                    0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
+                ],
+            )
+            .create();
+        let _ = server
+            .mock("POST", "/api/v1/patches/events")
+            .with_status(201)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        let result = super::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        // After successful install, compressed download and sidecar should be cleaned up.
+        let download_path = tmp_dir.path().join("downloads/1");
+        let sidecar_path = crate::download_state::sidecar_path(&download_path);
+        assert!(
+            !download_path.exists(),
+            "compressed download should be deleted"
+        );
+        assert!(!sidecar_path.exists(), "sidecar should be deleted");
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn update_resumes_partial_download() -> anyhow::Result<()> {
+        // This test verifies that if a partial download + sidecar exist from a
+        // prior attempt, the updater sends a Range header to resume.
+        let mut server = mockito::Server::new();
+        let download_url = format!("{}/patch/1", server.url());
+        // Generated by `string_patch "hello world" "hello tests"`
+        let patch_bytes: Vec<u8> = vec![
+            40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0,
+            5, 116, 101, 115, 116, 115, 0,
+        ];
+        let split_at = 10;
+        let first_part = &patch_bytes[..split_at];
+        let second_part = &patch_bytes[split_at..];
+
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: 1,
+                download_url: download_url.to_string(),
+                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
+                    .to_string(),
+                hash_signature: None,
+            }),
+            rolled_back_patch_numbers: None,
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(&check_response_body)
+            .create();
+        // Serve only the remaining bytes with 206 and Content-Range.
+        let _ = server
+            .mock("GET", "/patch/1")
+            .match_header("Range", format!("bytes={split_at}-").as_str())
+            .with_status(206)
+            .with_header(
+                "Content-Range",
+                &format!(
+                    "bytes {}-{}/{}",
+                    split_at,
+                    patch_bytes.len() - 1,
+                    patch_bytes.len()
+                ),
+            )
+            .with_body(second_part)
+            .create();
+        let _ = server
+            .mock("POST", "/api/v1/patches/events")
+            .with_status(201)
+            .create();
+
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Simulate a prior partial download: write the first 10 bytes + sidecar.
+        let download_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&download_dir).unwrap();
+        let download_path = download_dir.join("1");
+        fs::write(&download_path, first_part).unwrap();
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: download_url.to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
+                    .to_string(),
+            },
+        )
+        .unwrap();
+
+        // Run update — should resume from byte 10.
+        let result = super::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        // Verify the patched file was written correctly.
+        crate::updater::with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().unwrap().number, 1);
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn update_starts_fresh_when_url_changes() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new();
+        let download_url = format!("{}/patch/1", server.url());
+        let patch_bytes: Vec<u8> = vec![
+            40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 6, 0, 0,
+            0, 0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
+        ];
+        let check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: 1,
+                download_url: download_url.to_string(),
+                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
+                    .to_string(),
+                hash_signature: None,
+            }),
+            rolled_back_patch_numbers: None,
+        };
+        let check_response_body = serde_json::to_string(&check_response).unwrap();
+        let _ = server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(200)
+            .with_body(check_response_body)
+            .create();
+        // Full download (200), no Range header expected since URL changed.
+        let _ = server
+            .mock("GET", "/patch/1")
+            .with_status(200)
+            .with_body(
+                // Generated by `string_patch "hello world" "hello tests"`
+                [
+                    40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0,
+                    0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
+                ],
+            )
+            .create();
+        let _ = server
+            .mock("POST", "/api/v1/patches/events")
+            .with_status(201)
+            .create();
+        let tmp_dir = TempDir::new("example").unwrap();
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Simulate prior partial download with a DIFFERENT URL.
+        let download_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&download_dir).unwrap();
+        let download_path = download_dir.join("1");
+        fs::write(&download_path, b"stale data from old url").unwrap();
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://old-cdn.example.com/patch/1".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: "oldhash".to_string(),
+            },
+        )
+        .unwrap();
+
+        let result = super::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        Ok(())
     }
 
     #[serial]

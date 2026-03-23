@@ -19,6 +19,10 @@ pub struct DownloadState {
     /// Expected total file size from Content-Length/Content-Range (if known
     /// from a prior download attempt). Used for post-download validation.
     pub expected_size: Option<u64>,
+    /// Hash of the inflated patch from the server response. Checked on resume
+    /// to catch the case where a patch is deleted and re-added with the same
+    /// number but different content (URL may stay the same but hash changes).
+    pub expected_hash: String,
 }
 
 /// Returns the sidecar path for a given download path.
@@ -71,6 +75,7 @@ mod tests {
             url: "https://example.com/patch/1".to_string(),
             patch_number: 1,
             expected_size: Some(12345),
+            expected_hash: "abc123".to_string(),
         };
 
         write_download_state(&download_path, &state).unwrap();
@@ -95,6 +100,7 @@ mod tests {
             url: "https://example.com/patch/1".to_string(),
             patch_number: 1,
             expected_size: None,
+            expected_hash: "abc".to_string(),
         };
 
         write_download_state(&download_path, &state).unwrap();

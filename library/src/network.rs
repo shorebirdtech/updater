@@ -95,13 +95,7 @@ pub fn download_to_path_default(
 
     // Determine total file size from headers.
     let content_length = if status == 206 {
-        // 206: parse total from Content-Range: bytes start-end/total
-        response
-            .headers()
-            .get("content-range")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.rsplit('/').next())
-            .and_then(|v| v.parse::<u64>().ok())
+        parse_content_range_total(response.headers())
     } else {
         // 200: Content-Length is the full file size.
         response
@@ -167,29 +161,15 @@ fn handle_network_result(
     }
 }
 
-/// Like handle_network_result, but also accepts 206 Partial Content (for Range
-/// requests).
-fn handle_download_result(
-    result: Result<reqwest::blocking::Response, reqwest::Error>,
-) -> anyhow::Result<reqwest::blocking::Response> {
-    use std::error::Error;
-
-    match result {
-        Ok(response) => {
-            let status = response.status();
-            if status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT {
-                Ok(response)
-            } else {
-                bail!("Request failed with status: {}", status)
-            }
-        }
-        Err(e) => match e.source() {
-            Some(source) if source.to_string().contains("client error (Connect)") => {
-                bail!("Patch check request failed due to network error. Please check your internet connection.");
-            }
-            _ => bail!(e),
-        },
-    }
+/// Parses the total file size from a Content-Range header.
+/// Expected format: `bytes start-end/total` (e.g. `bytes 100-199/1000`).
+/// Returns `None` if the header is missing, malformed, or the total is `*`.
+fn parse_content_range_total(headers: &ureq::http::HeaderMap) -> Option<u64> {
+    headers
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit('/').next())
+        .and_then(|v| v.parse::<u64>().ok())
 }
 
 #[cfg(test)]
@@ -427,6 +407,26 @@ mod tests {
         assert!(debug.contains("patch_check_request_fn"));
         assert!(debug.contains("download_to_path_fn"));
         assert!(debug.contains("report_event_fn"));
+    }
+
+    #[test]
+    fn parse_content_range_total_valid() {
+        let mut headers = ureq::http::HeaderMap::new();
+        headers.insert("content-range", "bytes 100-199/1000".parse().unwrap());
+        assert_eq!(super::parse_content_range_total(&headers), Some(1000));
+    }
+
+    #[test]
+    fn parse_content_range_total_missing() {
+        let headers = ureq::http::HeaderMap::new();
+        assert_eq!(super::parse_content_range_total(&headers), None);
+    }
+
+    #[test]
+    fn parse_content_range_total_unknown_size() {
+        let mut headers = ureq::http::HeaderMap::new();
+        headers.insert("content-range", "bytes 100-199/*".parse().unwrap());
+        assert_eq!(super::parse_content_range_total(&headers), None);
     }
 
     #[test]
