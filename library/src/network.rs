@@ -107,9 +107,6 @@ pub fn download_to_path_default(
 
     // Only resume (append) when the server actually returned 206.
     // If the server ignored our Range header and returned 200, start fresh.
-    // TODO: FileOperation has no SeekFile variant, so we reuse WriteFile for
-    // the seek context below. Consider adding SeekFile to FileOperation so
-    // error messages distinguish "failed to seek" from "failed to write".
     let mut file = if status == 206 && resume_from > 0 {
         let mut f = OpenOptions::new()
             .write(true)
