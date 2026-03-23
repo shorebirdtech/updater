@@ -10,15 +10,15 @@ use crate::file_errors::{FileOperation, IoResultExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DownloadState {
-    /// The URL this download was started from.
+    /// The URL this download was started from. Used to decide whether a
+    /// partial file on disk matches the current server response — if the URL
+    /// changed, we discard and start fresh.
     pub url: String,
     /// The patch number being downloaded.
     pub patch_number: usize,
-    /// Expected total size from Content-Length (if known from a prior attempt).
+    /// Expected total file size from Content-Length/Content-Range (if known
+    /// from a prior download attempt). Used for post-download validation.
     pub expected_size: Option<u64>,
-    /// Hash of the *inflated* file from the server response. Stored here so
-    /// that resume logic can verify we're resuming the same patch.
-    pub expected_hash: String,
 }
 
 /// Returns the sidecar path for a given download path.
@@ -71,7 +71,6 @@ mod tests {
             url: "https://example.com/patch/1".to_string(),
             patch_number: 1,
             expected_size: Some(12345),
-            expected_hash: "abc123".to_string(),
         };
 
         write_download_state(&download_path, &state).unwrap();
@@ -96,7 +95,6 @@ mod tests {
             url: "https://example.com/patch/1".to_string(),
             patch_number: 1,
             expected_size: None,
-            expected_hash: "abc".to_string(),
         };
 
         write_download_state(&download_path, &state).unwrap();

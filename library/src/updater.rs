@@ -437,7 +437,6 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         url: patch.download_url.clone(),
         patch_number: patch.number,
         expected_size: None,
-        expected_hash: patch.hash.clone(),
     };
     download_state::write_download_state(&download_path, &dl_state)?;
 
