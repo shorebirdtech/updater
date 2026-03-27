@@ -509,6 +509,45 @@ pub fn update(channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
     with_updater_thread_lock(|lock_state| update_internal(lock_state, channel))
 }
 
+/// The first 4 bytes of any zstd compressed frame.
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Validates that a downloaded patch file is a non-empty, valid zstd archive.
+fn validate_compressed_patch(patch_path: &Path) -> anyhow::Result<()> {
+    let metadata = fs::metadata(patch_path)
+        .with_file_context(FileOperation::GetMetadata, patch_path)?;
+    let size = metadata.len();
+    if size == 0 {
+        bail!(
+            "Downloaded patch file is empty: {:?}",
+            patch_path
+        );
+    }
+    // A valid zstd frame is at least 4 bytes (magic number).
+    if size < 4 {
+        bail!(
+            "Downloaded patch file is too small ({} bytes) to be a valid zstd archive: {:?}",
+            size,
+            patch_path
+        );
+    }
+    let mut file = fs::File::open(patch_path)
+        .with_file_context(FileOperation::ReadFile, patch_path)?;
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic)
+        .with_file_context(FileOperation::ReadFile, patch_path)?;
+    if magic != ZSTD_MAGIC {
+        bail!(
+            "Downloaded patch file does not have valid zstd magic bytes \
+            (expected {:02x?}, got {:02x?}). The download may be corrupt: {:?}",
+            ZSTD_MAGIC,
+            magic,
+            patch_path
+        );
+    }
+    Ok(())
+}
+
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
@@ -518,6 +557,9 @@ where
     use comde::de::Decompressor;
     use comde::zstd::ZstdDecompressor;
     use std::io::{BufReader, BufWriter};
+
+    // Validate the compressed patch before attempting decompression.
+    validate_compressed_patch(patch_path)?;
 
     // Open all our files first for error clarity.  Otherwise we might see
     // PipeReader/Writer errors instead of file open errors.
@@ -537,13 +579,8 @@ where
     // Spawn a thread to run the decompression in parallel to the patching.
     // decompress.copy will block on the pipe being full (I think) and then
     // when it returns the thread will exit.
-    std::thread::spawn(move || {
-        // If this thread fails, undoubtedly the main thread will fail too.
-        // Most important is to not crash.
-        let result = decompress.copy(compressed_patch_r, patch_w);
-        if let Err(err) = result {
-            shorebird_error!("Decompression thread failed: {}", err);
-        }
+    let decompress_handle = std::thread::spawn(move || {
+        decompress.copy(compressed_patch_r, patch_w)
     });
 
     // Do the patch, using the uncompressed patch data from the pipe.
@@ -552,8 +589,30 @@ where
 
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
-    std::io::copy(&mut fresh_r, &mut output_w)
-        .with_file_context(FileOperation::WriteFile, output_path)?;
+    let patch_result = std::io::copy(&mut fresh_r, &mut output_w)
+        .with_file_context(FileOperation::WriteFile, output_path);
+
+    // Drop the reader side of the pipe before joining the decompression
+    // thread. If patching failed, the decompression thread may be blocked
+    // writing to the pipe (bounded buffer). Dropping the reader unblocks it
+    // with a broken-pipe error so the join won't deadlock.
+    drop(fresh_r);
+
+    // Always join the decompression thread to get its result.
+    let decompress_result = decompress_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("Decompression thread panicked"))?;
+
+    // If decompression failed, report that as the primary error since it is
+    // the root cause (the patching thread fails as a side-effect when the
+    // pipe writer is dropped).
+    if let Err(decompress_err) = decompress_result {
+        return Err(decompress_err).context("Decompression of patch failed");
+    }
+
+    // If decompression succeeded but patching failed, report the patch error.
+    patch_result?;
+
     shorebird_info!("Patch successfully applied to {:?}", output_path);
     Ok(())
 }
@@ -1206,6 +1265,66 @@ patch_verification: bogus_mode
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn validate_compressed_patch_rejects_empty_file() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let patch_path = tmp_dir.path().join("empty.patch");
+        fs::write(&patch_path, b"").unwrap();
+
+        let err = super::validate_compressed_patch(&patch_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("empty"),
+            "Expected 'empty' in error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_compressed_patch_rejects_too_small_file() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let patch_path = tmp_dir.path().join("small.patch");
+        fs::write(&patch_path, b"abc").unwrap();
+
+        let err = super::validate_compressed_patch(&patch_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("too small"),
+            "Expected 'too small' in error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_compressed_patch_rejects_bad_magic() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let patch_path = tmp_dir.path().join("bad_magic.patch");
+        fs::write(&patch_path, b"not_zstd_data_here").unwrap();
+
+        let err = super::validate_compressed_patch(&patch_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("valid zstd magic bytes"),
+            "Expected 'valid zstd magic bytes' in error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_compressed_patch_accepts_valid_zstd_magic() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let patch_path = tmp_dir.path().join("valid.patch");
+        // Write zstd magic bytes followed by some data
+        let mut data = vec![0x28, 0xB5, 0x2F, 0xFD];
+        data.extend_from_slice(b"some_compressed_data");
+        fs::write(&patch_path, &data).unwrap();
+
+        assert!(super::validate_compressed_patch(&patch_path).is_ok());
     }
 
     #[serial]
