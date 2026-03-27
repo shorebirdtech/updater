@@ -1336,6 +1336,50 @@ patch_verification: bogus_mode
         assert!(super::validate_compressed_patch(&patch_path).is_ok());
     }
 
+    #[test]
+    fn inflate_fails_with_corrupt_zstd_data() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let patch_path = tmp_dir.path().join("corrupt.patch");
+        // Valid zstd magic but garbage content — passes validation but
+        // fails during decompression or patch reading.
+        let mut data = vec![0x28, 0xB5, 0x2F, 0xFD];
+        data.extend_from_slice(b"this is not valid zstd compressed data");
+        fs::write(&patch_path, &data).unwrap();
+
+        let output_path = tmp_dir.path().join("output");
+        let base = std::io::Cursor::new(b"base content".to_vec());
+
+        let err = super::inflate(&patch_path, base, &output_path).unwrap_err();
+        let err_chain = format!("{:#}", err);
+        // The error should come from either decompression or patch init —
+        // not the old cryptic "pipe reader has been dropped" message.
+        assert!(
+            err_chain.contains("Decompression of patch failed")
+                || err_chain.contains("Failed to initialize patch reader"),
+            "Expected decompression or patch init error, got: {}",
+            err_chain
+        );
+    }
+
+    #[test]
+    fn inflate_rejects_invalid_magic() {
+        let tmp_dir = TempDir::new("example").unwrap();
+        let patch_path = tmp_dir.path().join("bad.patch");
+        fs::write(&patch_path, b"not zstd at all").unwrap();
+
+        let output_path = tmp_dir.path().join("output");
+        let base = std::io::Cursor::new(b"base content".to_vec());
+
+        let err = super::inflate(&patch_path, base, &output_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("valid zstd magic bytes"),
+            "Expected validation error, got: {}",
+            err
+        );
+    }
+
     #[serial]
     #[test]
     fn does_not_download_known_bad_patch() -> anyhow::Result<()> {
