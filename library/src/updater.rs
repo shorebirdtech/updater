@@ -592,10 +592,13 @@ where
     let patch_result = std::io::copy(&mut fresh_r, &mut output_w)
         .with_file_context(FileOperation::WriteFile, output_path);
 
-    // Drop the reader side of the pipe before joining the decompression
-    // thread. If patching failed, the decompression thread may be blocked
-    // writing to the pipe (bounded buffer). Dropping the reader unblocks it
-    // with a broken-pipe error so the join won't deadlock.
+    // IMPORTANT: Drop the reader side of the pipe before joining the
+    // decompression thread. The pipe has a bounded buffer — if patching
+    // failed, the decompression thread may be blocked on a write waiting
+    // for the reader to drain data. Without this drop, join() below would
+    // wait for the decompression thread forever (deadlock). Dropping the
+    // reader causes the decompression thread's write to fail with a
+    // broken-pipe error, allowing it to exit so join() can return.
     drop(fresh_r);
 
     // Always join the decompression thread to get its result.
