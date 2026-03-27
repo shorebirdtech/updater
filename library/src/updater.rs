@@ -1362,6 +1362,50 @@ patch_verification: bogus_mode
     }
 
     #[test]
+    fn inflate_reports_decompression_error_as_primary() {
+        use comde::com::Compressor;
+        use comde::zstd::ZstdCompressor;
+
+        let tmp_dir = TempDir::new("example").unwrap();
+
+        // Build a fake uncompressed patch that starts with a valid bipatch
+        // header (magic 0xB1DF, version 0x1000 as little-endian u32s) so
+        // that bipatch::Reader::new succeeds.
+        let mut uncompressed = Vec::new();
+        uncompressed.extend_from_slice(&0xB1DFu32.to_le_bytes()); // bipatch magic
+        uncompressed.extend_from_slice(&0x1000u32.to_le_bytes()); // bipatch version
+        uncompressed.extend_from_slice(&vec![0u8; 1024]);         // padding
+
+        // Compress the valid data into one complete zstd frame.
+        let mut compressed = std::io::Cursor::new(Vec::new());
+        let compressor = ZstdCompressor::new();
+        compressor
+            .compress(&mut compressed, &mut std::io::Cursor::new(&uncompressed))
+            .unwrap();
+        let mut compressed = compressed.into_inner();
+
+        // Append a second, corrupted zstd frame. The decompressor will
+        // successfully decompress the first frame (delivering the bipatch
+        // header so Reader::new succeeds), then fail on this corrupt frame.
+        compressed.extend_from_slice(&[0x28, 0xB5, 0x2F, 0xFD]); // zstd magic
+        compressed.extend_from_slice(&[0xFF; 64]);                 // garbage
+
+        let patch_path = tmp_dir.path().join("corrupt_frame.patch");
+        fs::write(&patch_path, &compressed).unwrap();
+
+        let output_path = tmp_dir.path().join("output");
+        let base = std::io::Cursor::new(b"base content".to_vec());
+
+        let err = super::inflate(&patch_path, base, &output_path).unwrap_err();
+        let err_chain = format!("{:#}", err);
+        assert!(
+            err_chain.contains("Decompression of patch failed"),
+            "Expected decompression error as primary cause, got: {}",
+            err_chain
+        );
+    }
+
+    #[test]
     fn inflate_rejects_invalid_magic() {
         let tmp_dir = TempDir::new("example").unwrap();
         let patch_path = tmp_dir.path().join("bad.patch");
