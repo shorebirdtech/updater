@@ -238,12 +238,16 @@ pub fn download_to_path(
             .with_file_context(FileOperation::CreateDir, parent)?;
     }
 
-    shorebird_info!("Writing patch to: {:?}", path);
+    shorebird_info!(
+        "Writing {} bytes to: {:?}",
+        bytes.len(),
+        path
+    );
     let mut file = File::create(path)
         .with_file_context(FileOperation::CreateFile, path)?;
     file.write_all(&bytes)
         .with_file_context(FileOperation::WriteFile, path)?;
-    shorebird_info!("Wrote patch to: {:?}", path);
+    shorebird_info!("Wrote {} bytes to: {:?}", bytes.len(), path);
     Ok(())
 }
 
