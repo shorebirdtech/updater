@@ -2016,9 +2016,28 @@ mod multi_engine_tests {
     use tempdir::TempDir;
 
     use crate::{
+        network::{testing_set_network_hooks, PatchCheckResponse},
         report_launch_start, report_launch_success, test_utils::install_fake_patch,
         updater::tests::init_for_testing, with_mut_state, with_state,
     };
+
+    /// Sets up no-op network hooks so that the fire-and-forget thread spawned
+    /// by `report_launch_success` completes instantly without network I/O.
+    /// This prevents leaked threads from interfering with subsequent serial
+    /// tests that use mock servers.
+    fn set_noop_network_hooks() {
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url| Ok(vec![]),
+            |_url, _event| Ok(()),
+        );
+    }
 
     /// This test demonstrates what would happen if report_launch_start() is called multiple times.
     ///
@@ -2043,6 +2062,7 @@ mod multi_engine_tests {
     fn multi_engine_false_positive_rollback() -> Result<()> {
         let tmp_dir = TempDir::new("multi_engine_test").unwrap();
         init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
 
         // Install a patch
         install_fake_patch(1)?;
@@ -2100,6 +2120,7 @@ mod multi_engine_tests {
         // New process: Crash recovery kicks in
         // ========================================
         init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
 
         // The patch should NOT be marked as bad (Engine A booted successfully!)
         // But when report_launch_start() is called multiple times at the Rust level,
@@ -2141,6 +2162,7 @@ mod multi_engine_tests {
     fn interleaved_boot_calls_success_clears_flag() -> Result<()> {
         let tmp_dir = TempDir::new("interleaved_test").unwrap();
         init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
 
         install_fake_patch(1)?;
 
@@ -2165,6 +2187,7 @@ mod multi_engine_tests {
 
         // Process killed here - success_B never called
         init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
 
         with_mut_state(|state| {
             // This should work correctly because success_A already cleared the flag
