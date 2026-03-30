@@ -36,6 +36,7 @@ words:
   - dllexport
   - dlopen
   - EDQUOT
+  - EOCD
   - endtemplate
   - ENOSPC
   - EROFS
