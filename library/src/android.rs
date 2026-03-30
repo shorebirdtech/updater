@@ -212,7 +212,7 @@ mod tests {
     use std::fs::File;
     use std::path::{Path, PathBuf};
     use tempdir::TempDir;
-    use zip::write::FileOptions;
+    use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
     fn assert_error_is_file_not_found(error: &anyhow::Error) {
@@ -231,7 +231,7 @@ mod tests {
         let file = File::create(zip_path).unwrap();
         let mut zip = ZipWriter::new(file);
         for file in files {
-            zip.start_file(file.to_string_lossy(), FileOptions::default())
+            zip.start_file(file.to_string_lossy(), SimpleFileOptions::default())
                 .unwrap();
         }
         zip.finish().unwrap();
@@ -247,7 +247,10 @@ mod tests {
         let base_apk_path = tmp_dir.path().join("base.apk");
         std::fs::File::create(base_apk_path).unwrap();
         let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
-        assert_eq!(error.to_string(), "invalid Zip archive: Invalid zip header");
+        assert_eq!(
+            error.to_string(),
+            "invalid Zip archive: Could not find EOCD"
+        );
 
         // Write an empty zip as the base.apk.
         let base_apk_path = tmp_dir.path().join("base.apk");

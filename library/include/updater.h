@@ -225,7 +225,7 @@ SHOREBIRD_EXPORT void shorebird_report_launch_failure(void);
 SHOREBIRD_EXPORT void shorebird_report_launch_success(void);
 
 #ifdef __cplusplus
-} // extern "C"
-#endif // __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
 
-#endif /* updater_h */
+#endif  /* updater_h */
