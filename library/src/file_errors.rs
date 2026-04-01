@@ -11,6 +11,7 @@ pub enum FileOperation {
     CreateFile,
     WriteFile,
     ReadFile,
+    #[allow(dead_code)] // Included for completeness; not yet used outside tests.
     DeleteFile,
     DeleteDir,
     RenameFile,
@@ -168,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_enhance_io_error_includes_operation_path_and_error() {
-        let error = Error::new(ErrorKind::Other, "some error");
+        let error = Error::other("some error");
         let path = Path::new("/some/path/file.txt");
         let message = enhance_io_error(&error, FileOperation::ReadFile, path);
 
@@ -179,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_enhance_io_error_no_hint_for_unknown_error() {
-        let error = Error::new(ErrorKind::Other, "unknown error");
+        let error = Error::other("unknown error");
         let path = Path::new("/path/file.txt");
         let message = enhance_io_error(&error, FileOperation::ReadFile, path);
 

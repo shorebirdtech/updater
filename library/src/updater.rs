@@ -261,10 +261,7 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     let (request, url, request_fn) = with_config(|config| {
         let mut config = config.clone();
 
-        match channel {
-            Some(channel) => config.channel = channel.to_string(),
-            None => {}
-        }
+        if let Some(channel) = channel { config.channel = channel.to_string() }
 
         Ok((
             PatchCheckRequest::new(&config, &client_id),
@@ -371,8 +368,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // Saves state to disk (holds Config lock while writing).
 
     let mut config = copy_update_config()?;
-    if channel.is_some() {
-        config.channel = channel.unwrap().to_string();
+    if let Some(channel) = channel {
+        config.channel = channel.to_string();
     }
 
     // We discard any events if we have more than 3 queued to make sure
