@@ -74,7 +74,7 @@ mod tests {
     use std::io::Write;
 
     use anyhow::Result;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn errs_if_file_does_not_exist() {
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn hashes_file_contents() -> Result<()> {
         // Write "hello, world!" to a file.
-        let temp_dir = TempDir::new("signing")?;
+        let temp_dir = TempDir::new()?;
         let file_path = temp_dir.path().join("test.txt");
         let mut file = std::fs::File::create(&file_path)?;
         file.write_all("hello, world!".as_bytes())?;

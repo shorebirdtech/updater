@@ -30,4 +30,4 @@ mod test_utils;
 pub use self::updater::*;
 
 #[cfg(test)]
-extern crate tempdir;
+extern crate tempfile;

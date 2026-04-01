@@ -70,7 +70,7 @@ mock_instant = "0.5.1"
 # Gives #[serial] attribute for locking all of our shorebird_init
 # tests to a single thread so they don't conflict with each other.
 serial_test = "3.2.0"
-tempdir = "0.3.7"
+tempfile = "3"
 
 # <https://github.com/eqrion/cbindgen/blob/master/docs.md#buildrs>
 [build-dependencies]

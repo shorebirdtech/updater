@@ -211,7 +211,7 @@ pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<Pat
 mod tests {
     use std::fs::File;
     use std::path::{Path, PathBuf};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn find_and_open_lib_test() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let error = super::find_and_open_lib(tmp_dir.path(), "libapp.so").unwrap_err();
         assert_error_is_file_not_found(&error);
 
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn find_and_open_lib_base_apk() {
         // Create a valid apk (zip) with an empty libapp.so with the right path.
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let base_apk_path = tmp_dir.path().join("base.apk");
         let arch = super::android_arch_names();
@@ -283,7 +283,7 @@ mod tests {
     fn find_and_open_lib_split_apk() {
         // Create a valid apk (zip) with an empty libapp.so with the right path
         // and a base apk with the wrong path.
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         // Write a base.apk with the wrong arch.
         let base_apk_path = tmp_dir.path().join("base.apk");
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn open_base_lib_test() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let error = super::open_base_lib(tmp_dir.path(), "libapp.so").unwrap_err();
         assert_error_is_file_not_found(&error);
     }

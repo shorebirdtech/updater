@@ -55,7 +55,7 @@ mod test {
     use std::path::Path;
 
     use serde::{Deserialize, Serialize};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use anyhow::{Ok, Result};
 
@@ -71,7 +71,7 @@ mod test {
             a: 1,
             b: "hello".to_string(),
         };
-        let temp_dir = TempDir::new("test")?;
+        let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("test.json");
         super::write(&test_struct, &path)?;
         let read_struct: TestStruct = super::read(&path)?;
@@ -88,7 +88,7 @@ mod test {
 
     #[test]
     fn read_errs_if_struct_cannot_be_deserialized() -> Result<()> {
-        let temp_dir = TempDir::new("test")?;
+        let temp_dir = TempDir::new()?;
         let path = &temp_dir.path().join("test.json");
         std::fs::write(path, "junk")?;
 

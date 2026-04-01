@@ -789,7 +789,7 @@ pub fn start_update_thread() {
 mod tests {
     use serial_test::serial;
     use std::{fs, thread, time::Duration};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::{
         cache::UpdaterState,
@@ -839,7 +839,7 @@ mod tests {
     #[serial]
     #[test]
     fn subsequent_init_calls_do_not_update_config() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
@@ -892,7 +892,7 @@ mod tests {
     #[serial]
     #[test]
     fn ignore_version_after_marked_bad() -> anyhow::Result<()> {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
@@ -923,7 +923,7 @@ mod tests {
     #[serial]
     #[test]
     fn reports_patch_install_failure_if_patch_was_booting() -> anyhow::Result<()> {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
         install_fake_patch(1)?;
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn hash_matches() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let input_path = tmp_dir.path().join("input");
         fs::write(&input_path, "hello world").unwrap();
@@ -1003,7 +1003,7 @@ mod tests {
     #[serial]
     #[test]
     fn init_missing_yaml() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         assert_eq!(
             crate::init(
@@ -1027,7 +1027,7 @@ mod tests {
     #[test]
     fn init_invalid_patch_verification() {
         testing_reset_config();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         let yaml = r#"
 app_id: test_app
@@ -1106,7 +1106,7 @@ patch_verification: bogus_mode
                 .to_string(),
             ))
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
@@ -1168,7 +1168,7 @@ patch_verification: bogus_mode
             .mock("POST", "/api/v1/patches/events")
             .with_status(503)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
@@ -1195,7 +1195,7 @@ patch_verification: bogus_mode
     #[serial]
     #[test]
     fn report_launch_result_with_no_current_patch() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
         assert!(crate::report_launch_start().is_ok());
         assert_eq!(
@@ -1214,7 +1214,7 @@ patch_verification: bogus_mode
         use crate::cache::UpdaterState;
         use crate::config::with_config;
         let patch_number = 1;
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
@@ -1245,7 +1245,7 @@ patch_verification: bogus_mode
     fn report_launch_failure_with_patch() {
         use crate::cache::UpdaterState;
         use crate::config::with_config;
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Install a fake patch.
@@ -1278,7 +1278,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn validate_compressed_patch_rejects_empty_file() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("empty.patch");
         fs::write(&patch_path, b"").unwrap();
 
@@ -1294,7 +1294,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn validate_compressed_patch_rejects_too_small_file() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("small.patch");
         fs::write(&patch_path, b"abc").unwrap();
 
@@ -1310,7 +1310,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn validate_compressed_patch_rejects_bad_magic() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("bad_magic.patch");
         fs::write(&patch_path, b"not_zstd_data_here").unwrap();
 
@@ -1326,7 +1326,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn validate_compressed_patch_accepts_valid_zstd_magic() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("valid.patch");
         // Write zstd magic bytes followed by some data
         let mut data = vec![0x28, 0xB5, 0x2F, 0xFD];
@@ -1338,7 +1338,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn inflate_fails_with_corrupt_zstd_data() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("corrupt.patch");
         // Valid zstd magic but garbage content — passes validation but
         // fails during decompression or patch reading.
@@ -1366,7 +1366,7 @@ patch_verification: bogus_mode
         use comde::com::Compressor;
         use comde::zstd::ZstdCompressor;
 
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         // Build a fake uncompressed patch that starts with a valid bipatch
         // header (magic 0xB1DF, version 0x1000 as little-endian u32s) so
@@ -1407,7 +1407,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn inflate_rejects_invalid_magic() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("bad.patch");
         fs::write(&patch_path, b"not zstd at all").unwrap();
 
@@ -1444,7 +1444,7 @@ patch_verification: bogus_mode
             .with_status(200)
             .with_body(check_response_body)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let mut updater_state = with_config(|config| {
@@ -1493,7 +1493,7 @@ patch_verification: bogus_mode
             .with_status(200)
             .with_body(check_response_body)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         install_fake_patch(patch_number)?;
@@ -1529,7 +1529,7 @@ patch_verification: bogus_mode
             .mock("POST", "/api/v1/patches/events")
             .with_status(201)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         with_config(|config| {
@@ -1583,7 +1583,7 @@ patch_verification: bogus_mode
     fn no_config_lock_contention_when_waiting_for_patch_check() {
         static mut HAS_FINISHED_CONFIG: bool = false;
 
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
         // Set up the network hooks to sleep for 10 seconds on a patch check request
@@ -1635,7 +1635,7 @@ patch_verification: bogus_mode
 mod rollback_tests {
     use anyhow::Result;
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::{
         network::PatchCheckResponse,
@@ -1693,7 +1693,7 @@ mod rollback_tests {
                 ],
             )
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let base = "hello world";
@@ -1744,7 +1744,7 @@ mod rollback_tests {
             .with_status(200)
             .with_body(check_response_body)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         install_fake_patch(1)?;
@@ -1783,7 +1783,7 @@ mod rollback_tests {
             .with_status(200)
             .with_body(check_response_body)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         install_fake_patch(1)?;
@@ -1841,7 +1841,7 @@ mod rollback_tests {
                 ],
             )
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
@@ -1882,7 +1882,7 @@ mod check_for_downloadable_update_tests {
 
     use anyhow::Result;
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::{
         network::PatchCheckResponse, report_launch_failure, report_launch_start,
@@ -1920,7 +1920,7 @@ mod check_for_downloadable_update_tests {
     #[test]
     fn returns_false_if_no_patch_is_available() -> Result<()> {
         let server = mock_server(None, None);
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let is_update_available = crate::check_for_downloadable_update(None)?;
@@ -1934,7 +1934,7 @@ mod check_for_downloadable_update_tests {
     fn returns_false_if_patch_is_already_installed() -> Result<()> {
         let patch_number = 1;
         let server = mock_server(Some(patch_number), None);
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         install_fake_patch(patch_number)?;
@@ -1950,7 +1950,7 @@ mod check_for_downloadable_update_tests {
     fn returns_false_if_patch_is_known_bad() -> Result<()> {
         let patch_number = 1;
         let server = mock_server(Some(patch_number), None);
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         install_fake_patch(patch_number)?;
@@ -1968,7 +1968,7 @@ mod check_for_downloadable_update_tests {
     fn returns_true_if_patch_has_no_issues() -> Result<()> {
         let patch_number = 1;
         let server = mock_server(Some(patch_number), None);
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let is_update_available = crate::check_for_downloadable_update(None)?;
@@ -1982,7 +1982,7 @@ mod check_for_downloadable_update_tests {
     fn rolls_back_patches_if_needed() -> Result<()> {
         let patch_number = 1;
         let server = mock_server(None, Some(vec![patch_number]));
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         install_fake_patch(patch_number)?;
@@ -2013,7 +2013,7 @@ mod check_for_downloadable_update_tests {
 mod multi_engine_tests {
     use anyhow::Result;
     use serial_test::serial;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::{
         network::{testing_set_network_hooks, PatchCheckResponse},
@@ -2060,7 +2060,7 @@ mod multi_engine_tests {
     #[serial]
     #[test]
     fn multi_engine_false_positive_rollback() -> Result<()> {
-        let tmp_dir = TempDir::new("multi_engine_test").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
         set_noop_network_hooks();
 
@@ -2160,7 +2160,7 @@ mod multi_engine_tests {
     #[serial]
     #[test]
     fn interleaved_boot_calls_success_clears_flag() -> Result<()> {
-        let tmp_dir = TempDir::new("interleaved_test").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
         set_noop_network_hooks();
 
