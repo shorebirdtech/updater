@@ -97,6 +97,8 @@ fn handle_network_result(
         Err(ureq::Error::HostNotFound)
         | Err(ureq::Error::ConnectionFailed)
         | Err(ureq::Error::Io(_)) => {
+            // TODO: This message says "Patch check request" even when the
+            // failure is a download or event report.
             bail!("Patch check request failed due to network error. Please check your internet connection.");
         }
         Err(e) => bail!(e),
