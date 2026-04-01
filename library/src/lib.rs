@@ -11,6 +11,7 @@ pub mod c_api;
 // Declare other .rs file/module exists, but make them private.
 mod cache;
 mod config;
+mod download_state;
 mod events;
 mod file_errors;
 mod logging;

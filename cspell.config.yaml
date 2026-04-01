@@ -58,6 +58,7 @@ words:
   - pubspec
   - repr
   - reqwest
+  - rsplit
   - rollouts
   - rustflags
   - rustls

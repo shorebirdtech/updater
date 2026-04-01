@@ -3,8 +3,8 @@
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use std::string::ToString;
 
@@ -21,8 +21,18 @@ fn patches_events_url(base_url: &str) -> String {
 }
 
 pub type PatchCheckRequestFn = fn(&str, PatchCheckRequest) -> anyhow::Result<PatchCheckResponse>;
-pub type DownloadFileFn = fn(&str) -> anyhow::Result<Vec<u8>>;
+pub type DownloadToPathFn =
+    fn(url: &str, dest: &Path, resume_from: u64) -> anyhow::Result<DownloadResult>;
 pub type ReportEventFn = fn(&str, CreatePatchEventRequest) -> anyhow::Result<()>;
+
+/// Result of a download operation.
+#[derive(Debug, Clone)]
+pub struct DownloadResult {
+    /// Total bytes written to the file (including any previously downloaded bytes on resume).
+    pub total_bytes: u64,
+    /// The Content-Length from the server response, if present.
+    pub content_length: Option<u64>,
+}
 
 /// A container for network callbacks which can be mocked out for testing.
 #[derive(Clone)]
@@ -30,7 +40,7 @@ pub struct NetworkHooks {
     /// The function to call to send a patch check request.
     pub patch_check_request_fn: PatchCheckRequestFn,
     /// The function to call to download a file.
-    pub download_file_fn: DownloadFileFn,
+    pub download_to_path_fn: DownloadToPathFn,
     /// The function to call to report patch install success.
     pub report_event_fn: ReportEventFn,
 }
@@ -40,7 +50,7 @@ impl core::fmt::Debug for NetworkHooks {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkHooks")
             .field("patch_check_request_fn", &"<fn>")
-            .field("download_file_fn", &"<fn>")
+            .field("download_to_path_fn", &"<fn>")
             .field("report_event_fn", &"<fn>")
             .finish()
     }
@@ -50,7 +60,7 @@ impl Default for NetworkHooks {
     fn default() -> Self {
         Self {
             patch_check_request_fn: patch_check_request_default,
-            download_file_fn: download_file_default,
+            download_to_path_fn: download_to_path_default,
             report_event_fn: report_event_default,
         }
     }
@@ -68,13 +78,59 @@ pub fn patch_check_request_default(
     Ok(parsed)
 }
 
-pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
-    let result = ureq::get(url).call();
+/// Default download implementation that streams to a file with Range header
+/// support for resuming partial downloads.
+pub fn download_to_path_default(
+    url: &str,
+    dest: &Path,
+    resume_from: u64,
+) -> anyhow::Result<DownloadResult> {
+    let mut request = ureq::get(url);
+    if resume_from > 0 {
+        request = request.header("Range", &format!("bytes={resume_from}-"));
+    }
+    let result = request.call();
     let response = handle_network_result(result)?;
-    let mut bytes = Vec::new();
-    response.into_body().as_reader().read_to_end(&mut bytes)?;
-    // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
-    Ok(bytes)
+    let status = response.status();
+
+    // Determine total file size from headers.
+    let content_length = if status == 206 {
+        parse_content_range_total(response.headers())
+    } else {
+        // 200: Content-Length is the full file size.
+        response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+    };
+
+    // Only resume (append) when the server actually returned 206.
+    // If the server ignored our Range header and returned 200, start fresh.
+    let mut file = if status == 206 && resume_from > 0 {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .open(dest)
+            .with_file_context(FileOperation::WriteFile, dest)?;
+        f.seek(SeekFrom::Start(resume_from))
+            .with_file_context(FileOperation::WriteFile, dest)?;
+        f
+    } else {
+        // Fresh download (200 OK or server ignored Range): create/truncate.
+        File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
+    };
+
+    std::io::copy(&mut response.into_body().as_reader(), &mut file)
+        .with_file_context(FileOperation::WriteFile, dest)?;
+
+    let total_bytes = std::fs::metadata(dest)
+        .with_file_context(FileOperation::ReadFile, dest)?
+        .len();
+
+    Ok(DownloadResult {
+        total_bytes,
+        content_length,
+    })
 }
 
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
@@ -105,18 +161,39 @@ fn handle_network_result(
     }
 }
 
+/// Parses the total file size from a Content-Range header.
+/// Expected format: `bytes start-end/total` (e.g. `bytes 100-199/1000`).
+/// Returns `None` if the header is missing, malformed, or the total is `*`.
+fn parse_content_range_total(headers: &ureq::http::HeaderMap) -> Option<u64> {
+    headers
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit('/').next())
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
 #[cfg(test)]
-/// Unit tests can call this to mock out the network calls.
+/// Panicking placeholder for tests that should never reach the download step.
+pub const UNEXPECTED_DOWNLOAD: DownloadToPathFn = |_, _, _| panic!("unexpected download call");
+
+#[cfg(test)]
+/// Panicking placeholder for tests that should never reach the report step.
+pub const UNEXPECTED_REPORT: ReportEventFn = |_, _| panic!("unexpected report event call");
+
+#[cfg(test)]
+/// Unit tests can call this to mock out the network calls. Use
+/// `UNEXPECTED_DOWNLOAD` or `UNEXPECTED_REPORT` for hooks that should
+/// not be called in a given test.
 pub fn testing_set_network_hooks(
     patch_check_request_fn: PatchCheckRequestFn,
-    download_file_fn: DownloadFileFn,
+    download_to_path_fn: DownloadToPathFn,
     report_event_fn: ReportEventFn,
 ) {
     crate::config::with_config_mut(|maybe_config| match maybe_config {
         Some(config) => {
             config.network_hooks = NetworkHooks {
                 patch_check_request_fn,
-                download_file_fn,
+                download_to_path_fn,
                 report_event_fn,
             };
         }
@@ -217,34 +294,26 @@ pub fn send_patch_event(event: PatchEvent, config: &UpdateConfig) -> anyhow::Res
     report_event_fn(url, request)
 }
 
-/// Downloads the file at `url` to `path`.
+/// Downloads the file at `url` to `path`, optionally resuming from byte offset
+/// `resume_from`. Ensures the parent directory exists before downloading.
 pub fn download_to_path(
     network_hooks: &NetworkHooks,
     url: &str,
     path: &Path,
-) -> anyhow::Result<()> {
+    resume_from: u64,
+) -> anyhow::Result<DownloadResult> {
     shorebird_info!("Downloading patch from: {}", url);
-    // Download the file at the given url to the given path.
-    let download_file_hook = network_hooks.download_file_fn;
-    let bytes = download_file_hook(url)?;
-    // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
-        shorebird_debug!("Creating download directory: {:?}", parent);
-        std::fs::create_dir_all(parent)
-            .with_file_context(FileOperation::CreateDir, parent)?;
+        std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
     }
-
+    let download_hook = network_hooks.download_to_path_fn;
+    let result = download_hook(url, path, resume_from)?;
     shorebird_info!(
-        "Writing {} bytes to: {:?}",
-        bytes.len(),
-        path
+        "Downloaded patch to: {:?} ({} bytes)",
+        path,
+        result.total_bytes
     );
-    let mut file = File::create(path)
-        .with_file_context(FileOperation::CreateFile, path)?;
-    file.write_all(&bytes)
-        .with_file_context(FileOperation::WriteFile, path)?;
-    shorebird_info!("Wrote {} bytes to: {:?}", bytes.len(), path);
-    Ok(())
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -337,7 +406,7 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        let result = (network_hooks.download_file_fn)("");
+        let result = (network_hooks.download_to_path_fn)("", std::path::Path::new("/tmp/test"), 0);
         assert!(result.is_err());
     }
 
@@ -346,8 +415,43 @@ mod tests {
         let network_hooks = super::NetworkHooks::default();
         let debug = format!("{:?}", network_hooks);
         assert!(debug.contains("patch_check_request_fn"));
-        assert!(debug.contains("download_file_fn"));
+        assert!(debug.contains("download_to_path_fn"));
         assert!(debug.contains("report_event_fn"));
+    }
+
+    #[test]
+    fn parse_content_range_total_valid() {
+        let mut headers = ureq::http::HeaderMap::new();
+        headers.insert("content-range", "bytes 100-199/1000".parse().unwrap());
+        assert_eq!(super::parse_content_range_total(&headers), Some(1000));
+    }
+
+    #[test]
+    fn parse_content_range_total_missing() {
+        let headers = ureq::http::HeaderMap::new();
+        assert_eq!(super::parse_content_range_total(&headers), None);
+    }
+
+    #[test]
+    fn parse_content_range_total_unknown_size() {
+        let mut headers = ureq::http::HeaderMap::new();
+        headers.insert("content-range", "bytes 100-199/*".parse().unwrap());
+        assert_eq!(super::parse_content_range_total(&headers), None);
+    }
+
+    #[test]
+    fn download_to_path_no_internet() {
+        let dest = std::path::Path::new("/tmp/updater_test_no_internet");
+        let result = super::download_to_path_default(
+            "http://asdfasdfasdfasdfasdf.asdfasdf/patch/1",
+            dest,
+            0,
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Patch check request failed due to network error. Please check your internet connection."
+        );
     }
 
     #[test]
