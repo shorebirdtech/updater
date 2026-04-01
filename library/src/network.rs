@@ -229,17 +229,11 @@ pub fn download_to_path(
     // Ensure the download directory exists.
     if let Some(parent) = path.parent() {
         shorebird_debug!("Creating download directory: {:?}", parent);
-        std::fs::create_dir_all(parent)
-            .with_file_context(FileOperation::CreateDir, parent)?;
+        std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
     }
 
-    shorebird_info!(
-        "Writing {} bytes to: {:?}",
-        bytes.len(),
-        path
-    );
-    let mut file = File::create(path)
-        .with_file_context(FileOperation::CreateFile, path)?;
+    shorebird_info!("Writing {} bytes to: {:?}", bytes.len(), path);
+    let mut file = File::create(path).with_file_context(FileOperation::CreateFile, path)?;
     file.write_all(&bytes)
         .with_file_context(FileOperation::WriteFile, path)?;
     shorebird_info!("Wrote {} bytes to: {:?}", bytes.len(), path);
@@ -351,9 +345,7 @@ mod tests {
 
     #[test]
     fn handle_network_result_ok() {
-        let body = ureq::Body::builder()
-            .mime_type("text/plain")
-            .data("");
+        let body = ureq::Body::builder().mime_type("text/plain").data("");
         let response = ureq::http::Response::builder()
             .status(200)
             .body(body)
