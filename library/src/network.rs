@@ -94,13 +94,9 @@ fn handle_network_result(
         Err(ureq::Error::StatusCode(code)) => {
             bail!("Request failed with status: {}", code)
         }
-        Err(ureq::Error::HostNotFound) | Err(ureq::Error::ConnectionFailed) => {
-            bail!("Patch check request failed due to network error. Please check your internet connection.");
-        }
-        Err(ureq::Error::Io(ref e))
-            if e.kind() == std::io::ErrorKind::ConnectionRefused
-                || e.to_string().contains("lookup") =>
-        {
+        Err(ureq::Error::HostNotFound)
+        | Err(ureq::Error::ConnectionFailed)
+        | Err(ureq::Error::Io(_)) => {
             bail!("Patch check request failed due to network error. Please check your internet connection.");
         }
         Err(e) => bail!(e),
