@@ -2227,10 +2227,6 @@ patch_verification: bogus_mode
     fn update_starts_fresh_when_url_changes() -> anyhow::Result<()> {
         let mut server = mockito::Server::new();
         let download_url = format!("{}/patch/1", server.url());
-        let patch_bytes: Vec<u8> = vec![
-            40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 6, 0, 0,
-            0, 0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
-        ];
         let check_response = PatchCheckResponse {
             patch_available: true,
             patch: Some(Patch {
@@ -2736,7 +2732,7 @@ mod multi_engine_tests {
     use tempfile::TempDir;
 
     use crate::{
-        network::{testing_set_network_hooks, PatchCheckResponse},
+        network::{testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD},
         report_launch_start, report_launch_success, test_utils::install_fake_patch,
         updater::tests::init_for_testing, with_mut_state, with_state,
     };
@@ -2754,7 +2750,7 @@ mod multi_engine_tests {
                     rolled_back_patch_numbers: None,
                 })
             },
-            |_url| Ok(vec![]),
+            UNEXPECTED_DOWNLOAD,
             |_url, _event| Ok(()),
         );
     }
