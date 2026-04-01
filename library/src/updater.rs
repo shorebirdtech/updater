@@ -1720,7 +1720,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_no_sidecar() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1733,7 +1733,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_matching_sidecar() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1761,7 +1761,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_mismatched_url() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1792,7 +1792,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_mismatched_hash() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1818,7 +1818,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_mismatched_patch_number() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1844,7 +1844,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_corrupt_sidecar() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1863,7 +1863,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn compute_resume_offset_empty_file() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1890,7 +1890,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn cleanup_download_artifacts_removes_file_and_sidecar() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
@@ -1918,7 +1918,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn cleanup_download_artifacts_noop_when_missing() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         // Should not panic when files don't exist.
         super::cleanup_download_artifacts(&download_path);
@@ -1926,7 +1926,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn clean_download_dir_removes_orphans_keeps_current() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_dir = tmp.path().join("downloads");
         fs::create_dir_all(&download_dir).unwrap();
 
@@ -1961,7 +1961,7 @@ patch_verification: bogus_mode
 
     #[test]
     fn clean_download_dir_noop_when_dir_missing() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_dir = tmp.path().join("nonexistent");
         // Should not panic.
         super::clean_download_dir(&download_dir, 1);
@@ -2004,7 +2004,7 @@ patch_verification: bogus_mode
             .mock("POST", "/api/v1/patches/events")
             .with_status(201)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let base = "hello world";
@@ -2029,7 +2029,7 @@ patch_verification: bogus_mode
     #[serial]
     #[test]
     fn update_fails_on_download_size_mismatch() -> anyhow::Result<()> {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
         let base = "hello world";
@@ -2118,7 +2118,7 @@ patch_verification: bogus_mode
             .mock("POST", "/api/v1/patches/events")
             .with_status(201)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let base = "hello world";
@@ -2185,7 +2185,7 @@ patch_verification: bogus_mode
             .with_status(201)
             .create();
 
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let base = "hello world";
@@ -2260,7 +2260,7 @@ patch_verification: bogus_mode
             .mock("POST", "/api/v1/patches/events")
             .with_status(201)
             .create();
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
 
         let base = "hello world";

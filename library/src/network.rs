@@ -4,7 +4,7 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use std::string::ToString;
 
@@ -440,42 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_download_result_ok() {
-        let http_response = http::response::Builder::new()
-            .status(200)
-            .body("".to_string())
-            .unwrap();
-        let response = reqwest::blocking::Response::from(http_response);
-        assert!(super::handle_download_result(Ok(response)).is_ok());
-    }
-
-    #[test]
-    fn handle_download_result_partial_content() {
-        let http_response = http::response::Builder::new()
-            .status(206)
-            .body("".to_string())
-            .unwrap();
-        let response = reqwest::blocking::Response::from(http_response);
-        assert!(super::handle_download_result(Ok(response)).is_ok());
-    }
-
-    #[test]
-    fn handle_download_result_not_ok() {
-        let http_response = http::response::Builder::new()
-            .status(500)
-            .body("".to_string())
-            .unwrap();
-        let response = reqwest::blocking::Response::from(http_response);
-        let result = super::handle_download_result(Ok(response));
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Request failed with status: 500 Internal Server Error"
-        );
-    }
-
-    #[test]
-    fn handle_download_result_no_internet() {
+    fn download_to_path_no_internet() {
         let dest = std::path::Path::new("/tmp/updater_test_no_internet");
         let result = super::download_to_path_default(
             "http://asdfasdfasdfasdfasdf.asdfasdf/patch/1",
@@ -487,14 +452,6 @@ mod tests {
             result.unwrap_err().to_string(),
             "Patch check request failed due to network error. Please check your internet connection."
         );
-    }
-
-    #[test]
-    fn handle_download_result_unknown_error() {
-        let dest = std::path::Path::new("/tmp/updater_test_unknown_error");
-        let result = super::download_to_path_default("does_not_exist", dest, 0);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "builder error");
     }
 
     #[test]

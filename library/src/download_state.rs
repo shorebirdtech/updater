@@ -64,11 +64,11 @@ pub fn delete_download_state(download_path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn round_trip_download_state() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("1");
 
         let state = DownloadState {
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn read_missing_returns_none() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("99");
         let loaded = read_download_state(&download_path).unwrap();
         assert_eq!(loaded, None);
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn delete_removes_sidecar() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("1");
 
         let state = DownloadState {
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn delete_missing_is_ok() {
-        let tmp = TempDir::new("test").unwrap();
+        let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("99");
         // Should not error.
         delete_download_state(&download_path).unwrap();
