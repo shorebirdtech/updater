@@ -62,8 +62,8 @@ pub fn patch_check_request_default(
 ) -> anyhow::Result<PatchCheckResponse> {
     shorebird_info!("Sending patch check request: {:?}", request);
     let result = ureq::post(url).send_json(&request);
-    let mut response = handle_network_result(result)?;
-    let parsed = response.body_mut().read_json()?;
+    let response = handle_network_result(result)?;
+    let parsed = response.into_body().read_json()?;
     shorebird_debug!("Patch check response: {:?}", parsed);
     Ok(parsed)
 }
