@@ -69,6 +69,7 @@ words:
   - subosito
   - swiftpm
   - symbolication
+  - ureq
   - unbootable
   - unbooted
   - usize
