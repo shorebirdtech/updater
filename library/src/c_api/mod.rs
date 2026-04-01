@@ -219,8 +219,7 @@ fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
             let message = status.to_string();
             return UpdateResult {
                 status: status as i32,
-                message: allocate_c_string(message.as_str())
-                    .unwrap_or(std::ptr::null_mut()),
+                message: allocate_c_string(message.as_str()).unwrap_or(std::ptr::null_mut()),
             };
         }
         Err(err) => UpdateResult {

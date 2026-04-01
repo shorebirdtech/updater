@@ -38,17 +38,8 @@ impl std::fmt::Display for FileOperation {
 /// This function takes an IO error and adds context about what operation failed,
 /// what path was involved, and provides hints about possible causes based on
 /// the error type.
-pub fn enhance_io_error(
-    error: &std::io::Error,
-    operation: FileOperation,
-    path: &Path,
-) -> String {
-    let base_message = format!(
-        "Failed to {} '{}': {}",
-        operation,
-        path.display(),
-        error
-    );
+pub fn enhance_io_error(error: &std::io::Error, operation: FileOperation, path: &Path) -> String {
+    let base_message = format!("Failed to {} '{}': {}", operation, path.display(), error);
 
     let hint = get_error_hint(error, operation);
 
@@ -70,9 +61,7 @@ fn get_error_hint(error: &std::io::Error, operation: FileOperation) -> String {
         ErrorKind::StorageFull => {
             "The device storage is full. Free up space and try again.".to_string()
         }
-        ErrorKind::ReadOnlyFilesystem => {
-            "The filesystem is mounted as read-only.".to_string()
-        }
+        ErrorKind::ReadOnlyFilesystem => "The filesystem is mounted as read-only.".to_string(),
         _ => {
             // Check raw OS error for cases not covered by ErrorKind
             if let Some(os_error) = error.raw_os_error() {
@@ -90,9 +79,7 @@ fn get_permission_denied_hint(operation: FileOperation) -> String {
         FileOperation::CreateDir | FileOperation::CreateFile | FileOperation::WriteFile => {
             "The app may not have write access to this location.".to_string()
         }
-        FileOperation::ReadFile => {
-            "The app may not have read access to this file.".to_string()
-        }
+        FileOperation::ReadFile => "The app may not have read access to this file.".to_string(),
         FileOperation::DeleteFile | FileOperation::DeleteDir => {
             "The app may not have permission to delete this item.".to_string()
         }
@@ -114,9 +101,7 @@ fn get_not_found_hint(operation: FileOperation) -> String {
         FileOperation::RenameFile => {
             "The source file or destination directory may not exist.".to_string()
         }
-        _ => {
-            "The file or directory does not exist.".to_string()
-        }
+        _ => "The file or directory does not exist.".to_string(),
     }
 }
 
@@ -126,7 +111,9 @@ fn get_os_error_hint(os_error: i32) -> String {
     match os_error {
         28 => "The device storage is full (ENOSPC). Free up space and try again.".to_string(),
         30 => "The filesystem is mounted as read-only (EROFS).".to_string(),
-        122 => "Disk quota exceeded (EDQUOT). The user's storage quota has been reached.".to_string(),
+        122 => {
+            "Disk quota exceeded (EDQUOT). The user's storage quota has been reached.".to_string()
+        }
         _ => String::new(),
     }
 }
@@ -162,7 +149,10 @@ mod tests {
         assert_eq!(format!("{}", FileOperation::DeleteFile), "delete file");
         assert_eq!(format!("{}", FileOperation::DeleteDir), "delete directory");
         assert_eq!(format!("{}", FileOperation::RenameFile), "rename/move file");
-        assert_eq!(format!("{}", FileOperation::GetMetadata), "get file metadata");
+        assert_eq!(
+            format!("{}", FileOperation::GetMetadata),
+            "get file metadata"
+        );
     }
 
     // ==================== enhance_io_error Tests ====================
@@ -459,8 +449,7 @@ mod tests {
 
     #[test]
     fn test_io_result_ext_preserves_error_chain() {
-        let result: std::io::Result<i32> =
-            Err(Error::new(ErrorKind::NotFound, "No such file"));
+        let result: std::io::Result<i32> = Err(Error::new(ErrorKind::NotFound, "No such file"));
         let path = Path::new("/missing/file.txt");
 
         let converted = result.with_file_context(FileOperation::ReadFile, path);
