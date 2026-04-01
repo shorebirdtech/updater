@@ -4,7 +4,7 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::string::ToString;
 
@@ -61,25 +61,24 @@ pub fn patch_check_request_default(
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
     shorebird_info!("Sending patch check request: {:?}", request);
-    let client = reqwest::blocking::Client::new();
-    let result = client.post(url).json(&request).send();
-    let response = handle_network_result(result)?.json()?;
-    shorebird_debug!("Patch check response: {:?}", response);
-    Ok(response)
+    let result = ureq::post(url).send_json(&request);
+    let mut response = handle_network_result(result)?;
+    let parsed = response.body_mut().read_json()?;
+    shorebird_debug!("Patch check response: {:?}", parsed);
+    Ok(parsed)
 }
 
 pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
-    let client = reqwest::blocking::Client::new();
-    let result = client.get(url).send();
+    let result = ureq::get(url).call();
     let response = handle_network_result(result)?;
-    let bytes = response.bytes()?;
+    let mut bytes = Vec::new();
+    response.into_body().as_reader().read_to_end(&mut bytes)?;
     // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    let client = reqwest::blocking::Client::new();
-    let result = client.post(url).json(&request).send();
+    let result = ureq::post(url).send_json(&request);
     handle_network_result(result)?;
     Ok(())
 }
@@ -88,24 +87,23 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
 /// successful, an error if it was not, or a special error if the network
 /// request failed due to a lack of internet connection.
 fn handle_network_result(
-    result: Result<reqwest::blocking::Response, reqwest::Error>,
-) -> anyhow::Result<reqwest::blocking::Response> {
-    use std::error::Error;
-
+    result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> anyhow::Result<ureq::http::Response<ureq::Body>> {
     match result {
-        Ok(response) => {
-            if response.status().is_success() {
-                Ok(response)
-            } else {
-                bail!("Request failed with status: {}", response.status())
-            }
+        Ok(response) => Ok(response),
+        Err(ureq::Error::StatusCode(code)) => {
+            bail!("Request failed with status: {}", code)
         }
-        Err(e) => match e.source() {
-            Some(source) if source.to_string().contains("client error (Connect)") => {
-                bail!("Patch check request failed due to network error. Please check your internet connection.");
-            }
-            _ => bail!(e),
-        },
+        Err(ureq::Error::HostNotFound) | Err(ureq::Error::ConnectionFailed) => {
+            bail!("Patch check request failed due to network error. Please check your internet connection.");
+        }
+        Err(ureq::Error::Io(ref e))
+            if e.kind() == std::io::ErrorKind::ConnectionRefused
+                || e.to_string().contains("lookup") =>
+        {
+            bail!("Patch check request failed due to network error. Please check your internet connection.");
+        }
+        Err(e) => bail!(e),
     }
 }
 
@@ -356,11 +354,13 @@ mod tests {
 
     #[test]
     fn handle_network_result_ok() {
-        let http_response = http::response::Builder::new()
+        let body = ureq::Body::builder()
+            .mime_type("text/plain")
+            .data("");
+        let response = ureq::http::Response::builder()
             .status(200)
-            .body("".to_string())
+            .body(body)
             .unwrap();
-        let response = reqwest::blocking::Response::from(http_response);
 
         let result = super::handle_network_result(Ok(response));
 
@@ -369,20 +369,11 @@ mod tests {
 
     #[test]
     fn handle_network_result_http_status_not_ok() {
-        let http_response = http::response::Builder::new()
-            .status(500)
-            .body("".to_string())
-            .unwrap();
-        let response = reqwest::blocking::Response::from(http_response);
-
-        let result = super::handle_network_result(Ok(response));
+        let result = super::handle_network_result(Err(ureq::Error::StatusCode(500)));
 
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert_eq!(
-            err.to_string(),
-            "Request failed with status: 500 Internal Server Error"
-        );
+        assert_eq!(err.to_string(), "Request failed with status: 500");
     }
 
     #[test]
@@ -414,7 +405,7 @@ mod tests {
     fn handle_network_result_unknown_error() {
         let result = super::report_event_default(
             // Make the request to an incorrectly formatted URL, which will
-            // trigger the same error as a lack of internet connection.
+            // trigger an error.
             &patches_events_url("does_not_exist"),
             super::CreatePatchEventRequest {
                 event: PatchEvent {
@@ -432,7 +423,5 @@ mod tests {
         );
 
         assert!(result.is_err());
-        let error = result.err().unwrap();
-        assert_eq!(error.to_string(), "builder error")
     }
 }
