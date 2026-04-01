@@ -1,7 +1,7 @@
 use super::{disk_io, signing, PatchInfo};
+use crate::file_errors::{FileOperation, IoResultExt};
 use crate::yaml::PatchVerificationMode;
 use anyhow::{bail, Context, Result};
-use crate::file_errors::{FileOperation, IoResultExt};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -233,7 +233,8 @@ impl PatchManager {
         }
 
         let artifact_size_on_disk = std::fs::metadata(&artifact_path)
-            .with_file_context(FileOperation::GetMetadata, &artifact_path)?.len();
+            .with_file_context(FileOperation::GetMetadata, &artifact_path)?
+            .len();
         if artifact_size_on_disk != patch.size {
             bail!(
                 "Patch {} has size {} on disk, but expected size {}",
@@ -404,7 +405,8 @@ impl ManagePatches for PatchManager {
         let new_patch = PatchMetadata {
             number: patch_number,
             size: std::fs::metadata(&patch_path)
-                .with_file_context(FileOperation::GetMetadata, &patch_path)?.len(),
+                .with_file_context(FileOperation::GetMetadata, &patch_path)?
+                .len(),
             hash: hash.to_owned(),
             signature: signature.map(|s| s.to_owned()),
         };

@@ -344,12 +344,20 @@ mod tests {
         let release_version = state.serialized_state.release_version.clone();
         assert!(state.save().is_ok());
 
-        let mut state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, &release_version, None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            &release_version,
+            None,
+            PatchVerificationMode::default(),
+        );
         assert_eq!(state.next_boot_patch().unwrap().number, 1);
 
-        let mut next_version_state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None, PatchVerificationMode::default());
+        let mut next_version_state = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            "1.0.0+2",
+            None,
+            PatchVerificationMode::default(),
+        );
         assert!(next_version_state.next_boot_patch().is_none());
     }
 
@@ -367,8 +375,18 @@ mod tests {
     #[test]
     fn creates_updater_state_with_client_id() {
         let tmp_dir = TempDir::new("example").unwrap();
-        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
-        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
+        let state = UpdaterState::load_or_new_on_error(
+            tmp_dir.path(),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
+        let saved_state = UpdaterState::load_or_new_on_error(
+            tmp_dir.path(),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
         assert_eq!(
             state.serialized_state.client_id,
             saved_state.serialized_state.client_id
@@ -389,7 +407,12 @@ mod tests {
             PatchVerificationMode::default(),
         );
 
-        let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None, PatchVerificationMode::default());
+        let new_loaded = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            "1.0.0+2",
+            None,
+            PatchVerificationMode::default(),
+        );
 
         assert_eq!(
             original_loaded.serialized_state.client_id,
@@ -416,7 +439,8 @@ mod tests {
         let new_state_path = new_tmp_dir.path().join(STATE_FILE_NAME);
         std::fs::rename(original_state_path, new_state_path).unwrap();
 
-        let new_state = UpdaterState::load(new_tmp_dir.path(), None, PatchVerificationMode::default()).unwrap();
+        let new_state =
+            UpdaterState::load(new_tmp_dir.path(), None, PatchVerificationMode::default()).unwrap();
         assert_eq!(new_state.cache_dir, new_tmp_dir.path());
     }
 
@@ -557,7 +581,12 @@ mod tests {
         let tmp_dir = TempDir::new("example")?;
 
         // Create a new state, add a patch, and save it.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(
+            &tmp_dir.path(),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
         let patch = fake_patch(&tmp_dir, 1);
         state.install_patch(&patch, "hash", None)?;
         state.save()?;
@@ -568,7 +597,12 @@ mod tests {
         std::fs::write(&state_file, "corrupt json")?;
 
         // Ensure that, by corrupting the file, we've reset the patches state.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(
+            &tmp_dir.path(),
+            "1.0.0+2",
+            None,
+            PatchVerificationMode::default(),
+        );
         assert!(state.next_boot_patch().is_none());
 
         Ok(())

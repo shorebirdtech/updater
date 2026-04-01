@@ -5,8 +5,8 @@ use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
 use crate::file_errors::{FileOperation, IoResultExt};
+use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
 use crate::cache::{PatchInfo, UpdaterState};
@@ -298,11 +298,9 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
-    let mut file = fs::File::open(path)
-        .with_file_context(FileOperation::ReadFile, path)?;
+    let mut file = fs::File::open(path).with_file_context(FileOperation::ReadFile, path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .with_file_context(FileOperation::ReadFile, path)?;
+    std::io::copy(&mut file, &mut hasher).with_file_context(FileOperation::ReadFile, path)?;
     // Check that the length from copy is the same as the file size?
     let hash = hasher.finalize();
     let hash_matches = hash.as_slice() == expected;
@@ -520,14 +518,11 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Validates that a downloaded patch file is a non-empty, valid zstd archive.
 fn validate_compressed_patch(patch_path: &Path) -> anyhow::Result<()> {
-    let metadata = fs::metadata(patch_path)
-        .with_file_context(FileOperation::GetMetadata, patch_path)?;
+    let metadata =
+        fs::metadata(patch_path).with_file_context(FileOperation::GetMetadata, patch_path)?;
     let size = metadata.len();
     if size == 0 {
-        bail!(
-            "Downloaded patch file is empty: {:?}",
-            patch_path
-        );
+        bail!("Downloaded patch file is empty: {:?}", patch_path);
     }
     // A valid zstd frame is at least 4 bytes (magic number).
     if size < 4 {
@@ -537,8 +532,8 @@ fn validate_compressed_patch(patch_path: &Path) -> anyhow::Result<()> {
             patch_path
         );
     }
-    let mut file = fs::File::open(patch_path)
-        .with_file_context(FileOperation::ReadFile, patch_path)?;
+    let mut file =
+        fs::File::open(patch_path).with_file_context(FileOperation::ReadFile, patch_path)?;
     let mut magic = [0u8; 4];
     file.read_exact(&mut magic)
         .with_file_context(FileOperation::ReadFile, patch_path)?;
@@ -571,11 +566,10 @@ where
     // PipeReader/Writer errors instead of file open errors.
     shorebird_info!("Inflating patch from {:?}", patch_path);
     let compressed_patch_r = BufReader::new(
-        fs::File::open(patch_path)
-            .with_file_context(FileOperation::ReadFile, patch_path)?,
+        fs::File::open(patch_path).with_file_context(FileOperation::ReadFile, patch_path)?,
     );
-    let output_file_w = fs::File::create(output_path)
-        .with_file_context(FileOperation::CreateFile, output_path)?;
+    let output_file_w =
+        fs::File::create(output_path).with_file_context(FileOperation::CreateFile, output_path)?;
 
     // Set up a pipe to connect the writing from the decompression thread
     // to the reading of the decompressed patch data on this thread.
@@ -585,13 +579,12 @@ where
     // Spawn a thread to run the decompression in parallel to the patching.
     // decompress.copy will block on the pipe being full (I think) and then
     // when it returns the thread will exit.
-    let decompress_handle = std::thread::spawn(move || {
-        decompress.copy(compressed_patch_r, patch_w)
-    });
+    let decompress_handle =
+        std::thread::spawn(move || decompress.copy(compressed_patch_r, patch_w));
 
     // Do the patch, using the uncompressed patch data from the pipe.
-    let mut fresh_r = bipatch::Reader::new(patch_r, base_r)
-        .context("Failed to initialize patch reader")?;
+    let mut fresh_r =
+        bipatch::Reader::new(patch_r, base_r).context("Failed to initialize patch reader")?;
 
     // Write out the resulting patched file to the new location.
     let mut output_w = BufWriter::new(output_file_w);
@@ -1285,11 +1278,7 @@ patch_verification: bogus_mode
         let err = super::validate_compressed_patch(&patch_path)
             .unwrap_err()
             .to_string();
-        assert!(
-            err.contains("empty"),
-            "Expected 'empty' in error: {}",
-            err
-        );
+        assert!(err.contains("empty"), "Expected 'empty' in error: {}", err);
     }
 
     #[test]
@@ -1374,7 +1363,7 @@ patch_verification: bogus_mode
         let mut uncompressed = Vec::new();
         uncompressed.extend_from_slice(&0xB1DFu32.to_le_bytes()); // bipatch magic
         uncompressed.extend_from_slice(&0x1000u32.to_le_bytes()); // bipatch version
-        uncompressed.extend_from_slice(&vec![0u8; 1024]);         // padding
+        uncompressed.extend_from_slice(&vec![0u8; 1024]); // padding
 
         // Compress the valid data into one complete zstd frame.
         let mut compressed = std::io::Cursor::new(Vec::new());
@@ -1388,7 +1377,7 @@ patch_verification: bogus_mode
         // successfully decompress the first frame (delivering the bipatch
         // header so Reader::new succeeds), then fail on this corrupt frame.
         compressed.extend_from_slice(&[0x28, 0xB5, 0x2F, 0xFD]); // zstd magic
-        compressed.extend_from_slice(&[0xFF; 64]);                 // garbage
+        compressed.extend_from_slice(&[0xFF; 64]); // garbage
 
         let patch_path = tmp_dir.path().join("corrupt_frame.patch");
         fs::write(&patch_path, &compressed).unwrap();
@@ -2017,8 +2006,10 @@ mod multi_engine_tests {
 
     use crate::{
         network::{testing_set_network_hooks, PatchCheckResponse},
-        report_launch_start, report_launch_success, test_utils::install_fake_patch,
-        updater::tests::init_for_testing, with_mut_state, with_state,
+        report_launch_start, report_launch_success,
+        test_utils::install_fake_patch,
+        updater::tests::init_for_testing,
+        with_mut_state, with_state,
     };
 
     /// Sets up no-op network hooks so that the fire-and-forget thread spawned
