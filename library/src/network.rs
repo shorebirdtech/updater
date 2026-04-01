@@ -4,7 +4,7 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::string::ToString;
 
@@ -71,9 +71,8 @@ pub fn patch_check_request_default(
 pub fn download_file_default(url: &str) -> anyhow::Result<Vec<u8>> {
     let result = ureq::get(url).call();
     let response = handle_network_result(result)?;
-    let mut bytes = Vec::new();
-    response.into_body().as_reader().read_to_end(&mut bytes)?;
-    // Patch files are small (e.g. 50kb) so this should be ok to copy into memory.
+    let bytes = response.into_body().read_to_vec()?;
+    // Patch files are typically small (a few bytes to ~10 MB) so this is ok to read into memory.
     Ok(bytes)
 }
 
