@@ -475,6 +475,29 @@ mod tests {
     }
 
     #[test]
+    fn handle_download_result_no_internet() {
+        let dest = std::path::Path::new("/tmp/updater_test_no_internet");
+        let result = super::download_to_path_default(
+            "http://asdfasdfasdfasdfasdf.asdfasdf/patch/1",
+            dest,
+            0,
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Patch check request failed due to network error. Please check your internet connection."
+        );
+    }
+
+    #[test]
+    fn handle_download_result_unknown_error() {
+        let dest = std::path::Path::new("/tmp/updater_test_unknown_error");
+        let result = super::download_to_path_default("does_not_exist", dest, 0);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "builder error");
+    }
+
+    #[test]
     fn handle_network_result_ok() {
         let body = ureq::Body::builder()
             .mime_type("text/plain")
