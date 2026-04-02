@@ -99,7 +99,7 @@ impl UpdaterState {
                 verification_mode,
             )),
             serialized_state: SerializedState {
-                client_id: client_id,
+                client_id,
                 release_version,
                 queued_events: Vec::new(),
             },
@@ -303,7 +303,7 @@ impl UpdaterState {
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::cache::patch_manager::MockManagePatches;
 
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn release_version_changed_resets_patches() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let mut patch_manager = PatchManager::manager_for_test(&tmp_dir);
         let file_path = &tmp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, "patch file contents").unwrap();
@@ -344,12 +344,20 @@ mod tests {
         let release_version = state.serialized_state.release_version.clone();
         assert!(state.save().is_ok());
 
-        let mut state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, &release_version, None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            &release_version,
+            None,
+            PatchVerificationMode::default(),
+        );
         assert_eq!(state.next_boot_patch().unwrap().number, 1);
 
-        let mut next_version_state =
-            UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None, PatchVerificationMode::default());
+        let mut next_version_state = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            "1.0.0+2",
+            None,
+            PatchVerificationMode::default(),
+        );
         assert!(next_version_state.next_boot_patch().is_none());
     }
 
@@ -357,7 +365,7 @@ mod tests {
     fn is_file_not_found_test() {
         use anyhow::Context;
         assert!(!super::is_file_not_found(&anyhow::anyhow!("")));
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("does_not_exist");
         let result = std::fs::File::open(path).context("foo");
         assert!(result.is_err());
@@ -366,9 +374,19 @@ mod tests {
 
     #[test]
     fn creates_updater_state_with_client_id() {
-        let tmp_dir = TempDir::new("example").unwrap();
-        let state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
-        let saved_state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
+        let tmp_dir = TempDir::new().unwrap();
+        let state = UpdaterState::load_or_new_on_error(
+            tmp_dir.path(),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
+        let saved_state = UpdaterState::load_or_new_on_error(
+            tmp_dir.path(),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
         assert_eq!(
             state.serialized_state.client_id,
             saved_state.serialized_state.client_id
@@ -379,7 +397,7 @@ mod tests {
     // the client_id should remain the same.
     #[test]
     fn client_id_does_not_change_if_release_version_changes() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let state = test_state(&tmp_dir, PatchManager::manager_for_test(&tmp_dir));
         let original_loaded = UpdaterState::load_or_new_on_error(
@@ -389,7 +407,12 @@ mod tests {
             PatchVerificationMode::default(),
         );
 
-        let new_loaded = UpdaterState::load_or_new_on_error(&state.cache_dir, "1.0.0+2", None, PatchVerificationMode::default());
+        let new_loaded = UpdaterState::load_or_new_on_error(
+            &state.cache_dir,
+            "1.0.0+2",
+            None,
+            PatchVerificationMode::default(),
+        );
 
         assert_eq!(
             original_loaded.serialized_state.client_id,
@@ -399,7 +422,7 @@ mod tests {
 
     #[test]
     fn does_not_save_cache_dir() {
-        let original_tmp_dir = TempDir::new("example").unwrap();
+        let original_tmp_dir = TempDir::new().unwrap();
         let original_state = UpdaterState {
             cache_dir: original_tmp_dir.path().to_path_buf(),
             patch_manager: Box::new(PatchManager::manager_for_test(&original_tmp_dir)),
@@ -411,19 +434,20 @@ mod tests {
         };
         original_state.save().unwrap();
 
-        let new_tmp_dir = TempDir::new("example_2").unwrap();
+        let new_tmp_dir = TempDir::new().unwrap();
         let original_state_path = original_tmp_dir.path().join(STATE_FILE_NAME);
         let new_state_path = new_tmp_dir.path().join(STATE_FILE_NAME);
         std::fs::rename(original_state_path, new_state_path).unwrap();
 
-        let new_state = UpdaterState::load(new_tmp_dir.path(), None, PatchVerificationMode::default()).unwrap();
+        let new_state =
+            UpdaterState::load(new_tmp_dir.path(), None, PatchVerificationMode::default()).unwrap();
         assert_eq!(new_state.cache_dir, new_tmp_dir.path());
     }
 
     #[test]
     fn record_boot_failure_for_patch_forwards_to_patch_manager() {
         let patch_number = 1;
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
             .expect_record_boot_failure_for_patch()
@@ -435,7 +459,7 @@ mod tests {
 
     #[test]
     fn record_boot_success_for_patch_forwards_to_patch_manager() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
             .expect_record_boot_success()
@@ -447,7 +471,7 @@ mod tests {
 
     #[test]
     fn last_successfully_booted_patch_forwards_from_patch_manager() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch = fake_patch(&tmp_dir, 1);
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
@@ -459,7 +483,7 @@ mod tests {
 
     #[test]
     fn current_boot_patch_returns_currently_booting_patch_if_present() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch1 = fake_patch(&tmp_dir, 1);
         let patch2 = fake_patch(&tmp_dir, 2);
         let mut mock_manage_patches = MockManagePatches::new();
@@ -475,7 +499,7 @@ mod tests {
 
     #[test]
     fn current_boot_patch_returns_last_successfully_booted_patch_if_no_patch_is_booting() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch = fake_patch(&tmp_dir, 1);
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
@@ -491,7 +515,7 @@ mod tests {
     #[test]
     fn next_boot_patch_forwards_from_patch_manager() {
         let patch_number = 1;
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch = fake_patch(&tmp_dir, patch_number);
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
@@ -503,7 +527,7 @@ mod tests {
 
     #[test]
     fn validate_next_boot_patch_forwards_to_patch_manager() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
             .expect_validate_next_boot_patch()
@@ -515,7 +539,7 @@ mod tests {
     #[test]
     fn install_patch_forwards_to_patch_manager() {
         let patch_number = 1;
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let patch = fake_patch(&tmp_dir, patch_number);
         let mut mock_manage_patches = MockManagePatches::new();
         let cloned_patch = patch.clone();
@@ -537,7 +561,7 @@ mod tests {
 
     #[test]
     fn is_known_bad_patch_returns_value_from_patch_manager() {
-        let tmp_dir = TempDir::new("example").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let mut mock_manage_patches = MockManagePatches::new();
         mock_manage_patches
             .expect_is_known_bad_patch()
@@ -554,10 +578,15 @@ mod tests {
 
     #[test]
     fn load_or_new_on_error_clears_patch_state_on_error() -> Result<()> {
-        let tmp_dir = TempDir::new("example")?;
+        let tmp_dir = TempDir::new()?;
 
         // Create a new state, add a patch, and save it.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(
+            tmp_dir.path(),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
         let patch = fake_patch(&tmp_dir, 1);
         state.install_patch(&patch, "hash", None)?;
         state.save()?;
@@ -568,7 +597,12 @@ mod tests {
         std::fs::write(&state_file, "corrupt json")?;
 
         // Ensure that, by corrupting the file, we've reset the patches state.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(
+            tmp_dir.path(),
+            "1.0.0+2",
+            None,
+            PatchVerificationMode::default(),
+        );
         assert!(state.next_boot_patch().is_none());
 
         Ok(())

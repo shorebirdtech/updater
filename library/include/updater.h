@@ -156,6 +156,14 @@ SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
  */
 SHOREBIRD_EXPORT void shorebird_free_string(const char *c_string);
 
+/**
+ * Frees an `UpdateResult` previously returned by `shorebird_check_for_update`.
+ *
+ * # Safety
+ *
+ * `result` must be a valid pointer returned by `shorebird_check_for_update`,
+ * or null (in which case this is a no-op).
+ */
 SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 
 /**

@@ -13,6 +13,16 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Check Formatting
+      working-directory: ${{ inputs.working_directory }}
+      shell: ${{ inputs.shell }}
+      run: cargo fmt --check
+
+    - name: Clippy
+      working-directory: ${{ inputs.working_directory }}
+      shell: ${{ inputs.shell }}
+      run: cargo clippy --all-targets -- -D warnings
+
     - name: Build
       working-directory: ${{ inputs.working_directory }}
       shell: ${{ inputs.shell }}

@@ -55,10 +55,10 @@ impl Seek for CFile {
         };
         let result = (self.file_callbacks.seek)(self.handle, offset, whence);
         if result < 0 {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("CFile seek failed with error code: {}", result),
-            ))
+            Err(std::io::Error::other(format!(
+                "CFile seek failed with error code: {}",
+                result
+            )))
         } else {
             Ok(result as u64)
         }
@@ -66,6 +66,7 @@ impl Seek for CFile {
 }
 
 #[cfg(test)]
+#[allow(static_mut_refs)] // Test-only statics guarded by #[serial]; will migrate to SyncUnsafeCell when stabilized.
 mod test {
     use serial_test::serial;
 

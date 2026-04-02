@@ -1,5 +1,5 @@
-use anyhow::{bail, Context};
 use crate::file_errors::{FileOperation, IoResultExt};
+use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::File,
@@ -24,8 +24,7 @@ where
     std::fs::create_dir_all(containing_dir)
         .with_file_context(FileOperation::CreateDir, containing_dir)?;
 
-    let file = File::create(path)
-        .with_file_context(FileOperation::CreateFile, path_as_ref)?;
+    let file = File::create(path).with_file_context(FileOperation::CreateFile, path_as_ref)?;
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, serializable)
         .with_context(|| format!("failed to serialize to {:?}", path_as_ref))
@@ -43,8 +42,7 @@ where
         bail!("File {} does not exist", path_as_ref.display());
     }
 
-    let file = File::open(path_as_ref)
-        .with_file_context(FileOperation::ReadFile, path_as_ref)?;
+    let file = File::open(path_as_ref).with_file_context(FileOperation::ReadFile, path_as_ref)?;
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
         .with_context(|| format!("failed to deserialize from {:?}", &path_as_ref))
@@ -55,7 +53,7 @@ mod test {
     use std::path::Path;
 
     use serde::{Deserialize, Serialize};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use anyhow::{Ok, Result};
 
@@ -71,7 +69,7 @@ mod test {
             a: 1,
             b: "hello".to_string(),
         };
-        let temp_dir = TempDir::new("test")?;
+        let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("test.json");
         super::write(&test_struct, &path)?;
         let read_struct: TestStruct = super::read(&path)?;
@@ -88,7 +86,7 @@ mod test {
 
     #[test]
     fn read_errs_if_struct_cannot_be_deserialized() -> Result<()> {
-        let temp_dir = TempDir::new("test")?;
+        let temp_dir = TempDir::new()?;
         let path = &temp_dir.path().join("test.json");
         std::fs::write(path, "junk")?;
 

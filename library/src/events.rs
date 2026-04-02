@@ -9,6 +9,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::enum_variant_names)] // Prefix matches the domain concept, not a naming mistake.
 pub enum EventType {
     PatchInstallSuccess,
     PatchInstallFailure,

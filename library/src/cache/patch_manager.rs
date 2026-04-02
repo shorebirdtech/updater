@@ -1,7 +1,7 @@
 use super::{disk_io, signing, PatchInfo};
+use crate::file_errors::{FileOperation, IoResultExt};
 use crate::yaml::PatchVerificationMode;
 use anyhow::{bail, Context, Result};
-use crate::file_errors::{FileOperation, IoResultExt};
 use core::fmt::Debug;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,7 +12,7 @@ use std::{
 #[cfg(test)]
 use mockall::automock;
 #[cfg(test)]
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 const PATCHES_DIR_NAME: &str = "patches";
 const PATCHES_STATE_FILE_NAME: &str = "patches_state.json";
@@ -233,7 +233,8 @@ impl PatchManager {
         }
 
         let artifact_size_on_disk = std::fs::metadata(&artifact_path)
-            .with_file_context(FileOperation::GetMetadata, &artifact_path)?.len();
+            .with_file_context(FileOperation::GetMetadata, &artifact_path)?
+            .len();
         if artifact_size_on_disk != patch.size {
             bail!(
                 "Patch {} has size {} on disk, but expected size {}",
@@ -404,7 +405,8 @@ impl ManagePatches for PatchManager {
         let new_patch = PatchMetadata {
             number: patch_number,
             size: std::fs::metadata(&patch_path)
-                .with_file_context(FileOperation::GetMetadata, &patch_path)?.len(),
+                .with_file_context(FileOperation::GetMetadata, &patch_path)?
+                .len(),
             hash: hash.to_owned(),
             signature: signature.map(|s| s.to_owned()),
         };
@@ -573,14 +575,14 @@ impl PatchManager {
 
 #[cfg(test)]
 mod debug_tests {
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::PatchManager;
     use crate::yaml::PatchVerificationMode;
 
     #[test]
     fn manage_patches_is_debug() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let patch_manager: Box<dyn super::ManagePatches> =
             Box::new(PatchManager::manager_for_test(&temp_dir));
         assert_eq!(format!("{:?}", patch_manager), "ManagePatches");
@@ -588,7 +590,7 @@ mod debug_tests {
 
     #[test]
     fn patch_manager_is_debug() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let patch_manager = PatchManager::new(
             temp_dir.path().to_owned(),
             Some("public_key"),
@@ -603,11 +605,11 @@ mod debug_tests {
 mod add_patch_tests {
     use super::*;
     use std::path::Path;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn errs_if_file_path_does_not_exist() {
-        let mut manager = PatchManager::manager_for_test(&TempDir::new("patch_manager").unwrap());
+        let mut manager = PatchManager::manager_for_test(&TempDir::new().unwrap());
         assert!(manager
             .add_patch(
                 1,
@@ -622,7 +624,7 @@ mod add_patch_tests {
     fn adds_patch_successfully() {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         let file_path = &temp_dir.path().join("patch1.vmcode");
@@ -669,7 +671,7 @@ mod add_patch_tests {
 
     #[test]
     fn install_only_errs_if_public_key_is_invalid() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some("not a valid key"),
@@ -687,7 +689,7 @@ mod add_patch_tests {
 
     #[test]
     fn install_only_errs_if_signature_is_missing_when_public_key_configured() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -705,7 +707,7 @@ mod add_patch_tests {
 
     #[test]
     fn install_only_errs_if_signature_is_invalid() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -725,7 +727,7 @@ mod add_patch_tests {
 
     #[test]
     fn install_only_succeeds_with_valid_signature() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -743,7 +745,7 @@ mod add_patch_tests {
 
     #[test]
     fn install_only_succeeds_with_any_signature_if_no_public_key() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             None, // No public key configured
@@ -763,11 +765,11 @@ mod add_patch_tests {
 #[cfg(test)]
 mod last_successfully_booted_patch_tests {
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn returns_none_if_no_patch_has_been_booted() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         assert!(manager.last_successfully_booted_patch().is_none());
@@ -777,7 +779,7 @@ mod last_successfully_booted_patch_tests {
 
     #[test]
     fn returns_value_from_patches_state() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
 
@@ -795,18 +797,18 @@ mod last_successfully_booted_patch_tests {
 #[cfg(test)]
 mod next_boot_patch_tests {
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn returns_none_if_no_next_boot_patch() {
-        let temp_dir = TempDir::new("patch_manager").unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let manager = PatchManager::manager_for_test(&temp_dir);
         assert!(manager.next_boot_patch().is_none());
     }
 
     #[test]
     fn returns_none_patch_if_first_patch_failed_to_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Add a first patch and pretend it failed to boot.
@@ -824,7 +826,7 @@ mod next_boot_patch_tests {
     #[test]
     fn falls_back_to_last_booted_patch_if_still_bootable() -> Result<()> {
         let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
@@ -851,7 +853,7 @@ mod next_boot_patch_tests {
 
     #[test]
     fn adding_patch_deletes_unbooted_patch_not_last_booted() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Add patch 1 and boot it successfully.
@@ -884,7 +886,7 @@ mod next_boot_patch_tests {
 
     #[test]
     fn returns_last_booted_patch_if_next_patch_failed_to_boot() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Add a first patch and pretend it booted successfully.
@@ -910,11 +912,11 @@ mod next_boot_patch_tests {
 mod validate_next_boot_patch_tests {
     use super::*;
     use anyhow::Result;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn does_nothing_if_no_next_boot_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         assert!(manager.validate_next_boot_patch().is_ok());
         Ok(())
@@ -922,7 +924,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn clears_next_boot_patch_if_it_is_not_bootable() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
 
@@ -947,7 +949,7 @@ mod validate_next_boot_patch_tests {
     #[test]
     fn clears_current_and_next_on_boot_failure_if_they_are_the_same() -> Result<()> {
         let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
@@ -975,7 +977,7 @@ mod validate_next_boot_patch_tests {
     #[test]
     fn does_not_fall_back_to_last_booted_patch_if_corrupted() -> Result<()> {
         let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
@@ -1033,7 +1035,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn strict_mode_succeeds_with_valid_signature_at_boot_time() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -1056,7 +1058,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn succeeds_with_arbitrary_signature_if_no_public_key() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         // Create a PatchManager without a public key - signature verification is skipped.
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
@@ -1079,7 +1081,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn strict_mode_fails_boot_validation_if_signature_missing() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -1099,7 +1101,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn strict_mode_fails_boot_validation_if_signature_invalid() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -1124,7 +1126,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn strict_mode_fails_boot_validation_if_public_key_invalid() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some("not a valid key"),
@@ -1144,7 +1146,7 @@ mod validate_next_boot_patch_tests {
 
     #[test]
     fn strict_mode_detects_tampered_patch_at_boot_time() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::new(
             temp_dir.path().to_path_buf(),
             Some(PUBLIC_KEY),
@@ -1173,7 +1175,7 @@ mod fall_back_tests {
 
     #[test]
     fn does_nothing_if_no_patch_exists() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         assert!(manager.patches_state.last_booted_patch.is_none());
@@ -1189,7 +1191,7 @@ mod fall_back_tests {
 
     #[test]
     fn sets_next_patch_to_latest_patch_if_both_are_present() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download and successfully boot from patch 1
@@ -1210,7 +1212,7 @@ mod fall_back_tests {
 
     #[test]
     fn clears_next_and_last_patches_if_both_fail_validation() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download and successfully boot from patch 1, and then corrupt it on disk.
@@ -1234,7 +1236,7 @@ mod fall_back_tests {
 
     #[test]
     fn does_not_clear_next_patch_if_changed_since_boot_start() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Simulate a situation where we download both patches 1 and 2.
@@ -1267,7 +1269,7 @@ mod fall_back_tests {
 
     #[test]
     fn succeeds_if_deleting_artifacts_fails() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download and successfully boot from patch 1, and then corrupt it on disk.
@@ -1297,11 +1299,11 @@ mod fall_back_tests {
 mod record_boot_success_for_patch_tests {
     use super::*;
     use anyhow::{Ok, Result};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn errs_if_no_next_boot_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // This should fail because no patches have been added.
@@ -1314,7 +1316,7 @@ mod record_boot_success_for_patch_tests {
     fn errs_if_patch_number_does_not_match_next_patch() -> Result<()> {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
@@ -1330,7 +1332,7 @@ mod record_boot_success_for_patch_tests {
     fn succeeds_when_provided_next_boot_patch_number() -> Result<()> {
         let patch_number = 1;
         let patch_file_contents = "patch contents";
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         let file_path = &temp_dir.path().join("patch1.vmcode");
         std::fs::write(file_path, patch_file_contents)?;
@@ -1346,7 +1348,7 @@ mod record_boot_success_for_patch_tests {
 
     #[test]
     fn deletes_other_patch_artifacts() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Download patches 1, 2, and 3 before we start booting from patch 2.
@@ -1378,7 +1380,7 @@ mod record_boot_success_for_patch_tests {
 
     #[test]
     fn deletes_unrecognized_directories_in_patches_dir() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
 
         // Add a junk directory to the patches directory.
@@ -1401,11 +1403,11 @@ mod record_boot_success_for_patch_tests {
 mod record_boot_failure_for_patch_tests {
     use super::*;
     use anyhow::{Ok, Result};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn deletes_failed_patch_artifacts() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         assert!(manager.record_boot_start_for_patch(1).is_ok());
@@ -1430,7 +1432,7 @@ mod record_boot_failure_for_patch_tests {
 
     #[test]
     fn clears_last_booted_patch_if_it_is_the_failed_patch() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         let patch_artifact_path = manager.patch_artifact_path(1);
@@ -1459,11 +1461,11 @@ mod record_boot_failure_for_patch_tests {
 mod reset_tests {
     use super::*;
     use anyhow::{Ok, Result};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn deletes_patches_dir_and_resets_patches_state() -> Result<()> {
-        let temp_dir = TempDir::new("patch_manager")?;
+        let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
         let path_artifacts_dir = manager.patches_dir();

@@ -27,6 +27,7 @@ words:
   - cbindgen
   - cdylib
   - classpath
+  - clippy
   - comde
   - compatch
   - Condvar
@@ -58,6 +59,7 @@ words:
   - pubspec
   - repr
   - reqwest
+  - rsplit
   - rollouts
   - rustflags
   - rustls
@@ -69,6 +71,7 @@ words:
   - subosito
   - swiftpm
   - symbolication
+  - ureq
   - unbootable
   - unbooted
   - usize
