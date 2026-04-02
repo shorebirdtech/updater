@@ -63,7 +63,7 @@ jobs:
     strategy:
       matrix:
         crate: ${{ fromJSON(needs.changes.outputs.needs_rust_build) }}
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [macos-latest, nscloud-windows-2022-amd64-8x16, ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
 
