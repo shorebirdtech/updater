@@ -21,15 +21,11 @@ runs:
       shell: bash
       run: cargo fmt --check
 
+    # No explicit build step needed — clippy already compiles all targets.
     - name: Clippy
       working-directory: ${{ inputs.working_directory }}
       shell: bash
       run: cargo clippy --all-targets -- -D warnings
-
-    - name: Build
-      working-directory: ${{ inputs.working_directory }}
-      shell: bash
-      run: cargo build --verbose
 
     - name: Test
       working-directory: ${{ inputs.working_directory }}
