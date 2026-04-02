@@ -1,7 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## What This Is
 
 Shorebird's updater library — a Rust core that gets linked into Flutter Engine (`libflutter.so`) as a static C library to enable over-the-air code push for Flutter apps. The Dart package (`shorebird_code_push`) calls into it via FFI.
