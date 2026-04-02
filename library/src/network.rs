@@ -178,6 +178,7 @@ pub const UNEXPECTED_DOWNLOAD: DownloadToPathFn = |_, _, _| panic!("unexpected d
 
 #[cfg(test)]
 /// Panicking placeholder for tests that should never reach the report step.
+#[allow(dead_code)]
 pub const UNEXPECTED_REPORT: ReportEventFn = |_, _| panic!("unexpected report event call");
 
 #[cfg(test)]
