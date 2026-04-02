@@ -30,6 +30,9 @@ pub struct YamlConfig {
     pub patch_public_key: Option<String>,
     /// When to verify patch signatures. Defaults to "strict" (verify at boot time).
     pub patch_verification: Option<PatchVerificationMode>,
+    /// Module version for add-to-app releases (AAR/iOS framework).
+    /// When present, used instead of release_version for patch lookup.
+    pub module_version: Option<String>,
 }
 
 impl YamlConfig {
