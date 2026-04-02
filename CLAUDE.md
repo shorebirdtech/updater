@@ -9,6 +9,7 @@ Shorebird's updater library — a Rust core that gets linked into Flutter Engine
 cargo build --verbose
 cargo test
 cargo llvm-cov --lcov --output-path lcov.info   # tests + coverage (CI uses this)
+# Prerequisites for coverage: rustup component add llvm-tools-preview && cargo install cargo-llvm-cov
 
 # Dart package
 cd shorebird_code_push
@@ -18,7 +19,7 @@ dart format --set-exit-if-changed .
 dart analyze --fatal-warnings lib test
 ```
 
-Rust tests that call `shorebird_init` must run single-threaded — use the `#[serial]` attribute from `serial_test`.
+Rust tests that call `shorebird_init` must run single-threaded — use the `#[serial]` attribute from `serial_test`. The global static config means concurrent `shorebird_init` calls stomp each other, so any test that touches init needs `#[serial]`.
 
 ## Workspace Layout
 
