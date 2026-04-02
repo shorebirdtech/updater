@@ -1153,7 +1153,7 @@ mod tests {
             ),
             Err(crate::InitError::InvalidArgument(
                 "yaml".to_string(),
-                "missing field `app_id`".to_string()
+                "missing required field: app_id".to_string()
             ))
         );
     }
@@ -1182,8 +1182,8 @@ patch_verification: bogus_mode
             Err(crate::InitError::InvalidArgument(field, msg)) => {
                 assert_eq!(field, "yaml");
                 assert!(
-                    msg.contains("unknown variant"),
-                    "Expected 'unknown variant' in error message, got: {}",
+                    msg.contains("invalid value for patch_verification"),
+                    "Expected 'invalid value for patch_verification' in error message, got: {}",
                     msg
                 );
             }
