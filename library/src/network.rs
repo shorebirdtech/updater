@@ -410,6 +410,7 @@ mod tests {
                 platform: "".to_string(),
                 arch: "".to_string(),
                 client_id: "".to_string(),
+                module_version: None,
             },
         );
         assert!(result.is_err());

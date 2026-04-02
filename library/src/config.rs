@@ -200,6 +200,7 @@ mod tests {
             base_url: Some("fake_base_url".to_string()),
             patch_public_key: None,
             patch_verification: None,
+            module_version: None,
         }
     }
 
@@ -225,6 +226,7 @@ mod tests {
                 base_url: Some("fake_base_url".to_string()),
                 patch_public_key: Some("patch_public_key".to_string()),
                 patch_verification: None,
+                module_version: None,
             },
             NetworkHooks::default(),
         )?;
