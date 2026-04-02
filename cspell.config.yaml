@@ -28,10 +28,12 @@ words:
   - cdylib
   - classpath
   - clippy
+  - codegen
   - comde
   - compatch
   - Condvar
   - datadir
+  - debuginfo
   - declspec
   - Decompressor
   - dllexport
