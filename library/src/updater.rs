@@ -2716,6 +2716,812 @@ mod check_for_downloadable_update_tests {
     }
 }
 
+/// Tests for state corruption and crash recovery scenarios.
+///
+/// These test what happens when the updater encounters corrupt or missing
+/// state files — the most important "fail-open" safety net.
+#[cfg(test)]
+mod state_recovery_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use crate::{
+        report_launch_start, report_launch_success,
+        test_utils::install_fake_patch,
+        updater::tests::init_for_testing,
+        with_mut_state, with_state,
+    };
+
+    /// When patches_state.json is corrupt, PatchManager should fall back to
+    /// default (empty) state. The updater should still function — no panic,
+    /// no boot from stale patch.
+    #[serial]
+    #[test]
+    fn corrupt_patches_state_resets_to_empty() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        // Install a patch and successfully boot it.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // Corrupt the patches_state.json file.
+        let patches_state_path = tmp_dir.path().join("patches_state.json");
+        std::fs::write(&patches_state_path, "{{{{not json at all")?;
+
+        // Reinitialize — should recover gracefully.
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            // Corrupt state means we lose knowledge of the patch.
+            assert!(
+                state.next_boot_patch().is_none(),
+                "Expected no next_boot_patch after state corruption"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// When patches_state.json is deleted but patch artifacts remain on disk,
+    /// the updater should not try to boot from orphaned artifacts.
+    #[serial]
+    #[test]
+    fn missing_patches_state_with_artifacts_on_disk() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Delete patches_state.json but leave artifacts.
+        let patches_state_path = tmp_dir.path().join("patches_state.json");
+        std::fs::remove_file(&patches_state_path)?;
+
+        // Reinitialize.
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            // Without state, we shouldn't boot from any patch.
+            assert!(state.next_boot_patch().is_none());
+            assert!(state.last_successfully_booted_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// When state.json (updater state) is truncated/empty, the updater should
+    /// create fresh state with a new client_id rather than crash.
+    #[serial]
+    #[test]
+    fn truncated_state_json_creates_fresh_state() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let original_client_id = with_state(|state| Ok(state.client_id()))?;
+        assert!(!original_client_id.is_empty());
+
+        // Truncate state.json to empty.
+        let state_path = tmp_dir.path().join("state.json");
+        std::fs::write(&state_path, "")?;
+
+        // Reinitialize.
+        init_for_testing(&tmp_dir, None);
+
+        let new_client_id = with_state(|state| Ok(state.client_id()))?;
+        // A fresh state should have a new client_id (the old one was lost
+        // along with the truncated file).
+        assert!(!new_client_id.is_empty());
+        assert_ne!(
+            original_client_id, new_client_id,
+            "Truncated state.json should generate a new client_id"
+        );
+
+        Ok(())
+    }
+
+    /// Simulates a crash during boot: currently_booting_patch is set in state
+    /// but the patch artifact has been deleted from disk. The updater should
+    /// mark it as bad and not try to boot from it.
+    #[serial]
+    #[test]
+    fn crash_during_boot_with_missing_artifact() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        // Start booting — sets currently_booting_patch.
+        report_launch_start()?;
+
+        with_state(|state| {
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // Simulate crash: delete the patch artifact but leave state intact.
+        let patches_dir = tmp_dir.path().join("patches");
+        if patches_dir.exists() {
+            std::fs::remove_dir_all(&patches_dir)?;
+        }
+
+        // Reinitialize — simulates process restart after crash.
+        // Crash recovery happens during init.
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            // The patch should be marked as bad (crash recovery detected it).
+            assert!(state.is_known_bad_patch(1));
+            // And there should be no next boot patch.
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// After a crash during boot, the updater should queue a PatchInstallFailure
+    /// event to report to the server on next update.
+    #[serial]
+    #[test]
+    fn crash_during_boot_queues_failure_event() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        // Don't call report_launch_success — simulate crash.
+
+        // Reinitialize.
+        init_for_testing(&tmp_dir, None);
+
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchInstallFailure
+            );
+            assert_eq!(events[0].patch_number, 1);
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// When a newer patch crashes during boot, it should be marked bad.
+    /// The previously-good patch (patch 1) was booted successfully before
+    /// patch 2 was installed, so crash recovery should mark only patch 2 bad.
+    #[serial]
+    #[test]
+    fn crash_on_newer_patch_marks_it_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        // Install patch 1, boot it successfully.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Install patch 2 (newer), start booting it.
+        install_fake_patch(2)?;
+        report_launch_start()?;
+        // Crash — don't report success.
+
+        // Reinit: crash recovery marks patch 2 as bad.
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(
+                state.is_known_bad_patch(2),
+                "Patch 2 should be marked bad after crash"
+            );
+            assert!(
+                !state.is_known_bad_patch(1),
+                "Patch 1 should not be marked bad — it booted successfully"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Verify that load_or_new_on_error preserves client_id even when
+    /// patches_state.json is corrupt. The client_id lives in state.json,
+    /// not patches_state.json.
+    #[serial]
+    #[test]
+    fn corrupt_patches_state_preserves_client_id() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let original_client_id = with_state(|state| Ok(state.client_id()))?;
+
+        // Corrupt patches_state.json only.
+        let patches_state_path = tmp_dir.path().join("patches_state.json");
+        std::fs::write(&patches_state_path, "corrupt")?;
+
+        // Reinitialize — state.json is fine, so client_id should survive.
+        init_for_testing(&tmp_dir, None);
+
+        let preserved_client_id = with_state(|state| Ok(state.client_id()))?;
+        assert_eq!(original_client_id, preserved_client_id);
+
+        Ok(())
+    }
+}
+
+/// Tests for download validation and error handling during the update flow.
+#[cfg(test)]
+mod download_validation_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    use crate::{
+        network::{testing_set_network_hooks, DownloadResult, PatchCheckResponse},
+        test_utils::write_fake_apk,
+        updater::tests::init_for_testing,
+        with_mut_state, Patch,
+    };
+
+    /// When the download hook returns an error, update() should propagate
+    /// the error and not leave the updater in a broken state.
+    #[serial]
+    #[test]
+    fn download_failure_propagates_error() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(Patch {
+                        number: 1,
+                        hash: "abc123".to_string(),
+                        download_url: "http://example.com/patch/1".to_string(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, _dest: &Path, _resume_from: u64| {
+                anyhow::bail!("Network connection lost");
+            },
+            |_url, _event| Ok(()),
+        );
+
+        let result = crate::update(None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Network connection lost"),
+        );
+
+        // Updater should still be functional — can try again.
+        with_mut_state(|state| {
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// When the download reports 0 bytes written (empty file), the inflate
+    /// step should fail and the update should not succeed.
+    #[serial]
+    #[test]
+    fn empty_download_fails_gracefully() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(Patch {
+                        number: 1,
+                        hash: "abc123".to_string(),
+                        download_url: "http://example.com/patch/1".to_string(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| {
+                // Write an empty file.
+                std::fs::write(dest, b"")?;
+                Ok(DownloadResult {
+                    total_bytes: 0,
+                    content_length: Some(0),
+                })
+            },
+            |_url, _event| Ok(()),
+        );
+
+        let result = crate::update(None);
+        // Should fail during validation (empty file check), not panic.
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty"),
+            "Expected 'empty' in error, got: {err}"
+        );
+
+        Ok(())
+    }
+
+    /// When the download writes garbage (not zstd), inflate should fail
+    /// with a clear error rather than panicking.
+    #[serial]
+    #[test]
+    fn non_zstd_download_fails_with_clear_error() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(Patch {
+                        number: 1,
+                        hash: "abc123".to_string(),
+                        download_url: "http://example.com/patch/1".to_string(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| {
+                // Write non-zstd data.
+                std::fs::write(dest, b"this is definitely not zstd compressed data!!")?;
+                Ok(DownloadResult {
+                    total_bytes: 45,
+                    content_length: Some(45),
+                })
+            },
+            |_url, _event| Ok(()),
+        );
+
+        let result = crate::update(None);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("valid zstd magic bytes"),
+            "Expected zstd validation error, got: {err}"
+        );
+
+        Ok(())
+    }
+
+    /// When the server says patch_available=true but patch is None,
+    /// update() should return BadServerResponse error.
+    #[serial]
+    #[test]
+    fn patch_available_but_no_patch_object() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: None, // Server says available but doesn't provide patch.
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, _dest: &Path, _resume_from: u64| {
+                panic!("Should not attempt download");
+            },
+            |_url, _event| Ok(()),
+        );
+
+        let result = crate::update(None);
+        assert!(result.is_err());
+        let err = result
+            .unwrap_err()
+            .downcast::<crate::UpdateError>()
+            .unwrap();
+        assert_eq!(err, crate::UpdateError::BadServerResponse);
+
+        Ok(())
+    }
+
+    /// When the patch check request itself fails, update() should return
+    /// an error without touching any state.
+    #[serial]
+    #[test]
+    fn patch_check_network_failure() -> Result<()> {
+        use crate::test_utils::install_fake_patch;
+
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                anyhow::bail!("DNS resolution failed");
+            },
+            |_url, _dest: &Path, _resume_from: u64| {
+                panic!("Should not attempt download");
+            },
+            |_url, _event| Ok(()),
+        );
+
+        let result = crate::update(None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("DNS resolution failed"),
+        );
+
+        // Existing patch should still be intact.
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+}
+
+/// Tests for roll_back_patches_if_needed, exercising the rollback path directly.
+#[cfg(test)]
+mod rollback_unit_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use crate::{
+        network::{testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD},
+        report_launch_start, report_launch_success,
+        test_utils::install_fake_patch,
+        updater::tests::init_for_testing,
+        with_mut_state,
+    };
+
+    /// Rolling back a patch that was never installed should not error.
+    #[serial]
+    #[test]
+    fn rollback_nonexistent_patch_is_noop() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: Some(vec![99]),
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            |_url, _event| Ok(()),
+        );
+
+        // Should not error even though patch 99 was never installed.
+        let result = crate::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::NoUpdate);
+
+        Ok(())
+    }
+
+    // Note: single-patch rollback is already covered by
+    // rollback_tests::rolls_back_from_current_patch_to_release.
+
+    /// Rolling back multiple patches at once should clear all of them.
+    #[serial]
+    #[test]
+    fn rollback_multiple_patches() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        // Install patch 1, boot successfully.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Install patch 2 on top.
+        install_fake_patch(2)?;
+
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            Ok(())
+        })?;
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    // Roll back both patches.
+                    rolled_back_patch_numbers: Some(vec![1, 2]),
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            |_url, _event| Ok(()),
+        );
+
+        crate::update(None)?;
+
+        with_mut_state(|state| {
+            assert!(
+                state.next_boot_patch().is_none(),
+                "All patches rolled back — should fall back to base"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+}
+
+/// Tests for download resume edge cases — the interaction between sidecar
+/// state, partial files, and the server's Range support.
+#[cfg(test)]
+mod resume_edge_case_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    use crate::{
+        network::{testing_set_network_hooks, DownloadResult, PatchCheckResponse},
+        test_utils::write_fake_apk,
+        updater::tests::init_for_testing,
+        with_mut_state, Patch,
+    };
+
+    // The known-good patch bytes: `string_patch "hello world" "hello tests"`.
+    const PATCH_BYTES: [u8; 31] = [
+        40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0,
+        5, 116, 101, 115, 116, 115, 0,
+    ];
+    const PATCH_HASH: &str = "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
+
+    /// Helper: set up network hooks with a patch check returning patch 1,
+    /// and a custom download function.
+    fn setup_hooks_with_download(
+        download_fn: crate::network::DownloadToPathFn,
+    ) {
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(Patch {
+                        number: 1,
+                        hash: PATCH_HASH.to_string(),
+                        download_url: "http://example.com/patch/1".to_string(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            download_fn,
+            |_url, _event| Ok(()),
+        );
+    }
+
+    /// When a sidecar exists from a prior attempt but the partial file has
+    /// been deleted (e.g. by OS cache cleanup), the updater should start a
+    /// fresh download (resume_from=0) rather than sending a bogus Range header.
+    #[serial]
+    #[test]
+    fn sidecar_exists_but_partial_file_deleted() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Create sidecar without corresponding partial file.
+        let download_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&download_dir)?;
+        let download_path = download_dir.join("1");
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch/1".to_string(),
+                patch_number: 1,
+                expected_size: Some(31),
+                expected_hash: PATCH_HASH.to_string(),
+            },
+        )?;
+        // Note: download_path itself does NOT exist — file was deleted.
+
+        setup_hooks_with_download(
+            |_url, dest: &Path, resume_from: u64| {
+                // Should start fresh since partial file is missing.
+                assert_eq!(
+                    resume_from, 0,
+                    "Expected fresh download (resume_from=0) when partial file is missing"
+                );
+                fs::write(dest, &PATCH_BYTES)?;
+                Ok(DownloadResult {
+                    total_bytes: PATCH_BYTES.len() as u64,
+                    content_length: Some(PATCH_BYTES.len() as u64),
+                })
+            },
+        );
+
+        let result = crate::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        Ok(())
+    }
+
+    /// When the server ignores the Range header and returns 200 with the
+    /// full file (instead of 206), the download_to_path_default code should
+    /// handle this by starting fresh. Here we test the updater still
+    /// succeeds end-to-end in this scenario.
+    #[serial]
+    #[test]
+    fn server_ignores_range_header_full_download_succeeds() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Pre-create a partial download and sidecar.
+        let download_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&download_dir)?;
+        let download_path = download_dir.join("1");
+        fs::write(&download_path, &PATCH_BYTES[..10])?;
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch/1".to_string(),
+                patch_number: 1,
+                expected_size: None,
+                expected_hash: PATCH_HASH.to_string(),
+            },
+        )?;
+
+        setup_hooks_with_download(
+            |_url, dest: &Path, _resume_from: u64| {
+                // Simulate server ignoring Range: write the full file
+                // (as download_to_path_default would on a 200 response).
+                fs::write(dest, &PATCH_BYTES)?;
+                Ok(DownloadResult {
+                    total_bytes: PATCH_BYTES.len() as u64,
+                    content_length: Some(PATCH_BYTES.len() as u64),
+                })
+            },
+        );
+
+        let result = crate::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// When a download fails mid-transfer, the sidecar should remain so
+    /// the next attempt can resume. Verify the sidecar survives the error.
+    #[serial]
+    #[test]
+    fn failed_download_preserves_sidecar_for_retry() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        setup_hooks_with_download(
+            |_url, dest: &Path, _resume_from: u64| {
+                // Write partial data then fail.
+                fs::write(dest, &PATCH_BYTES[..10])?;
+                anyhow::bail!("Connection reset by peer");
+            },
+        );
+
+        let result = crate::update(None);
+        assert!(result.is_err());
+
+        // The sidecar should have been written before the download started.
+        let download_path = tmp_dir.path().join("downloads/1");
+        let sidecar_path = crate::download_state::sidecar_path(&download_path);
+        assert!(
+            sidecar_path.exists(),
+            "Sidecar should survive a download failure for retry"
+        );
+
+        // The partial file should still exist.
+        assert!(
+            download_path.exists(),
+            "Partial download should survive for resume"
+        );
+
+        Ok(())
+    }
+
+    /// After a failed download, a subsequent update attempt should be able
+    /// to resume from the partial file left behind.
+    #[serial]
+    #[test]
+    fn retry_after_failure_resumes_from_partial() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Use a const so closures don't capture a local variable.
+        const SPLIT_AT: usize = 10;
+
+        // First attempt: write partial data then fail.
+        setup_hooks_with_download(
+            |_url, dest: &Path, _resume_from: u64| {
+                fs::write(dest, &PATCH_BYTES[..SPLIT_AT])?;
+                anyhow::bail!("Connection timeout");
+            },
+        );
+        let _ = crate::update(None); // Expected to fail.
+
+        // Second attempt: should resume from SPLIT_AT.
+        setup_hooks_with_download(
+            |_url, dest: &Path, resume_from: u64| {
+                assert_eq!(
+                    resume_from, SPLIT_AT as u64,
+                    "Expected to resume from byte {SPLIT_AT}"
+                );
+                // Append remaining bytes.
+                use std::io::{Seek, Write};
+                let mut file = fs::OpenOptions::new().write(true).open(dest)?;
+                file.seek(std::io::SeekFrom::Start(resume_from))?;
+                file.write_all(&PATCH_BYTES[SPLIT_AT..])?;
+                Ok(DownloadResult {
+                    total_bytes: PATCH_BYTES.len() as u64,
+                    content_length: Some(PATCH_BYTES.len() as u64),
+                })
+            },
+        );
+
+        let result = crate::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod multi_engine_tests {
     use anyhow::Result;
