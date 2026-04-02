@@ -2917,7 +2917,7 @@ mod state_recovery_tests {
         report_launch_start()?;
         // Crash — don't report success.
 
-        // Reinit: crash recovery marks patch 2 as bad.
+        // Reinitialize: crash recovery marks patch 2 as bad.
         init_for_testing(&tmp_dir, None);
 
         with_mut_state(|state| {
