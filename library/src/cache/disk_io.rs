@@ -1,5 +1,5 @@
-use anyhow::{bail, Context};
 use crate::file_errors::{FileOperation, IoResultExt};
+use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::File,
@@ -24,8 +24,7 @@ where
     std::fs::create_dir_all(containing_dir)
         .with_file_context(FileOperation::CreateDir, containing_dir)?;
 
-    let file = File::create(path)
-        .with_file_context(FileOperation::CreateFile, path_as_ref)?;
+    let file = File::create(path).with_file_context(FileOperation::CreateFile, path_as_ref)?;
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, serializable)
         .with_context(|| format!("failed to serialize to {:?}", path_as_ref))
@@ -43,8 +42,7 @@ where
         bail!("File {} does not exist", path_as_ref.display());
     }
 
-    let file = File::open(path_as_ref)
-        .with_file_context(FileOperation::ReadFile, path_as_ref)?;
+    let file = File::open(path_as_ref).with_file_context(FileOperation::ReadFile, path_as_ref)?;
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
         .with_context(|| format!("failed to deserialize from {:?}", &path_as_ref))

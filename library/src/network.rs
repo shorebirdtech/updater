@@ -457,9 +457,7 @@ mod tests {
 
     #[test]
     fn handle_network_result_ok() {
-        let body = ureq::Body::builder()
-            .mime_type("text/plain")
-            .data("");
+        let body = ureq::Body::builder().mime_type("text/plain").data("");
         let response = ureq::http::Response::builder()
             .status(200)
             .body(body)
