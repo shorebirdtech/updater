@@ -13,11 +13,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Cache Rust toolchain and build artifacts
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: ${{ inputs.working_directory }}
-
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
 
