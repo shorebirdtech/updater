@@ -478,6 +478,7 @@ mod tests {
                 arch: "".to_string(),
                 client_id: "".to_string(),
                 current_patch_number: None,
+                module_version: None,
             },
         );
         assert!(result.is_err());
