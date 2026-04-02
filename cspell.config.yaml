@@ -55,6 +55,7 @@ words:
   - mockall
   - mocktail
   - msvc
+  - nscloud
   - oslog
   - pubspec
   - repr
