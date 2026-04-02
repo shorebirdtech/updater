@@ -99,7 +99,7 @@ impl UpdaterState {
                 verification_mode,
             )),
             serialized_state: SerializedState {
-                client_id: client_id,
+                client_id,
                 release_version,
                 queued_events: Vec::new(),
             },
@@ -557,7 +557,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
 
         // Create a new state, add a patch, and save it.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+1", None, PatchVerificationMode::default());
         let patch = fake_patch(&tmp_dir, 1);
         state.install_patch(&patch, "hash", None)?;
         state.save()?;
@@ -568,7 +568,7 @@ mod tests {
         std::fs::write(&state_file, "corrupt json")?;
 
         // Ensure that, by corrupting the file, we've reset the patches state.
-        let mut state = UpdaterState::load_or_new_on_error(&tmp_dir.path(), "1.0.0+2", None, PatchVerificationMode::default());
+        let mut state = UpdaterState::load_or_new_on_error(tmp_dir.path(), "1.0.0+2", None, PatchVerificationMode::default());
         assert!(state.next_boot_patch().is_none());
 
         Ok(())

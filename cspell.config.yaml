@@ -27,6 +27,7 @@ words:
   - cbindgen
   - cdylib
   - classpath
+  - clippy
   - comde
   - compatch
   - Condvar

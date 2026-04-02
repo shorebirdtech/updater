@@ -220,15 +220,15 @@ fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
             return UpdateResult {
                 status: status as i32,
                 message: allocate_c_string(message.as_str())
-                    .unwrap_or_else(|_| std::ptr::null_mut()),
+                    .unwrap_or(std::ptr::null_mut()),
             };
         }
         Err(err) => UpdateResult {
             status: SHOREBIRD_UPDATE_ERROR,
-            message: allocate_c_string(&err.to_string()).unwrap_or_else(|_| std::ptr::null_mut()),
+            message: allocate_c_string(&err.to_string()).unwrap_or(std::ptr::null_mut()),
         },
     };
-    return result;
+    result
 }
 
 /// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
@@ -237,7 +237,7 @@ fn to_update_result(status: anyhow::Result<UpdateStatus>) -> UpdateResult {
 #[no_mangle]
 pub extern "C" fn shorebird_validate_next_boot_patch() {
     log_on_error(
-        || updater::validate_next_boot_patch(),
+        updater::validate_next_boot_patch,
         "validating next_boot_patch",
         (),
     );
@@ -272,6 +272,12 @@ pub unsafe extern "C" fn shorebird_free_string(c_string: *const c_char) {
     }
 }
 
+/// Frees an `UpdateResult` previously returned by `shorebird_check_for_update`.
+///
+/// # Safety
+///
+/// `result` must be a valid pointer returned by `shorebird_check_for_update`,
+/// or null (in which case this is a no-op).
 #[no_mangle]
 pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult) {
     if result.is_null() {
@@ -337,7 +343,7 @@ pub extern "C" fn shorebird_update_with_result(c_channel: *const c_char) -> *con
         Ok(channel) => to_update_result(updater::update(channel.as_deref())),
         Err(err) => to_update_result(Err(err)),
     };
-    return Box::into_raw(Box::new(result));
+    Box::into_raw(Box::new(result))
 }
 
 /// Start a thread to download an update if one is available.
