@@ -2754,6 +2754,10 @@ mod state_recovery_tests {
 
         // Corrupt the patches_state.json file.
         let patches_state_path = tmp_dir.path().join("patches_state.json");
+        assert!(
+            patches_state_path.exists(),
+            "patches_state.json should exist before we corrupt it"
+        );
         std::fs::write(&patches_state_path, "{{{{not json at all")?;
 
         // Reinitialize — should recover gracefully.
@@ -2813,6 +2817,10 @@ mod state_recovery_tests {
 
         // Truncate state.json to empty.
         let state_path = tmp_dir.path().join("state.json");
+        assert!(
+            state_path.exists(),
+            "state.json should exist before we truncate it"
+        );
         std::fs::write(&state_path, "")?;
 
         // Reinitialize.
@@ -2850,9 +2858,11 @@ mod state_recovery_tests {
 
         // Simulate crash: delete the patch artifact but leave state intact.
         let patches_dir = tmp_dir.path().join("patches");
-        if patches_dir.exists() {
-            std::fs::remove_dir_all(&patches_dir)?;
-        }
+        assert!(
+            patches_dir.exists(),
+            "patches directory should exist before we delete it"
+        );
+        std::fs::remove_dir_all(&patches_dir)?;
 
         // Reinitialize — simulates process restart after crash.
         // Crash recovery happens during init.
@@ -2948,6 +2958,10 @@ mod state_recovery_tests {
 
         // Corrupt patches_state.json only.
         let patches_state_path = tmp_dir.path().join("patches_state.json");
+        assert!(
+            patches_state_path.exists(),
+            "patches_state.json should exist before we corrupt it"
+        );
         std::fs::write(&patches_state_path, "corrupt")?;
 
         // Reinitialize — state.json is fine, so client_id should survive.
