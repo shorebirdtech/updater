@@ -28,10 +28,12 @@ words:
   - cdylib
   - classpath
   - clippy
+  - codegen
   - comde
   - compatch
   - Condvar
   - datadir
+  - debuginfo
   - declspec
   - Decompressor
   - dllexport
@@ -55,6 +57,7 @@ words:
   - mockall
   - mocktail
   - msvc
+  - nscloud
   - oslog
   - pubspec
   - repr
@@ -75,6 +78,8 @@ words:
   - unbootable
   - unbooted
   - usize
+  - Swatinem
+  - taiki
   - Verdana
   - vmcode
   - withf
