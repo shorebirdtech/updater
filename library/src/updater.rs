@@ -2727,10 +2727,8 @@ mod state_recovery_tests {
     use tempfile::TempDir;
 
     use crate::{
-        report_launch_start, report_launch_success,
-        test_utils::install_fake_patch,
-        updater::tests::init_for_testing,
-        with_mut_state, with_state,
+        report_launch_start, report_launch_success, test_utils::install_fake_patch,
+        updater::tests::init_for_testing, with_mut_state, with_state,
     };
 
     /// When patches_state.json is corrupt, PatchManager should fall back to
@@ -3022,12 +3020,10 @@ mod download_validation_tests {
 
         let result = crate::update(None);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Network connection lost"),
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Network connection lost"),);
 
         // Updater should still be functional — can try again.
         with_mut_state(|state| {
@@ -3190,12 +3186,10 @@ mod download_validation_tests {
 
         let result = crate::update(None);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("DNS resolution failed"),
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DNS resolution failed"),);
 
         // Existing patch should still be intact.
         with_mut_state(|state| {
@@ -3317,16 +3311,14 @@ mod resume_edge_case_tests {
 
     // The known-good patch bytes: `string_patch "hello world" "hello tests"`.
     const PATCH_BYTES: [u8; 31] = [
-        40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0,
-        5, 116, 101, 115, 116, 115, 0,
+        40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0, 5,
+        116, 101, 115, 116, 115, 0,
     ];
     const PATCH_HASH: &str = "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
 
     /// Helper: set up network hooks with a patch check returning patch 1,
     /// and a custom download function.
-    fn setup_hooks_with_download(
-        download_fn: crate::network::DownloadToPathFn,
-    ) {
+    fn setup_hooks_with_download(download_fn: crate::network::DownloadToPathFn) {
         testing_set_network_hooks(
             |_url, _request| {
                 Ok(PatchCheckResponse {
@@ -3373,20 +3365,18 @@ mod resume_edge_case_tests {
         )?;
         // Note: download_path itself does NOT exist — file was deleted.
 
-        setup_hooks_with_download(
-            |_url, dest: &Path, resume_from: u64| {
-                // Should start fresh since partial file is missing.
-                assert_eq!(
-                    resume_from, 0,
-                    "Expected fresh download (resume_from=0) when partial file is missing"
-                );
-                fs::write(dest, &PATCH_BYTES)?;
-                Ok(DownloadResult {
-                    total_bytes: PATCH_BYTES.len() as u64,
-                    content_length: Some(PATCH_BYTES.len() as u64),
-                })
-            },
-        );
+        setup_hooks_with_download(|_url, dest: &Path, resume_from: u64| {
+            // Should start fresh since partial file is missing.
+            assert_eq!(
+                resume_from, 0,
+                "Expected fresh download (resume_from=0) when partial file is missing"
+            );
+            fs::write(dest, PATCH_BYTES)?;
+            Ok(DownloadResult {
+                total_bytes: PATCH_BYTES.len() as u64,
+                content_length: Some(PATCH_BYTES.len() as u64),
+            })
+        });
 
         let result = crate::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
@@ -3423,17 +3413,15 @@ mod resume_edge_case_tests {
             },
         )?;
 
-        setup_hooks_with_download(
-            |_url, dest: &Path, _resume_from: u64| {
-                // Simulate server ignoring Range: write the full file
-                // (as download_to_path_default would on a 200 response).
-                fs::write(dest, &PATCH_BYTES)?;
-                Ok(DownloadResult {
-                    total_bytes: PATCH_BYTES.len() as u64,
-                    content_length: Some(PATCH_BYTES.len() as u64),
-                })
-            },
-        );
+        setup_hooks_with_download(|_url, dest: &Path, _resume_from: u64| {
+            // Simulate server ignoring Range: write the full file
+            // (as download_to_path_default would on a 200 response).
+            fs::write(dest, PATCH_BYTES)?;
+            Ok(DownloadResult {
+                total_bytes: PATCH_BYTES.len() as u64,
+                content_length: Some(PATCH_BYTES.len() as u64),
+            })
+        });
 
         let result = crate::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
@@ -3458,13 +3446,11 @@ mod resume_edge_case_tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        setup_hooks_with_download(
-            |_url, dest: &Path, _resume_from: u64| {
-                // Write partial data then fail.
-                fs::write(dest, &PATCH_BYTES[..10])?;
-                anyhow::bail!("Connection reset by peer");
-            },
-        );
+        setup_hooks_with_download(|_url, dest: &Path, _resume_from: u64| {
+            // Write partial data then fail.
+            fs::write(dest, &PATCH_BYTES[..10])?;
+            anyhow::bail!("Connection reset by peer");
+        });
 
         let result = crate::update(None);
         assert!(result.is_err());
@@ -3502,32 +3488,28 @@ mod resume_edge_case_tests {
         const SPLIT_AT: usize = 10;
 
         // First attempt: write partial data then fail.
-        setup_hooks_with_download(
-            |_url, dest: &Path, _resume_from: u64| {
-                fs::write(dest, &PATCH_BYTES[..SPLIT_AT])?;
-                anyhow::bail!("Connection timeout");
-            },
-        );
+        setup_hooks_with_download(|_url, dest: &Path, _resume_from: u64| {
+            fs::write(dest, &PATCH_BYTES[..SPLIT_AT])?;
+            anyhow::bail!("Connection timeout");
+        });
         let _ = crate::update(None); // Expected to fail.
 
         // Second attempt: should resume from SPLIT_AT.
-        setup_hooks_with_download(
-            |_url, dest: &Path, resume_from: u64| {
-                assert_eq!(
-                    resume_from, SPLIT_AT as u64,
-                    "Expected to resume from byte {SPLIT_AT}"
-                );
-                // Append remaining bytes.
-                use std::io::{Seek, Write};
-                let mut file = fs::OpenOptions::new().write(true).open(dest)?;
-                file.seek(std::io::SeekFrom::Start(resume_from))?;
-                file.write_all(&PATCH_BYTES[SPLIT_AT..])?;
-                Ok(DownloadResult {
-                    total_bytes: PATCH_BYTES.len() as u64,
-                    content_length: Some(PATCH_BYTES.len() as u64),
-                })
-            },
-        );
+        setup_hooks_with_download(|_url, dest: &Path, resume_from: u64| {
+            assert_eq!(
+                resume_from, SPLIT_AT as u64,
+                "Expected to resume from byte {SPLIT_AT}"
+            );
+            // Append remaining bytes.
+            use std::io::{Seek, Write};
+            let mut file = fs::OpenOptions::new().write(true).open(dest)?;
+            file.seek(std::io::SeekFrom::Start(resume_from))?;
+            file.write_all(&PATCH_BYTES[SPLIT_AT..])?;
+            Ok(DownloadResult {
+                total_bytes: PATCH_BYTES.len() as u64,
+                content_length: Some(PATCH_BYTES.len() as u64),
+            })
+        });
 
         let result = crate::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
