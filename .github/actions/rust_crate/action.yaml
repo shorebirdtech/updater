@@ -13,34 +13,31 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
     - name: Check Formatting
       working-directory: ${{ inputs.working_directory }}
-      shell: ${{ inputs.shell }}
+      shell: bash
       run: cargo fmt --check
 
+    # No explicit build step needed — clippy already compiles all targets.
     - name: Clippy
       working-directory: ${{ inputs.working_directory }}
-      shell: ${{ inputs.shell }}
+      shell: bash
       run: cargo clippy --all-targets -- -D warnings
-
-    - name: Build
-      working-directory: ${{ inputs.working_directory }}
-      shell: ${{ inputs.shell }}
-      run: cargo build --verbose
 
     - name: Test
       working-directory: ${{ inputs.working_directory }}
-      shell: ${{ inputs.shell }}
-      run: |
-        cargo install cargo-llvm-cov
-        cargo llvm-cov --lcov --output-path lcov.info
+      shell: bash
+      run: cargo llvm-cov --lcov --output-path lcov.info
     
     # Per https://stackoverflow.com/questions/73402042/github-action-expressions-split-string
     - name: Split package name
       env:
         PACKAGE_PATH: ${{ inputs.working_directory}}
       id: split
-      shell: ${{ inputs.shell }}
+      shell: bash
       run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
 
     - name: Upload Coverage
