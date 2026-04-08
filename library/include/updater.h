@@ -42,6 +42,13 @@
 #define SHOREBIRD_UPDATE_IS_BAD_PATCH 3
 
 /**
+ * Another update was already in progress when this call was made. The
+ * already-running update will continue; the caller did not start a new one.
+ * This is a benign outcome, not an error.
+ */
+#define SHOREBIRD_UPDATE_IN_PROGRESS 4
+
+/**
  * Struct containing configuration parameters for the updater.
  * Passed to all updater functions.
  * NOTE: If this struct is changed all language bindings must be updated.

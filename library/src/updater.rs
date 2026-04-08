@@ -30,6 +30,10 @@ pub enum UpdateStatus {
     UpdateInstalled,
     UpdateHadError,
     UpdateIsBadPatch,
+    // Another update was already in progress when this call was made. The
+    // already-running update will continue; the caller did not start a new
+    // one. This is a benign outcome, not an error.
+    UpdateInProgress,
 }
 
 impl Display for UpdateStatus {
@@ -42,6 +46,7 @@ impl Display for UpdateStatus {
                 f,
                 "Update available but previously failed to install. Not installing."
             ),
+            UpdateStatus::UpdateInProgress => write!(f, "Update already in progress"),
         }
     }
 }
@@ -651,7 +656,23 @@ fn cleanup_download_artifacts(download_path: &Path) {
 
 /// Synchronously checks for an update and downloads and installs it if available.
 pub fn update(channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
-    with_updater_thread_lock(|lock_state| update_internal(lock_state, channel))
+    match with_updater_thread_lock(|lock_state| update_internal(lock_state, channel)) {
+        Ok(status) => Ok(status),
+        Err(e) => {
+            // "Another update is already running" is a benign outcome — the
+            // in-progress update (typically the automatic updater thread) will
+            // continue on its own. Surface it as a non-error status so callers
+            // that monitor `update()` exceptions do not see it as a failure.
+            if matches!(
+                e.downcast_ref::<UpdateError>(),
+                Some(UpdateError::UpdateAlreadyInProgress)
+            ) {
+                Ok(UpdateStatus::UpdateInProgress)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// The first 4 bytes of any zstd compressed frame.
