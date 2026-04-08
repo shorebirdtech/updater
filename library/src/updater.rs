@@ -303,10 +303,20 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Based on guidance from:
     // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
 
+    use std::io::Read;
+
     let mut file = fs::File::open(path).with_file_context(FileOperation::ReadFile, path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).with_file_context(FileOperation::ReadFile, path)?;
-    // Check that the length from copy is the same as the file size?
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .with_file_context(FileOperation::ReadFile, path)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     let hash = hasher.finalize();
     let hash_matches = hash.as_slice() == expected;
     // This is a common error for developers.  We could avoid it entirely
