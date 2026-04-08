@@ -438,6 +438,34 @@ void main() {
         });
       });
 
+      group('when the update is deferred', () {
+        setUp(() {
+          when(() => updater.currentPatchNumber()).thenReturn(0);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
+          result.ref.status = SHOREBIRD_UPDATE_DEFERRED;
+          result.ref.message = 'State storage temporarily unavailable'
+              .toNativeUtf8()
+              .cast<Char>();
+          addTearDown(() {
+            calloc
+              ..free(result.ref.message)
+              ..free(result);
+          });
+          when(() => updater.update()).thenReturn(result);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('returns normally and does not throw', () async {
+          // When the Rust updater defers (typically iOS Data Protection
+          // blocking state writes on a locked device), update() must not
+          // surface it as an exception. The next attempt after the device
+          // is unlocked will typically succeed.
+          await expectLater(shorebirdUpdater.update(), completes);
+          verify(updater.update).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
+        });
+      });
+
       group('when an error occurs during download', () {
         setUp(() {
           when(() => updater.currentPatchNumber()).thenReturn(0);
