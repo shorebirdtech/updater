@@ -3,6 +3,7 @@ mod patch_manager;
 mod signing;
 pub mod updater_state;
 
+pub use signing::hash_file;
 pub use updater_state::UpdaterState;
 
 /// The public interface for talking about patches to the Cache.
