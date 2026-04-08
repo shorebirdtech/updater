@@ -296,29 +296,11 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
-    use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
-
-    let expected = hex::decode(expected_string).context("Invalid hash string from server.")?;
-
-    // Based on guidance from:
-    // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
-
-    use std::io::Read;
-
-    let mut file = fs::File::open(path).with_file_context(FileOperation::ReadFile, path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = file
-            .read(&mut buf)
-            .with_file_context(FileOperation::ReadFile, path)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    let hash = hasher.finalize();
-    let hash_matches = hash.as_slice() == expected;
+    // Validate the expected string is a hex-encoded hash.
+    hex::decode(expected_string).context("Invalid hash string from server.")?;
+    let hash = crate::cache::hash_file(path)
+        .with_context(|| format!("Failed to hash file: {:?}", path))?;
+    let hash_matches = hash == expected_string;
     // This is a common error for developers.  We could avoid it entirely
     // by sending the hash of `libapp.so` to the server and having the
     // server only send updates when the hash matches.
@@ -331,7 +313,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
             binary. Path: {:?}, expected: {}, got: {}",
             path,
             expected_string,
-            hex::encode(hash)
+            hash
         );
     }
     shorebird_debug!("Hash match: {:?}", path);
