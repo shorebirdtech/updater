@@ -63,6 +63,11 @@ pub const SHOREBIRD_UPDATE_HAD_ERROR: i32 = 2;
 /// The downloaded patch was not installed because it was invalid.
 pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
 
+/// Another update was already in progress when this call was made. The
+/// already-running update will continue; the caller did not start a new one.
+/// This is a benign outcome, not an error.
+pub const SHOREBIRD_UPDATE_IN_PROGRESS: i32 = 4;
+
 #[repr(C)]
 pub struct UpdateResult {
     pub status: i32,
@@ -1007,7 +1012,13 @@ mod test {
             shorebird_start_update_thread();
             // Wait for the thread to start.
             std::thread::sleep(std::time::Duration::from_millis(100));
-            assert!(updater::update(None).is_err());
+            // When another update is already in progress, `update()` returns
+            // `UpdateStatus::UpdateInProgress` rather than surfacing an error.
+            // The in-flight update continues on its own.
+            assert_eq!(
+                updater::update(None).unwrap(),
+                crate::UpdateStatus::UpdateInProgress
+            );
         }
         // Unlock the lock, and wait for the thread to finish.
         std::thread::sleep(std::time::Duration::from_millis(100));
