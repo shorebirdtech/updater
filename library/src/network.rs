@@ -248,15 +248,21 @@ pub struct PatchCheckRequest {
     /// device's UUID or any other identifier that has meaning outside of Shorebird.
     pub client_id: String,
     /// The number of the patch currently running on the device, if any.
+    ///
+    /// Reported for analytics (e.g. MAU breakdowns by patch). This is
+    /// intentionally separate from the legacy `patch_number` field, which
+    /// older updaters sent and which still triggers a server-side
+    /// short-circuit response; sending that field from new updaters would
+    /// suppress information (like `rolled_back_patch_numbers`) that we need.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub patch_number: Option<usize>,
+    pub current_patch_number: Option<usize>,
 }
 
 impl PatchCheckRequest {
     pub fn new(
         config: &UpdateConfig,
         client_id: &str,
-        patch_number: Option<usize>,
+        current_patch_number: Option<usize>,
     ) -> PatchCheckRequest {
         PatchCheckRequest {
             app_id: config.app_id.clone(),
@@ -265,7 +271,7 @@ impl PatchCheckRequest {
             platform: current_platform().to_string(),
             arch: current_arch().to_string(),
             client_id: client_id.to_string(),
-            patch_number,
+            current_patch_number,
         }
     }
 }
@@ -410,7 +416,7 @@ mod tests {
                 platform: "".to_string(),
                 arch: "".to_string(),
                 client_id: "".to_string(),
-                patch_number: None,
+                current_patch_number: None,
             },
         );
         assert!(result.is_err());
