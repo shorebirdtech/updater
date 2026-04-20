@@ -249,11 +249,10 @@ pub struct PatchCheckRequest {
     pub client_id: String,
     /// The number of the patch currently running on the device, if any.
     ///
-    /// Reported for analytics (e.g. MAU breakdowns by patch). This is
-    /// intentionally separate from the legacy `patch_number` field, which
-    /// older updaters sent and which still triggers a server-side
-    /// short-circuit response; sending that field from new updaters would
-    /// suppress information (like `rolled_back_patch_numbers`) that we need.
+    /// Supersedes the legacy `patch_number` field. `patch_number` is
+    /// retained server-side for compatibility with older clients that still
+    /// rely on its short-circuit response path; newer updaters populate
+    /// this field instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_patch_number: Option<usize>,
 }
