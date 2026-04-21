@@ -167,6 +167,7 @@ base_url: https://example.com
 auto_update: false
 patch_public_key: abc123
 patch_verification: install_only
+module_version: 1.2.3
 "#;
         let config = YamlConfig::from_yaml(yaml).unwrap();
         assert_eq!(config.app_id, "my_app");
@@ -178,6 +179,14 @@ patch_verification: install_only
             config.patch_verification,
             Some(PatchVerificationMode::InstallOnly)
         );
+        assert_eq!(config.module_version.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn module_version_defaults_to_none() {
+        let yaml = "app_id: test_app\n";
+        let config = YamlConfig::from_yaml(yaml).unwrap();
+        assert_eq!(config.module_version, None);
     }
 
     #[test]
