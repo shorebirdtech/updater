@@ -6,10 +6,18 @@ use std::path::Path;
 /// Reads the file at `path` and returns the SHA-256 hash of its contents as a String.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
     use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
+    use std::io::Read;
 
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     let hash = hasher.finalize();
     Ok(hex::encode(hash))
 }

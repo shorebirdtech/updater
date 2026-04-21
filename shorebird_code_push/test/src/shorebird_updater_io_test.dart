@@ -402,23 +402,37 @@ void main() {
           shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
         });
 
-        test('throws $UpdateException', () async {
-          await expectLater(
-            shorebirdUpdater.update,
-            throwsA(
-              isA<UpdateException>()
-                  .having(
-                    (e) => e.message,
-                    'message',
-                    'oops',
-                  )
-                  .having(
-                    (e) => e.reason,
-                    'reason',
-                    UpdateFailureReason.noUpdate,
-                  ),
-            ),
-          );
+        test('returns normally and does not throw', () async {
+          // SHOREBIRD_NO_UPDATE is a successful outcome of update() — the app
+          // is already running the latest patch. It must not throw.
+          await expectLater(shorebirdUpdater.update(), completes);
+          verify(updater.update).called(1);
+          verify(() => updater.freeUpdateResult(any())).called(1);
+        });
+      });
+
+      group('when another update is already in progress', () {
+        setUp(() {
+          when(() => updater.currentPatchNumber()).thenReturn(0);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
+          result.ref.status = SHOREBIRD_UPDATE_IN_PROGRESS;
+          result.ref.message =
+              'Update already in progress'.toNativeUtf8().cast<Char>();
+          addTearDown(() {
+            calloc
+              ..free(result.ref.message)
+              ..free(result);
+          });
+          when(() => updater.update()).thenReturn(result);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('returns normally and does not throw', () async {
+          // When the Rust updater reports that another update is already
+          // running, `update()` must not surface it as an exception — it is
+          // a benign outcome. The already-running update continues on its
+          // own; the caller simply did not start a new one.
+          await expectLater(shorebirdUpdater.update(), completes);
           verify(updater.update).called(1);
           verify(() => updater.freeUpdateResult(any())).called(1);
         });

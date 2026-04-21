@@ -30,6 +30,10 @@ pub enum UpdateStatus {
     UpdateInstalled,
     UpdateHadError,
     UpdateIsBadPatch,
+    // Another update was already in progress when this call was made. The
+    // already-running update will continue; the caller did not start a new
+    // one. This is a benign outcome, not an error.
+    UpdateInProgress,
 }
 
 impl Display for UpdateStatus {
@@ -42,6 +46,7 @@ impl Display for UpdateStatus {
                 f,
                 "Update available but previously failed to install. Not installing."
             ),
+            UpdateStatus::UpdateInProgress => write!(f, "Update already in progress"),
         }
     }
 }
@@ -291,19 +296,11 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
-    use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
-
-    let expected = hex::decode(expected_string).context("Invalid hash string from server.")?;
-
-    // Based on guidance from:
-    // <https://github.com/RustCrypto/hashes#hashing-readable-objects>
-
-    let mut file = fs::File::open(path).with_file_context(FileOperation::ReadFile, path)?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).with_file_context(FileOperation::ReadFile, path)?;
-    // Check that the length from copy is the same as the file size?
-    let hash = hasher.finalize();
-    let hash_matches = hash.as_slice() == expected;
+    // Validate the expected string is a hex-encoded hash.
+    hex::decode(expected_string).context("Invalid hash string from server.")?;
+    let hash = crate::cache::hash_file(path)
+        .with_context(|| format!("Failed to hash file: {:?}", path))?;
+    let hash_matches = hash == expected_string;
     // This is a common error for developers.  We could avoid it entirely
     // by sending the hash of `libapp.so` to the server and having the
     // server only send updates when the hash matches.
@@ -316,7 +313,7 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
             binary. Path: {:?}, expected: {}, got: {}",
             path,
             expected_string,
-            hex::encode(hash)
+            hash
         );
     }
     shorebird_debug!("Hash match: {:?}", path);
@@ -651,7 +648,23 @@ fn cleanup_download_artifacts(download_path: &Path) {
 
 /// Synchronously checks for an update and downloads and installs it if available.
 pub fn update(channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
-    with_updater_thread_lock(|lock_state| update_internal(lock_state, channel))
+    match with_updater_thread_lock(|lock_state| update_internal(lock_state, channel)) {
+        Ok(status) => Ok(status),
+        Err(e) => {
+            // "Another update is already running" is a benign outcome — the
+            // in-progress update (typically the automatic updater thread) will
+            // continue on its own. Surface it as a non-error status so callers
+            // that monitor `update()` exceptions do not see it as a failure.
+            if matches!(
+                e.downcast_ref::<UpdateError>(),
+                Some(UpdateError::UpdateAlreadyInProgress)
+            ) {
+                Ok(UpdateStatus::UpdateInProgress)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// The first 4 bytes of any zstd compressed frame.
