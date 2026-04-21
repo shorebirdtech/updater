@@ -203,8 +203,11 @@ mod test {
             fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
                 Err(std::io::Error::other("simulated flush failure"))
             }
+            // `BufWriter::into_inner` drains its buffer via the inner
+            // writer's `write`, not its `flush`, so this path is not
+            // exercised by the test. Required by the trait.
             fn flush(&mut self) -> std::io::Result<()> {
-                Err(std::io::Error::other("simulated flush failure"))
+                Ok(())
             }
         }
 
