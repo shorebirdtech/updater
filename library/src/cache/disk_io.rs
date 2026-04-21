@@ -36,8 +36,7 @@ where
     // flush error (we unwrap `BufWriter` below), and on-disk `path` is only
     // replaced by a fully-written sibling via an atomic `rename`.
     let temp_path = temp_sibling_path(path_as_ref);
-    let file =
-        File::create(&temp_path).with_file_context(FileOperation::CreateFile, &temp_path)?;
+    let file = File::create(&temp_path).with_file_context(FileOperation::CreateFile, &temp_path)?;
     if let Err(err) = serialize_and_flush(serializable, file)
         .with_context(|| format!("failed to serialize to {:?}", &temp_path))
     {
@@ -71,10 +70,7 @@ where
 /// Returns a sibling path in the same directory with a `.tmp` suffix,
 /// e.g. `/a/b/state.json` -> `/a/b/state.json.tmp`.
 fn temp_sibling_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("state");
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("state");
     path.with_file_name(format!("{file_name}.tmp"))
 }
 
@@ -165,7 +161,10 @@ mod test {
         // encountered during serialization without needing filesystem tricks.
         struct FailingSerialize;
         impl serde::Serialize for FailingSerialize {
-            fn serialize<S: serde::Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
                 Err(serde::ser::Error::custom("simulated failure"))
             }
         }
@@ -182,8 +181,8 @@ mod test {
         // original contents (the failed write goes to the sibling temp file
         // and never clobbers `path`).
         assert!(super::write(&FailingSerialize, &path).is_err());
-        let roundtripped: TestStruct = super::read(&path)?;
-        assert!(roundtripped == original);
+        let reloaded: TestStruct = super::read(&path)?;
+        assert!(reloaded == original);
         // Temp file was cleaned up.
         assert!(!temp_dir.path().join("state.json.tmp").exists());
         Ok(())
