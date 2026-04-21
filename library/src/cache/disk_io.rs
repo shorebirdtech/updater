@@ -99,7 +99,7 @@ mod test {
     use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
-    use anyhow::{Ok, Result};
+    use anyhow::Result;
 
     #[derive(Serialize, Deserialize, PartialEq, Eq)]
     struct TestStruct {
@@ -140,8 +140,8 @@ mod test {
     }
 
     #[test]
-    fn write_does_not_leave_temp_file_on_success() -> Result<()> {
-        let temp_dir = TempDir::new()?;
+    fn write_does_not_leave_temp_file_on_success() {
+        let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("state.json");
         super::write(
             &TestStruct {
@@ -149,14 +149,14 @@ mod test {
                 b: "hi".into(),
             },
             &path,
-        )?;
+        )
+        .unwrap();
         assert!(path.exists());
         assert!(!temp_dir.path().join("state.json.tmp").exists());
-        Ok(())
     }
 
     #[test]
-    fn write_preserves_existing_file_on_serialization_failure() -> Result<()> {
+    fn write_preserves_existing_file_on_serialization_failure() {
         // Struct whose Serialize impl always fails — simulates an I/O error
         // encountered during serialization without needing filesystem tricks.
         struct FailingSerialize;
@@ -169,23 +169,22 @@ mod test {
             }
         }
 
-        let temp_dir = TempDir::new()?;
+        let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("state.json");
         let original = TestStruct {
             a: 42,
             b: "original".into(),
         };
-        super::write(&original, &path)?;
+        super::write(&original, &path).unwrap();
 
         // Second write fails; the existing file at `path` must still hold the
         // original contents (the failed write goes to the sibling temp file
         // and never clobbers `path`).
         assert!(super::write(&FailingSerialize, &path).is_err());
-        let reloaded: TestStruct = super::read(&path)?;
+        let reloaded: TestStruct = super::read(&path).unwrap();
         assert!(reloaded == original);
         // Temp file was cleaned up.
         assert!(!temp_dir.path().join("state.json.tmp").exists());
-        Ok(())
     }
 
     // Regression test for the bug where `BufWriter`'s `Drop` impl silently
