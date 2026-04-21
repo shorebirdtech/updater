@@ -45,6 +45,7 @@ impl YamlConfig {
         let mut auto_update: Option<bool> = None;
         let mut patch_public_key: Option<String> = None;
         let mut patch_verification: Option<PatchVerificationMode> = None;
+        let mut module_version: Option<String> = None;
 
         for line in yaml.lines() {
             let line = line.trim();
@@ -78,6 +79,7 @@ impl YamlConfig {
                         }
                     });
                 }
+                "module_version" => module_version = Some(value.to_string()),
                 _ => {} // Ignore unknown keys for forward compatibility.
             }
         }
@@ -91,6 +93,7 @@ impl YamlConfig {
             auto_update,
             patch_public_key,
             patch_verification,
+            module_version,
         })
     }
 }
