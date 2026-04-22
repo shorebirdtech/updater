@@ -855,10 +855,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
         let client_id = state.client_id();
-        let message = format!(
-            "engine_report: patch {} failed to launch",
-            patch.number
-        );
+        let message = format!("engine_report: patch {} failed to launch", patch.number);
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
