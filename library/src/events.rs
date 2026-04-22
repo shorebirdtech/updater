@@ -14,6 +14,7 @@ pub enum EventType {
     PatchInstallSuccess,
     PatchInstallFailure,
     PatchDownload,
+    PatchUpdateFailure,
 }
 
 impl Serialize for EventType {
@@ -25,6 +26,7 @@ impl Serialize for EventType {
             EventType::PatchInstallSuccess => "__patch_install__",
             EventType::PatchInstallFailure => "__patch_install_failure__",
             EventType::PatchDownload => "__patch_download__",
+            EventType::PatchUpdateFailure => "__patch_update_failure__",
         })
     }
 }
@@ -39,6 +41,7 @@ impl<'de> Deserialize<'de> for EventType {
             "__patch_install__" => Ok(EventType::PatchInstallSuccess),
             "__patch_install_failure__" => Ok(EventType::PatchInstallFailure),
             "__patch_download__" => Ok(EventType::PatchDownload),
+            "__patch_update_failure__" => Ok(EventType::PatchUpdateFailure),
             _ => Err(serde::de::Error::custom(format!("Unknown event type: {s}"))),
         }
     }
