@@ -233,13 +233,9 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 None => "elapsed_secs=unknown".to_string(),
             };
 
-            let file_info = if patch.path.exists() {
-                match std::fs::metadata(&patch.path) {
-                    Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
-                    Err(_) => "file_ok=false,file_unreadable".to_string(),
-                }
-            } else {
-                "file_ok=false,file_missing".to_string()
+            let file_info = match std::fs::metadata(&patch.path) {
+                Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
+                Err(_) => "file_ok=false,file_missing".to_string(),
             };
 
             let message = format!(
