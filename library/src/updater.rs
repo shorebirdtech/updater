@@ -429,6 +429,50 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         ShouldInstallPatchCheckResult::PatchAlreadyInstalled => return Ok(UpdateStatus::NoUpdate),
     }
 
+    let patch_number = patch.number;
+    let result = download_and_install_patch(&config, &patch);
+
+    if let Err(ref err) = result {
+        // Queue a diagnostic event for the failed update attempt.
+        // This captures download failures, inflate errors, hash mismatches,
+        // and install failures — all of which are otherwise invisible.
+        let message = format!(
+            "update_failure: patch {} failed ({})",
+            patch_number,
+            truncate_error_message(err)
+        );
+        let queue_result = with_mut_state(|state| {
+            state.queue_event(PatchEvent::new(
+                &config,
+                EventType::PatchUpdateFailure,
+                patch_number,
+                state.client_id(),
+                Some(&message),
+            ))
+        });
+        if let Err(queue_err) = queue_result {
+            shorebird_error!("Failed to queue update failure event: {:?}", queue_err);
+        }
+    }
+
+    result
+}
+
+/// Truncates an error message to a reasonable length for the event payload.
+/// Avoids sending excessively long messages while preserving the root cause.
+fn truncate_error_message(err: &anyhow::Error) -> String {
+    let msg = format!("{:#}", err);
+    if msg.len() > 256 {
+        format!("{}...", &msg[..253])
+    } else {
+        msg
+    }
+}
+
+fn download_and_install_patch(
+    config: &UpdateConfig,
+    patch: &crate::network::Patch,
+) -> anyhow::Result<UpdateStatus> {
     shorebird_info!(
         "Downloading patch {} for app {} (version {})",
         patch.number,
@@ -496,7 +540,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
-    let patch_base_rs = patch_base(&config)?;
+    let patch_base_rs = patch_base(config)?;
     inflate(&download_path, patch_base_rs, &output_path)?;
 
     // Check the hash before moving into place.
@@ -511,6 +555,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
     // two threads at once. We could give UpdateState its own lock instead.
+    let config = config.clone();
     with_mut_state(|state| {
         let patch_info = PatchInfo {
             path: output_path,
@@ -527,11 +572,12 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         cleanup_download_artifacts(&download_path);
 
         let client_id = state.client_id();
+        let patch_number = patch.number;
         std::thread::spawn(move || {
             let event = PatchEvent::new(
                 &config,
                 EventType::PatchDownload,
-                patch.number,
+                patch_number,
                 client_id,
                 None,
             );
