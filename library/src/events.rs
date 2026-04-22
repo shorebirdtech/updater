@@ -104,3 +104,35 @@ impl PatchEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_type_round_trips() {
+        let types = [
+            (EventType::PatchInstallSuccess, "__patch_install__"),
+            (EventType::PatchInstallFailure, "__patch_install_failure__"),
+            (EventType::PatchDownload, "__patch_download__"),
+            (EventType::PatchUpdateFailure, "__patch_update_failure__"),
+        ];
+        for (event_type, expected_str) in &types {
+            let json = serde_json::to_string(event_type).unwrap();
+            assert_eq!(json, format!("\"{expected_str}\""));
+            let deserialized: EventType = serde_json::from_str(&json).unwrap();
+            assert_eq!(&deserialized, event_type);
+        }
+    }
+
+    #[test]
+    fn unknown_event_type_fails_deserialization() {
+        let result = serde_json::from_str::<EventType>("\"__bogus__\"");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Unknown event type"),
+            "unexpected error: {err}"
+        );
+    }
+}
