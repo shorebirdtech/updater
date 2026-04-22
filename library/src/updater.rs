@@ -224,27 +224,20 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
-            let elapsed_info = match state.boot_started_at() {
-                Some(started_at) => {
-                    let now = crate::time::unix_timestamp();
-                    let elapsed_secs = now.saturating_sub(started_at);
-                    format!("elapsed_secs={elapsed_secs}")
-                }
-                None => "elapsed_secs=unknown".to_string(),
+            let boot_time_info = match state.boot_started_at() {
+                Some(ts) => format!("boot_started_at={ts}"),
+                None => "boot_started_at=unknown".to_string(),
             };
 
-            let file_info = if patch.path.exists() {
-                match std::fs::metadata(&patch.path) {
-                    Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
-                    Err(_) => "file_ok=false,file_unreadable".to_string(),
-                }
-            } else {
-                "file_ok=false,file_missing".to_string()
+            let file_info = match std::fs::metadata(&patch.path) {
+                Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
+                Err(_) => "file_ok=false,file_missing".to_string(),
             };
 
+            let now = crate::time::unix_timestamp();
             let message = format!(
-                "crash_recovery: patch {} failed to boot ({},{})",
-                patch.number, elapsed_info, file_info
+                "crash_recovery: patch {} failed to boot (detected_at={now},{boot_time_info},{file_info})",
+                patch.number
             );
 
             state.record_boot_failure_for_patch(patch.number)?;
@@ -3014,8 +3007,12 @@ mod state_recovery_tests {
                 "unexpected message: {message}"
             );
             assert!(
-                message.contains("elapsed_secs="),
-                "message should include elapsed time: {message}"
+                message.contains("detected_at="),
+                "message should include detection time: {message}"
+            );
+            assert!(
+                message.contains("boot_started_at="),
+                "message should include boot start time: {message}"
             );
             assert!(
                 message.contains("file_ok="),
