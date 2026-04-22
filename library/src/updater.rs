@@ -2944,6 +2944,77 @@ mod state_recovery_tests {
         Ok(())
     }
 
+    /// Crash recovery when the patch file was deleted before recovery runs.
+    /// The message should report file_ok=false,file_missing.
+    #[serial]
+    #[test]
+    fn crash_recovery_with_missing_file() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+
+        // Delete the patch artifact to simulate file going missing.
+        let patches_dir = tmp_dir.path().join("patches");
+        std::fs::remove_dir_all(&patches_dir)?;
+
+        // Reinitialize — triggers crash recovery.
+        init_for_testing(&tmp_dir, None);
+
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.contains("file_ok=false,file_missing"),
+                "expected file_missing in message: {message}"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Crash recovery when boot_started_at is not set (old state file format).
+    /// The message should report elapsed_secs=unknown.
+    #[serial]
+    #[test]
+    fn crash_recovery_without_boot_timestamp() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+
+        // Manually clear boot_started_at from the state file to simulate
+        // an old state format that doesn't have this field.
+        let state_path = tmp_dir.path().join("patches_state.json");
+        let state_json = std::fs::read_to_string(&state_path)?;
+        let mut state_value: serde_json::Value = serde_json::from_str(&state_json)?;
+        state_value
+            .as_object_mut()
+            .unwrap()
+            .remove("boot_started_at");
+        std::fs::write(&state_path, serde_json::to_string(&state_value)?)?;
+
+        // Reinitialize — triggers crash recovery.
+        init_for_testing(&tmp_dir, None);
+
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.contains("elapsed_secs=unknown"),
+                "expected elapsed_secs=unknown in message: {message}"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
     /// When a newer patch crashes during boot, it should be marked bad.
     /// The previously-good patch (patch 1) was booted successfully before
     /// patch 2 was installed, so crash recovery should mark only patch 2 bad.
