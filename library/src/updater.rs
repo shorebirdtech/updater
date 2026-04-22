@@ -224,19 +224,29 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
+            let boot_time_info = match state.boot_started_at() {
+                Some(ts) => format!("boot_started_at={ts}"),
+                None => "boot_started_at=unknown".to_string(),
+            };
+
+            let file_info = match std::fs::metadata(&patch.path) {
+                Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
+                Err(_) => "file_ok=false,file_missing".to_string(),
+            };
+
+            let now = crate::time::unix_timestamp();
+            let message = format!(
+                "crash_recovery: patch {} failed to boot (detected_at={now},{boot_time_info},{file_info})",
+                patch.number
+            );
+
             state.record_boot_failure_for_patch(patch.number)?;
             state.queue_event(PatchEvent::new(
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
                 state.client_id(),
-                Some(
-                    format!(
-                        "Patch {} was marked currently_booting in init",
-                        patch.number
-                    )
-                    .as_ref(),
-                ),
+                Some(&message),
             ))?;
         }
 
@@ -412,6 +422,50 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         ShouldInstallPatchCheckResult::PatchAlreadyInstalled => return Ok(UpdateStatus::NoUpdate),
     }
 
+    let patch_number = patch.number;
+    let result = download_and_install_patch(&config, &patch);
+
+    if let Err(ref err) = result {
+        // Queue a diagnostic event for the failed update attempt.
+        // This captures download failures, inflate errors, hash mismatches,
+        // and install failures — all of which are otherwise invisible.
+        let message = format!(
+            "update_failure: patch {} failed ({})",
+            patch_number,
+            truncate_error_message(err)
+        );
+        let queue_result = with_mut_state(|state| {
+            state.queue_event(PatchEvent::new(
+                &config,
+                EventType::PatchUpdateFailure,
+                patch_number,
+                state.client_id(),
+                Some(&message),
+            ))
+        });
+        if let Err(queue_err) = queue_result {
+            shorebird_error!("Failed to queue update failure event: {:?}", queue_err);
+        }
+    }
+
+    result
+}
+
+/// Truncates an error message to a reasonable length for the event payload.
+/// Avoids sending excessively long messages while preserving the root cause.
+fn truncate_error_message(err: &anyhow::Error) -> String {
+    let msg = format!("{:#}", err);
+    if msg.len() > 256 {
+        format!("{}...", &msg[..253])
+    } else {
+        msg
+    }
+}
+
+fn download_and_install_patch(
+    config: &UpdateConfig,
+    patch: &crate::network::Patch,
+) -> anyhow::Result<UpdateStatus> {
     shorebird_info!(
         "Downloading patch {} for app {} (version {})",
         patch.number,
@@ -479,7 +533,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let output_path = download_dir.join(format!("{}.full", patch.number));
-    let patch_base_rs = patch_base(&config)?;
+    let patch_base_rs = patch_base(config)?;
     inflate(&download_path, patch_base_rs, &output_path)?;
 
     // Check the hash before moving into place.
@@ -494,6 +548,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // We're abusing the config lock as a UpdateState lock for now.
     // This makes it so we never try to write to the UpdateState file from
     // two threads at once. We could give UpdateState its own lock instead.
+    let config = config.clone();
     with_mut_state(|state| {
         let patch_info = PatchInfo {
             path: output_path,
@@ -510,11 +565,12 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         cleanup_download_artifacts(&download_path);
 
         let client_id = state.client_id();
+        let patch_number = patch.number;
         std::thread::spawn(move || {
             let event = PatchEvent::new(
                 &config,
                 EventType::PatchDownload,
-                patch.number,
+                patch_number,
                 client_id,
                 None,
             );
@@ -838,18 +894,13 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
         let client_id = state.client_id();
+        let message = format!("engine_report: patch {} failed to launch", patch.number);
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
             patch.number,
             client_id,
-            Some(
-                format!(
-                    "Install failure reported from engine for patch {}",
-                    patch.number
-                )
-                .as_ref(),
-            ),
+            Some(&message),
         );
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
@@ -1692,7 +1743,7 @@ patch_verification: bogus_mode
                 platform: current_platform().to_string(),
                 release_version: config.release_version.clone(),
                 timestamp: time::unix_timestamp(),
-                message: Some("Install failure reported from engine for patch 1".to_string()),
+                message: Some("engine_report: patch 1 failed to launch".to_string()),
             };
             // Queue 5 events.
             assert!(state.queue_event(fail_event.clone()).is_ok());
@@ -2079,7 +2130,44 @@ patch_verification: bogus_mode
         assert!(!download_path.exists(), "download should be cleaned up");
         assert!(!sidecar_path.exists(), "sidecar should be cleaned up");
 
+        // Verify a PatchUpdateFailure event was queued.
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchUpdateFailure
+            );
+            assert_eq!(events[0].patch_number, 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.starts_with("update_failure: patch 1 failed"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("Download size mismatch"),
+                "message should contain error detail: {message}"
+            );
+            Ok(())
+        })?;
+
         Ok(())
+    }
+
+    #[test]
+    fn truncate_error_message_short() {
+        let err = anyhow::anyhow!("short error");
+        let msg = super::truncate_error_message(&err);
+        assert_eq!(msg, "short error");
+    }
+
+    #[test]
+    fn truncate_error_message_long() {
+        let long = "x".repeat(300);
+        let err = anyhow::anyhow!("{}", long);
+        let msg = super::truncate_error_message(&err);
+        assert_eq!(msg.len(), 256);
+        assert!(msg.ends_with("..."));
     }
 
     #[serial]
@@ -2913,6 +3001,23 @@ mod state_recovery_tests {
                 crate::events::EventType::PatchInstallFailure
             );
             assert_eq!(events[0].patch_number, 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.starts_with("crash_recovery: patch 1 failed to boot"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("detected_at="),
+                "message should include detection time: {message}"
+            );
+            assert!(
+                message.contains("boot_started_at="),
+                "message should include boot start time: {message}"
+            );
+            assert!(
+                message.contains("file_ok="),
+                "message should include file status: {message}"
+            );
             Ok(())
         })?;
 
