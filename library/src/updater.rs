@@ -2137,7 +2137,44 @@ patch_verification: bogus_mode
         assert!(!download_path.exists(), "download should be cleaned up");
         assert!(!sidecar_path.exists(), "sidecar should be cleaned up");
 
+        // Verify a PatchUpdateFailure event was queued.
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchUpdateFailure
+            );
+            assert_eq!(events[0].patch_number, 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.starts_with("update_failure: patch 1 failed"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("Download size mismatch"),
+                "message should contain error detail: {message}"
+            );
+            Ok(())
+        })?;
+
         Ok(())
+    }
+
+    #[test]
+    fn truncate_error_message_short() {
+        let err = anyhow::anyhow!("short error");
+        let msg = super::truncate_error_message(&err);
+        assert_eq!(msg, "short error");
+    }
+
+    #[test]
+    fn truncate_error_message_long() {
+        let long = "x".repeat(300);
+        let err = anyhow::anyhow!("{}", long);
+        let msg = super::truncate_error_message(&err);
+        assert_eq!(msg.len(), 256);
+        assert!(msg.ends_with("..."));
     }
 
     #[serial]
