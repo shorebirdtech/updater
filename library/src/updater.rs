@@ -224,19 +224,36 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
+            let elapsed_info = match state.boot_started_at() {
+                Some(started_at) => {
+                    let now = crate::time::unix_timestamp();
+                    let elapsed_secs = now.saturating_sub(started_at);
+                    format!("elapsed_secs={elapsed_secs}")
+                }
+                None => "elapsed_secs=unknown".to_string(),
+            };
+
+            let file_info = if patch.path.exists() {
+                match std::fs::metadata(&patch.path) {
+                    Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
+                    Err(_) => "file_ok=false,file_unreadable".to_string(),
+                }
+            } else {
+                "file_ok=false,file_missing".to_string()
+            };
+
+            let message = format!(
+                "crash_recovery: patch {} failed to boot ({},{})",
+                patch.number, elapsed_info, file_info
+            );
+
             state.record_boot_failure_for_patch(patch.number)?;
             state.queue_event(PatchEvent::new(
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
                 state.client_id(),
-                Some(
-                    format!(
-                        "Patch {} was marked currently_booting in init",
-                        patch.number
-                    )
-                    .as_ref(),
-                ),
+                Some(&message),
             ))?;
         }
 
@@ -838,18 +855,16 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
         let client_id = state.client_id();
+        let message = format!(
+            "engine_report: patch {} failed to launch",
+            patch.number
+        );
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
             patch.number,
             client_id,
-            Some(
-                format!(
-                    "Install failure reported from engine for patch {}",
-                    patch.number
-                )
-                .as_ref(),
-            ),
+            Some(&message),
         );
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
@@ -1692,7 +1707,7 @@ patch_verification: bogus_mode
                 platform: current_platform().to_string(),
                 release_version: config.release_version.clone(),
                 timestamp: time::unix_timestamp(),
-                message: Some("Install failure reported from engine for patch 1".to_string()),
+                message: Some("engine_report: patch 1 failed to launch".to_string()),
             };
             // Queue 5 events.
             assert!(state.queue_event(fail_event.clone()).is_ok());
@@ -2913,6 +2928,19 @@ mod state_recovery_tests {
                 crate::events::EventType::PatchInstallFailure
             );
             assert_eq!(events[0].patch_number, 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.starts_with("crash_recovery: patch 1 failed to boot"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("elapsed_secs="),
+                "message should include elapsed time: {message}"
+            );
+            assert!(
+                message.contains("file_ok="),
+                "message should include file status: {message}"
+            );
             Ok(())
         })?;
 
