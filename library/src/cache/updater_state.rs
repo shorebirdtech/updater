@@ -219,6 +219,11 @@ impl UpdaterState {
         self.patch_manager.currently_booting_patch()
     }
 
+    /// Unix timestamp (seconds) when the current boot attempt started, if known.
+    pub fn boot_started_at(&self) -> Option<u64> {
+        self.patch_manager.boot_started_at()
+    }
+
     /// The last patch that was successfully booted (e.g., for which we record_boot_success was
     /// called).
     /// Will be None if:

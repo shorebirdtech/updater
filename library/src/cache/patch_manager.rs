@@ -51,6 +51,11 @@ struct PatchesState {
     ///  - the system initializes (on_init, we take this to mean the patch failed to boot)
     currently_booting_patch: Option<PatchMetadata>,
 
+    /// Unix timestamp (seconds) when the current boot attempt started.
+    /// Used to compute elapsed time in crash recovery diagnostics.
+    /// Added in 1.6.93; older state files will deserialize this as None.
+    boot_started_at: Option<u64>,
+
     /// A list of patch numbers that we have tried and failed to install.
     /// We should never attempt to download or install these again for the
     /// current release.
@@ -88,6 +93,9 @@ pub trait ManagePatches {
     ///   2. On init if we attempted to boot a patch but never recorded a successful boot (e.g., because
     ///      the system crashed).
     fn currently_booting_patch(&self) -> Option<PatchInfo>;
+
+    /// Unix timestamp (seconds) when the current boot attempt started, if known.
+    fn boot_started_at(&self) -> Option<u64>;
 
     /// Returns the next patch to boot, or None if:
     /// - no patches have been downloaded
@@ -444,6 +452,10 @@ impl ManagePatches for PatchManager {
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
+    fn boot_started_at(&self) -> Option<u64> {
+        self.patches_state.boot_started_at
+    }
+
     fn validate_next_boot_patch(&mut self) -> anyhow::Result<()> {
         let next_boot_patch = match self.patches_state.next_boot_patch.clone() {
             Some(patch) => patch,
@@ -492,6 +504,7 @@ impl ManagePatches for PatchManager {
         }
 
         self.patches_state.currently_booting_patch = Some(next_boot_patch.clone());
+        self.patches_state.boot_started_at = Some(crate::time::unix_timestamp());
         self.save_patches_state()
     }
 
@@ -503,6 +516,7 @@ impl ManagePatches for PatchManager {
             .context("No currently_booting_patch")?;
 
         self.patches_state.currently_booting_patch = None;
+        self.patches_state.boot_started_at = None;
         self.patches_state.last_booted_patch = Some(boot_patch.clone());
         if let Err(e) = self.delete_patch_artifacts_older_than(boot_patch.number) {
             shorebird_error!(
@@ -516,6 +530,7 @@ impl ManagePatches for PatchManager {
 
     fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.patches_state.currently_booting_patch = None;
+        self.patches_state.boot_started_at = None;
         self.patches_state.known_bad_patches.insert(patch_number);
         self.try_fall_back_from_patch(patch_number)
     }
@@ -597,7 +612,7 @@ mod debug_tests {
             PatchVerificationMode::default(),
         );
         let actual = format!("{:?}", patch_manager);
-        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
+        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, boot_started_at: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
     }
 }
 
