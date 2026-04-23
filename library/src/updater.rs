@@ -271,7 +271,12 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 /// Returns true if an update is available for download. Will return false if the update is already
 /// downloaded and ready to install.
 pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bool> {
-    let client_id = with_state(|state| Ok(state.client_id()))?;
+    let (client_id, current_patch_number) = with_state(|state| {
+        Ok((
+            state.client_id(),
+            state.current_boot_patch().map(|p| p.number),
+        ))
+    })?;
 
     let (request, url, request_fn) = with_config(|config| {
         let mut config = config.clone();
@@ -281,7 +286,7 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
         }
 
         Ok((
-            PatchCheckRequest::new(&config, &client_id),
+            PatchCheckRequest::new(&config, &client_id, current_patch_number),
             patches_check_url(&config.base_url),
             config.network_hooks.patch_check_request_fn,
         ))
@@ -398,7 +403,11 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             shorebird_error!("Failed to clear events: {:?}", err);
         }
         // Update our outer state with the new state.
-        Ok(PatchCheckRequest::new(&config, &state.client_id()))
+        Ok(PatchCheckRequest::new(
+            &config,
+            &state.client_id(),
+            state.current_boot_patch().map(|p| p.number),
+        ))
     })?;
 
     // Check for update.
