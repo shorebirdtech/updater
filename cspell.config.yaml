@@ -38,11 +38,13 @@ words:
   - Decompressor
   - dllexport
   - dlopen
+  - EACCES
   - EDQUOT
   - embedders
   - EOCD
   - endtemplate
   - ENOSPC
+  - EPERM
   - EROFS
   - eseidel
   - ffigen
@@ -77,6 +79,7 @@ words:
   - ureq
   - unbootable
   - unbooted
+  - unwritable
   - usize
   - Swatinem
   - taiki
