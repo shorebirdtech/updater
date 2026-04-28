@@ -38,6 +38,7 @@ words:
   - Decompressor
   - dllexport
   - dlopen
+  - dlsym
   - EDQUOT
   - embedders
   - EOCD
@@ -46,6 +47,7 @@ words:
   - EROFS
   - eseidel
   - ffigen
+  - footguns
   - gclient
   - hdpi
   - ifdef
@@ -74,9 +76,11 @@ words:
   - subosito
   - swiftpm
   - symbolication
+  - unawaited
   - ureq
   - unbootable
   - unbooted
+  - unwritable
   - usize
   - Swatinem
   - taiki
