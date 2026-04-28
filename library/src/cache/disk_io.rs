@@ -23,7 +23,11 @@ where
     // Because File::create can sometimes fail if the full directory path doesn't exist,
     // we create the directories in its path first.
     if let Err(e) = std::fs::create_dir_all(containing_dir) {
-        return Err(map_state_io_error(e, FileOperation::CreateDir, containing_dir));
+        return Err(map_state_io_error(
+            e,
+            FileOperation::CreateDir,
+            containing_dir,
+        ));
     }
 
     // Write to a sibling temp file first, then atomically rename into place.
@@ -196,8 +200,7 @@ mod test {
         // Errors other than PermissionDenied should still be wrapped with the
         // standard enhanced file-operation context and NOT be treated as a
         // state-storage-unavailable deferral.
-        let error =
-            std::io::Error::new(std::io::ErrorKind::StorageFull, "No space left on device");
+        let error = std::io::Error::new(std::io::ErrorKind::StorageFull, "No space left on device");
         let path = Path::new("/data/state.json");
 
         let anyhow_err =
