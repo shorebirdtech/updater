@@ -34,6 +34,13 @@ pub enum UpdateStatus {
     // already-running update will continue; the caller did not start a new
     // one. This is a benign outcome, not an error.
     UpdateInProgress,
+    // The update could not be performed right now because the state storage
+    // directory is temporarily unwritable. On iOS this typically means the
+    // device is locked and Data Protection is blocking writes under
+    // Library/Application Support. The next update attempt after the device
+    // is unlocked will typically succeed. This is a benign outcome, not an
+    // error.
+    UpdateDeferred,
 }
 
 impl Display for UpdateStatus {
@@ -47,6 +54,9 @@ impl Display for UpdateStatus {
                 "Update available but previously failed to install. Not installing."
             ),
             UpdateStatus::UpdateInProgress => write!(f, "Update already in progress"),
+            UpdateStatus::UpdateDeferred => {
+                write!(f, "Update deferred: state storage temporarily unavailable")
+            }
         }
     }
 }
@@ -93,6 +103,12 @@ pub enum UpdateError {
     FailedToSaveState,
     ConfigNotInitialized,
     UpdateAlreadyInProgress,
+    /// The updater's on-disk state directory is temporarily unwritable
+    /// (typically because iOS Data Protection is blocking writes on a
+    /// locked device). The update attempt is deferred until storage
+    /// becomes available. This is benign and is translated at the top
+    /// of the update call into `UpdateStatus::UpdateDeferred`.
+    StateStorageUnavailable,
 }
 
 impl std::error::Error for UpdateError {}
@@ -106,6 +122,9 @@ impl Display for UpdateError {
             UpdateError::ConfigNotInitialized => write!(f, "Config not initialized"),
             UpdateError::UpdateAlreadyInProgress => {
                 write!(f, "Update already in progress")
+            }
+            UpdateError::StateStorageUnavailable => {
+                write!(f, "State storage temporarily unavailable")
             }
         }
     }
@@ -665,13 +684,14 @@ pub fn update(channel: Option<&str>) -> anyhow::Result<UpdateStatus> {
             // in-progress update (typically the automatic updater thread) will
             // continue on its own. Surface it as a non-error status so callers
             // that monitor `update()` exceptions do not see it as a failure.
-            if matches!(
-                e.downcast_ref::<UpdateError>(),
-                Some(UpdateError::UpdateAlreadyInProgress)
-            ) {
-                Ok(UpdateStatus::UpdateInProgress)
-            } else {
-                Err(e)
+            match e.downcast_ref::<UpdateError>() {
+                Some(UpdateError::UpdateAlreadyInProgress) => Ok(UpdateStatus::UpdateInProgress),
+                // The updater's state directory is temporarily unwritable
+                // (typically iOS Data Protection on a locked device). The
+                // update is deferred, not failed — the next attempt after
+                // the device is unlocked will typically succeed.
+                Some(UpdateError::StateStorageUnavailable) => Ok(UpdateStatus::UpdateDeferred),
+                _ => Err(e),
             }
         }
     }

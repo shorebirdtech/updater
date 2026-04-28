@@ -68,6 +68,14 @@ pub const SHOREBIRD_UPDATE_IS_BAD_PATCH: i32 = 3;
 /// This is a benign outcome, not an error.
 pub const SHOREBIRD_UPDATE_IN_PROGRESS: i32 = 4;
 
+/// The update could not be performed right now because the updater's state
+/// storage directory is temporarily unwritable. On iOS this typically means
+/// the device is locked and Data Protection is blocking writes under
+/// `Library/Application Support/`. The next update attempt after the device
+/// is unlocked will typically succeed. This is a benign outcome, not an
+/// error.
+pub const SHOREBIRD_UPDATE_DEFERRED: i32 = 5;
+
 #[repr(C)]
 pub struct UpdateResult {
     pub status: i32,
