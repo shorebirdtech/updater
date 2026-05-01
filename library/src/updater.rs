@@ -802,11 +802,12 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_mut_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch that was last successfully booted. If we're booting a patch for the first time, this
-/// will be the previous patch (or None, if there was no previous patch) until the boot is
-/// reported as successful.
-pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_state(|state| Ok(state.current_boot_patch()))
+/// The patch this process is using, set at `report_launch_start` and
+/// surfaced over FFI as `shorebird_current_boot_patch_number`. `None`
+/// means the process is running the base release. Survives server-driven
+/// rollbacks of the running patch — the process is still using it.
+pub fn running_patch() -> anyhow::Result<Option<PatchInfo>> {
+    with_state(|state| Ok(state.running_patch()))
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
@@ -818,7 +819,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
         // release. Backed by a session-scoped global, not by PatchesState
         // on disk, so this is in-memory only — the record_boot_start_for_patch
         // call below is the only disk write on this path.
-        state.set_current_boot_patch(next_boot_patch.as_ref().map(|p| p.number));
+        state.set_running_patch(next_boot_patch.as_ref().map(|p| p.number));
         if let Some(next_boot_patch) = next_boot_patch {
             state.record_boot_start_for_patch(next_boot_patch.number)?;
         }
@@ -890,13 +891,13 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         // Check whether last_successfully_booted_patch has changed. If so, we should report a
         // PatchInstallSuccess event.
-        if let (Some(previous_boot_patch), Some(current_boot_patch)) = (
+        if let (Some(previous_boot_patch), Some(latest_boot_patch)) = (
             maybe_previous_boot_patch,
             state.last_successfully_booted_patch(),
         ) {
             // If we had previously booted from a patch and it has the same number as the
             // patch we just booted from, then we shouldn't report a patch install.
-            if previous_boot_patch.number == current_boot_patch.number {
+            if previous_boot_patch.number == latest_boot_patch.number {
                 return Ok(());
             }
         }

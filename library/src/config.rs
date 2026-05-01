@@ -29,29 +29,30 @@ fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
 }
 
 /// Session-scoped patch number this process is using. Set by
-/// `report_launch_start` from the next-boot patch at that moment, read by
-/// `current_boot_patch()` over FFI. Lives outside the on-disk
+/// `report_launch_start` from the next-boot patch at that moment, read
+/// by `updater::running_patch()` (surfaced to Dart as
+/// `shorebird_current_boot_patch_number`). Lives outside the on-disk
 /// `PatchesState` because it tracks running state, not bootable-patch
-/// metadata: it must survive a server-driven rollback of the running patch
-/// (the process is still using it) and must reset to `None` on every fresh
-/// process start. `report_launch_start` is called by flutter_engine before
-/// `dart:ffi` is available, so the `None` window before launch start is
-/// not observable from Dart.
-fn global_current_boot_patch() -> &'static Mutex<Option<usize>> {
+/// metadata: it must survive a server-driven rollback of the running
+/// patch (the process is still using it) and must reset to `None` on
+/// every fresh process start. `report_launch_start` is called by
+/// flutter_engine before `dart:ffi` is available, so the `None` window
+/// before launch start is not observable from Dart.
+fn global_running_patch() -> &'static Mutex<Option<usize>> {
     static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
-pub fn current_boot_patch_number() -> Option<usize> {
-    *global_current_boot_patch()
+pub fn running_patch_number() -> Option<usize> {
+    *global_running_patch()
         .lock()
-        .expect("Failed to acquire current_boot_patch lock.")
+        .expect("Failed to acquire running_patch lock.")
 }
 
-pub fn set_current_boot_patch_number(patch_number: Option<usize>) {
-    *global_current_boot_patch()
+pub fn set_running_patch_number(patch_number: Option<usize>) {
+    *global_running_patch()
         .lock()
-        .expect("Failed to acquire current_boot_patch lock.") = patch_number;
+        .expect("Failed to acquire running_patch lock.") = patch_number;
 }
 
 /// Unit tests should call this to reset the config between tests.
@@ -60,7 +61,7 @@ pub fn testing_reset_config() {
     with_config_mut(|config| {
         *config = None;
     });
-    set_current_boot_patch_number(None);
+    set_running_patch_number(None);
 }
 
 pub fn check_initialized_and_call<F, R>(

@@ -237,15 +237,15 @@ impl UpdaterState {
     /// kept until the next launch. `None` means the process is running the
     /// base release. Survives server-driven rollbacks of that patch — the
     /// running process is still using it.
-    pub fn current_boot_patch(&self) -> Option<PatchInfo> {
-        self.patch_manager.current_boot_patch()
+    pub fn running_patch(&self) -> Option<PatchInfo> {
+        self.patch_manager.running_patch()
     }
 
     /// Records which patch this process is using. Called from
     /// `report_launch_start` with `Some(n)` when launching a patch, or
     /// `None` when launching the base release.
-    pub fn set_current_boot_patch(&mut self, patch_number: Option<usize>) {
-        self.patch_manager.set_current_boot_patch(patch_number);
+    pub fn set_running_patch(&mut self, patch_number: Option<usize>) {
+        self.patch_manager.set_running_patch(patch_number);
     }
 
     /// This is the patch that will be used for the next boot.

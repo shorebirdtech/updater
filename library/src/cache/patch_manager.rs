@@ -43,7 +43,7 @@ struct PatchesState {
     /// Updated only by `record_boot_success` — boot failures and
     /// server-driven rollbacks of the running patch don't erase the
     /// historical fact that the patch booted. Not the same thing as the
-    /// patch this process is running; see `current_boot_patch` for that.
+    /// patch this process is running; see `running_patch` for that.
     last_booted_patch: Option<PatchMetadata>,
 
     /// The patch that will be run on the next app boot, if any. This may be the same
@@ -94,7 +94,7 @@ pub trait ManagePatches {
     /// run, or None if no patch is installed. Used as a fallback target by
     /// `try_fall_back_from_patch` when the next-boot patch becomes invalid.
     /// Not the same thing as the patch this process is running; for that, see
-    /// [`current_boot_patch`].
+    /// [`running_patch`].
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo>;
 
     /// The patch this process is using, set at `report_launch_start` from
@@ -104,13 +104,15 @@ pub trait ManagePatches {
     /// a session-scoped global, not by `PatchesState` on disk: a fresh
     /// process starts with `None` until the next `report_launch_start`,
     /// which flutter_engine calls before `dart:ffi` is available, so the
-    /// `None` window is not observable from Dart.
-    fn current_boot_patch(&self) -> Option<PatchInfo>;
+    /// `None` window is not observable from Dart. Distinct from
+    /// `currently_booting_patch`, which is the persisted "boot in progress"
+    /// breadcrumb used for cross-restart crash detection.
+    fn running_patch(&self) -> Option<PatchInfo>;
 
     /// Sets the patch this process is using. Called from
     /// `report_launch_start` with `Some(n)` when launching a patch, or
     /// `None` when launching the base release.
-    fn set_current_boot_patch(&mut self, patch_number: Option<usize>);
+    fn set_running_patch(&mut self, patch_number: Option<usize>);
 
     /// The patch we are currently booting, if any. This will only have a value:
     ///   1. Between record_boot_start_for_patch and record_boot_success or record_boot_failure_for_patch
@@ -488,12 +490,12 @@ impl ManagePatches for PatchManager {
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
-    fn current_boot_patch(&self) -> Option<PatchInfo> {
-        crate::config::current_boot_patch_number().map(|number| self.patch_info_for_number(number))
+    fn running_patch(&self) -> Option<PatchInfo> {
+        crate::config::running_patch_number().map(|number| self.patch_info_for_number(number))
     }
 
-    fn set_current_boot_patch(&mut self, patch_number: Option<usize>) {
-        crate::config::set_current_boot_patch_number(patch_number);
+    fn set_running_patch(&mut self, patch_number: Option<usize>) {
+        crate::config::set_running_patch_number(patch_number);
     }
 
     fn currently_booting_patch(&self) -> Option<PatchInfo> {

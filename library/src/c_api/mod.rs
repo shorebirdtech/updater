@@ -190,12 +190,14 @@ pub extern "C" fn shorebird_should_auto_update() -> bool {
 }
 
 /// The currently running patch number, or 0 if the release has not been
-/// patched.
+/// patched. The internal name for this concept is `running_patch`; the
+/// FFI symbol keeps the historical `current_boot_patch_number` spelling
+/// because Flutter Engine links against it.
 #[no_mangle]
 pub extern "C" fn shorebird_current_boot_patch_number() -> usize {
     log_on_error(
-        || Ok(updater::current_boot_patch()?.map_or(0, |p| p.number)),
-        "fetching next_boot_patch_number",
+        || Ok(updater::running_patch()?.map_or(0, |p| p.number)),
+        "fetching running_patch_number",
         0,
     )
 }
@@ -888,7 +890,7 @@ mod test {
 
     #[serial]
     #[test]
-    fn current_boot_patch_set_after_reporting_launch_start() {
+    fn running_patch_set_after_reporting_launch_start() {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
@@ -955,7 +957,7 @@ mod test {
     /// "current != next" condition that signals restart_required.
     #[serial]
     #[test]
-    fn rollback_to_release_keeps_current_boot_patch() {
+    fn rollback_to_release_keeps_running_patch() {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
@@ -1029,15 +1031,15 @@ mod test {
     }
 
     /// After a patch-to-release rollback, the next launch boots the base
-    /// release. `current_boot_patch` must reflect that — it cannot keep
+    /// release. `running_patch` must reflect that — it cannot keep
     /// reporting the rolled-back patch from the previous run, or callers
     /// would see a perpetual `restartRequired`. The contract: a fresh
-    /// process starts with `current_boot_patch == None` (it's a
-    /// session-scoped global, not persisted) and `report_launch_start`
-    /// keeps it `None` because `next_boot_patch` is also `None`.
+    /// process starts with `running_patch == None` (it's a session-scoped
+    /// global, not persisted) and `report_launch_start` keeps it `None`
+    /// because `next_boot_patch` is also `None`.
     #[serial]
     #[test]
-    fn rollback_to_release_then_restart_clears_current_boot_patch() {
+    fn rollback_to_release_then_restart_clears_running_patch() {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
@@ -1110,7 +1112,7 @@ mod test {
             free_parameters(c_params);
         }
 
-        // The release boot has no next patch. current_boot_patch is a
+        // The release boot has no next patch. running_patch is a
         // session-scoped global, so a fresh process starts with it None.
         // report_launch_start keeps it None because next_boot_patch is None.
         assert_eq!(shorebird_next_boot_patch_number(), 0);
