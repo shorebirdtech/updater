@@ -474,14 +474,22 @@ mod test {
         )
     }
 
-    /// A precomputed bidiff patch artifact and its inflated-content sha256.
-    ///
-    /// Generate one with:
+    /// A precomputed bidiff patch artifact along with the inputs that
+    /// produced it. Generate one with:
     ///     cargo run --bin string_patch -- "<base>" "<new>"
-    /// Paste the "Patch:" byte array into `bytes` and the "Hash (new):" hex
-    /// into `hash`. The `<base>` argument must equal the bytes that
-    /// `write_fake_apk` writes for the test's base APK (today: "hello world").
+    /// Then paste the four pieces into a `PatchFixture` constant:
+    ///   - `base`: the `<base>` argument (must match the bytes
+    ///     `write_fake_apk` writes for the test's fake APK)
+    ///   - `new`: the `<new>` argument (the inflated content after
+    ///     applying the patch — what tests assert against)
+    ///   - `bytes`: the "Patch:" byte array
+    ///   - `hash`: the "Hash (new):" sha256 hex of `new`
+    ///
+    /// All fixtures used together in a single test must share the same
+    /// `base`, since `write_fake_apk` only writes one set of bytes.
     struct PatchFixture {
+        base: &'static str,
+        new: &'static str,
         hash: &'static str,
         bytes: &'static [u8],
     }
@@ -503,6 +511,8 @@ mod test {
     /// `string_patch "hello world" "hello tests"` — the default fixture
     /// used by tests that don't care which patch is which.
     const HELLO_TESTS_PATCH: PatchFixture = PatchFixture {
+        base: "hello world",
+        new: "hello tests",
         hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45",
         bytes: &[
             40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0,
@@ -512,8 +522,11 @@ mod test {
 
     /// `string_patch "hello world" "hello patch 2"` — distinct from
     /// `HELLO_TESTS_PATCH` for tests that need two non-equal artifacts
-    /// (e.g. patch-to-patch rollback).
+    /// (e.g. patch-to-patch rollback). Shares the same `base` so both
+    /// fixtures can be used in the same test.
     const HELLO_PATCH_2_PATCH: PatchFixture = PatchFixture {
+        base: "hello world",
+        new: "hello patch 2",
         hash: "2bc806572d14496a1ddfbddf7ed7380fca87a80b739b2881544aba397d267c68",
         bytes: &[
             40, 181, 47, 253, 0, 128, 193, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0,
@@ -631,10 +644,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
-        let expected_new: &str = "hello tests";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
@@ -677,7 +691,7 @@ mod test {
         let path = to_rust(c_path).unwrap();
         unsafe { shorebird_free_string(c_path) };
         let new = std::fs::read_to_string(path).unwrap();
-        assert_eq!(new, expected_new);
+        assert_eq!(new, HELLO_TESTS_PATCH.new);
     }
 
     #[serial]
@@ -686,10 +700,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
-        let expected_new: &str = "hello tests";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
@@ -737,7 +752,7 @@ mod test {
         let path = to_rust(c_path).unwrap();
         unsafe { shorebird_free_string(c_path) };
         let new = std::fs::read_to_string(path).unwrap();
-        assert_eq!(new, expected_new);
+        assert_eq!(new, HELLO_TESTS_PATCH.new);
 
         Ok(())
     }
@@ -748,9 +763,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
@@ -787,9 +804,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
@@ -820,9 +839,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
@@ -871,9 +892,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         // app_id is required or shorebird_init will fail.
@@ -936,9 +959,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         let c_yaml = c_string("app_id: foo");
@@ -1016,9 +1041,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
 
         // Phase 1: install patch 1 and report a successful launch.
@@ -1104,9 +1131,11 @@ mod test {
         testing_reset_config();
         let tmp_dir = TempDir::new().unwrap();
 
-        let base = "hello world";
         let apk_path = tmp_dir.path().join("base.apk");
-        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
         let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
         let c_yaml = c_string("app_id: foo");
