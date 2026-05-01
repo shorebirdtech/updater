@@ -50,29 +50,6 @@ struct PatchesState {
     /// as the last booted patch patch if no new patch has been downloaded.
     next_boot_patch: Option<PatchMetadata>,
 
-    /// Patch number this process is using, captured at `report_launch_start`
-    /// from whatever `next_boot_patch` was at that moment. `None` when running
-    /// the base release. Persists for the lifetime of the run; survives a
-    /// server-driven rollback of that patch (the process is still using it,
-    /// even though it won't boot from it again). Reset on the next
-    /// `report_launch_start`. Only the patch number is needed — this field
-    /// reports running state, not bootable-patch metadata.
-    #[serde(default)]
-    current_boot_patch: Option<usize>,
-
-    // TODO(eseidel): `currently_booting_patch` is redundant now that
-    // `current_boot_patch` exists. Its two jobs both collapse into existing
-    // fields:
-    //   - "what patch is mid-boot" → `current_boot_patch` (set at
-    //     report_launch_start, never cleared until the next launch start).
-    //   - "is a boot in progress" → `boot_started_at.is_some()` (already
-    //     true during the boot window; cleared on success/failure).
-    // Crash detection on init then becomes: if `boot_started_at` is Some on
-    // load, the previous run's `current_boot_patch` is the patch that
-    // crashed mid-boot — mark it bad and fall back. Removing this field
-    // touches handle_prior_boot_failure_if_necessary, the boot-record
-    // helpers, and several tests; tracking as its own follow-up so the
-    // rollback fix here stays minimal.
     /// This is given a value when we start booting a patch (record_boot_start_for_patch) and is
     /// cleared when:
     ///  - the patch boots successfully (record_boot_success)
@@ -122,15 +99,18 @@ pub trait ManagePatches {
 
     /// The patch this process is using, set at `report_launch_start` from
     /// whatever `next_boot_patch` was at that moment. `None` means the
-    /// process is running the base release. Survives server-driven rollbacks
-    /// of that patch (the process is still using it). Reset on the next
-    /// `report_launch_start`.
+    /// process is running the base release. Survives server-driven
+    /// rollbacks of that patch (the process is still using it). Backed by
+    /// a session-scoped global, not by `PatchesState` on disk: a fresh
+    /// process starts with `None` until the next `report_launch_start`,
+    /// which flutter_engine calls before `dart:ffi` is available, so the
+    /// `None` window is not observable from Dart.
     fn current_boot_patch(&self) -> Option<PatchInfo>;
 
-    /// Sets the patch this process is using. Called from `report_launch_start`
-    /// with `Some(n)` when launching a patch, or `None` when launching the
-    /// base release.
-    fn set_current_boot_patch(&mut self, patch_number: Option<usize>) -> Result<()>;
+    /// Sets the patch this process is using. Called from
+    /// `report_launch_start` with `Some(n)` when launching a patch, or
+    /// `None` when launching the base release.
+    fn set_current_boot_patch(&mut self, patch_number: Option<usize>);
 
     /// The patch we are currently booting, if any. This will only have a value:
     ///   1. Between record_boot_start_for_patch and record_boot_success or record_boot_failure_for_patch
@@ -363,12 +343,14 @@ impl PatchManager {
             // process is still using it. Erasing that historical record
             // while the field was being read by FFI as "what's running"
             // caused the patch-to-release rollback bug in
-            // shorebirdtech/shorebird#3728. The "don't fall back to this
-            // patch" intent is already covered: artifacts are deleted above
-            // by `delete_patch_artifacts(bad_patch_number)`, validation in
-            // `validate_next_boot_patch` will refuse to boot a patch whose
-            // artifacts are missing, and `is_known_bad_patch` records boot
-            // failures explicitly.
+            // shorebirdtech/shorebird#3728.
+            //
+            // The else-if fallback path consults `is_known_bad_patch`
+            // before promoting `last_booted_patch` back to
+            // `next_boot_patch`. For server-driven rollbacks, `remove_patch`
+            // adds the patch to `known_bad_patches` first, so a later
+            // fallback can't accidentally re-promote a rolled-back patch
+            // even if its artifact deletion above silently failed.
             shorebird_info!(
                 "Clearing next boot patch (rollback target was both last booted and next boot)"
             );
@@ -378,7 +360,11 @@ impl PatchManager {
             self.patches_state.next_boot_patch = None;
 
             if let Some(last_boot_patch) = self.patches_state.last_booted_patch.clone() {
-                if self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
+                let is_known_bad = self
+                    .patches_state
+                    .known_bad_patches
+                    .contains(&last_boot_patch.number);
+                if !is_known_bad && self.validate_patch_is_bootable(&last_boot_patch).is_ok() {
                     shorebird_info!(
                         "Setting last booted patch {} as next boot patch",
                         last_boot_patch.number
@@ -386,7 +372,7 @@ impl PatchManager {
                     self.patches_state.next_boot_patch = Some(last_boot_patch);
                 } else {
                     shorebird_info!(
-                        "Last booted patch {} is not bootable, deleting artifacts",
+                        "Last booted patch {} is not a valid fallback, deleting artifacts",
                         last_boot_patch.number
                     );
                     self.patches_state.last_booted_patch = None;
@@ -503,14 +489,11 @@ impl ManagePatches for PatchManager {
     }
 
     fn current_boot_patch(&self) -> Option<PatchInfo> {
-        self.patches_state
-            .current_boot_patch
-            .map(|number| self.patch_info_for_number(number))
+        crate::config::current_boot_patch_number().map(|number| self.patch_info_for_number(number))
     }
 
-    fn set_current_boot_patch(&mut self, patch_number: Option<usize>) -> Result<()> {
-        self.patches_state.current_boot_patch = patch_number;
-        self.save_patches_state()
+    fn set_current_boot_patch(&mut self, patch_number: Option<usize>) {
+        crate::config::set_current_boot_patch_number(patch_number);
     }
 
     fn currently_booting_patch(&self) -> Option<PatchInfo> {
@@ -608,6 +591,11 @@ impl ManagePatches for PatchManager {
     }
 
     fn remove_patch(&mut self, patch_number: usize) -> Result<()> {
+        // Server-driven rollback: mark known-bad so a later fallback path
+        // (e.g. record_boot_failure_for_patch on a *different* patch) can't
+        // promote `last_booted_patch` back to `next_boot_patch` if its
+        // artifact deletion in try_fall_back_from_patch silently fails.
+        self.patches_state.known_bad_patches.insert(patch_number);
         self.try_fall_back_from_patch(patch_number)
     }
 
@@ -680,7 +668,7 @@ mod debug_tests {
             PatchVerificationMode::default(),
         );
         let actual = format!("{:?}", patch_manager);
-        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, current_boot_patch: None, currently_booting_patch: None, boot_started_at: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
+        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, boot_started_at: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
     }
 }
 
@@ -1346,6 +1334,56 @@ mod fall_back_tests {
             2
         );
         assert!(manager.is_known_bad_patch(1));
+
+        Ok(())
+    }
+
+    /// Server rolls back patch 1, then patch 2 arrives and fails to boot.
+    /// The else-if fallback path must not promote patch 1 back into
+    /// `next_boot_patch` even though `last_booted_patch` still points at
+    /// patch 1 — the server told us not to use it. `remove_patch` records
+    /// patch 1 as known-bad so this can't happen.
+    #[test]
+    fn rollback_then_failed_replacement_does_not_resurrect_rolled_back_patch() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut manager = PatchManager::manager_for_test(&temp_dir);
+
+        // Patch 1: install + successful boot.
+        manager.add_patch_for_test(&temp_dir, 1)?;
+        manager.record_boot_start_for_patch(1)?;
+        manager.record_boot_success()?;
+
+        // Server rolls back patch 1.
+        manager.remove_patch(1)?;
+        assert!(manager.is_known_bad_patch(1));
+        assert!(manager.patches_state.next_boot_patch.is_none());
+        // last_booted_patch is intentionally preserved; the running
+        // process is still using patch 1 until it restarts.
+        assert_eq!(
+            manager
+                .patches_state
+                .last_booted_patch
+                .as_ref()
+                .unwrap()
+                .number,
+            1
+        );
+
+        // Re-create patch 1's artifact to simulate a silent
+        // delete_patch_artifacts failure (e.g. transient FS issue).
+        let patch_1_path = manager.patch_artifact_path(1);
+        std::fs::create_dir_all(patch_1_path.parent().unwrap())?;
+        std::fs::write(&patch_1_path, "patch contents")?;
+
+        // Patch 2 arrives and then fails to boot.
+        manager.add_patch_for_test(&temp_dir, 2)?;
+        manager.record_boot_start_for_patch(2)?;
+        manager.record_boot_failure_for_patch(2)?;
+
+        // Patch 1 must NOT be promoted back to next_boot_patch.
+        assert!(manager.patches_state.next_boot_patch.is_none());
+        assert!(manager.is_known_bad_patch(1));
+        assert!(manager.is_known_bad_patch(2));
 
         Ok(())
     }

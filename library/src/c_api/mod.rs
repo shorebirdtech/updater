@@ -1023,9 +1023,10 @@ mod test {
     /// After a patch-to-release rollback, the next launch boots the base
     /// release. `current_boot_patch` must reflect that — it cannot keep
     /// reporting the rolled-back patch from the previous run, or callers
-    /// would see a perpetual `restartRequired`. The contract: `report_launch_start`
-    /// resets `current_boot_patch` from `next_boot_patch` (which is None,
-    /// i.e. release), clearing any stale value left over on disk.
+    /// would see a perpetual `restartRequired`. The contract: a fresh
+    /// process starts with `current_boot_patch == None` (it's a
+    /// session-scoped global, not persisted) and `report_launch_start`
+    /// keeps it `None` because `next_boot_patch` is also `None`.
     #[serial]
     #[test]
     fn rollback_to_release_then_restart_clears_current_boot_patch() {
@@ -1111,9 +1112,9 @@ mod test {
             free_parameters(c_params);
         }
 
-        // The release boot has no next patch, so report_launch_start must
-        // clear current_boot_patch even though it was Some(1) on disk from
-        // the previous run.
+        // The release boot has no next patch. current_boot_patch is a
+        // session-scoped global, so a fresh process starts with it None.
+        // report_launch_start keeps it None because next_boot_patch is None.
         assert_eq!(shorebird_next_boot_patch_number(), 0);
         shorebird_report_launch_start();
         assert_eq!(shorebird_current_boot_patch_number(), 0);
@@ -1142,7 +1143,11 @@ mod test {
         free_c_string(c_yaml);
         free_parameters(c_params);
 
-        // Set up patch 2 as the running patch.
+        // Set up patch 2 as the running patch. Note: the artifact (hash and
+        // bytes) is identical to the one we use for "patch 1" elsewhere —
+        // the patch *number* is what differs. This is fine for the
+        // current/next assertions below; we never need patch 1 and patch 2
+        // to be distinguishable as artifacts.
         testing_set_network_hooks(
             |_url, _request| {
                 let hash = "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";

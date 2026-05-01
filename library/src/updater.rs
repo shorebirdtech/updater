@@ -815,10 +815,10 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     with_mut_state(|state| {
         let next_boot_patch = state.next_boot_patch();
         // Capture what this run is using. None means we're booting the base
-        // release. This is the source of truth for `current_boot_patch()` and
-        // is independent of the boot-in-progress / last-successfully-booted
-        // bookkeeping.
-        state.set_current_boot_patch(next_boot_patch.as_ref().map(|p| p.number))?;
+        // release. Backed by a session-scoped global, not by PatchesState
+        // on disk, so this is in-memory only — the record_boot_start_for_patch
+        // call below is the only disk write on this path.
+        state.set_current_boot_patch(next_boot_patch.as_ref().map(|p| p.number));
         if let Some(next_boot_patch) = next_boot_patch {
             state.record_boot_start_for_patch(next_boot_patch.number)?;
         }

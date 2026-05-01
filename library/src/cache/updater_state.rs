@@ -244,8 +244,8 @@ impl UpdaterState {
     /// Records which patch this process is using. Called from
     /// `report_launch_start` with `Some(n)` when launching a patch, or
     /// `None` when launching the base release.
-    pub fn set_current_boot_patch(&mut self, patch_number: Option<usize>) -> Result<()> {
-        self.patch_manager.set_current_boot_patch(patch_number)
+    pub fn set_current_boot_patch(&mut self, patch_number: Option<usize>) {
+        self.patch_manager.set_current_boot_patch(patch_number);
     }
 
     /// This is the patch that will be used for the next boot.
@@ -492,41 +492,6 @@ mod tests {
             .return_const(Some(patch.clone()));
         let state = test_state(&tmp_dir, mock_manage_patches);
         assert_eq!(state.last_successfully_booted_patch(), Some(patch));
-    }
-
-    #[test]
-    fn current_boot_patch_forwards_from_patch_manager() {
-        let tmp_dir = TempDir::new().unwrap();
-        let patch = fake_patch(&tmp_dir, 1);
-        let mut mock_manage_patches = MockManagePatches::new();
-        mock_manage_patches
-            .expect_current_boot_patch()
-            .return_const(Some(patch.clone()));
-        let state = test_state(&tmp_dir, mock_manage_patches);
-        assert_eq!(state.current_boot_patch(), Some(patch));
-    }
-
-    /// `current_boot_patch` is its own dedicated field (set at
-    /// `report_launch_start`); it does *not* fall back to
-    /// `last_successfully_booted_patch`. After a server-driven rollback,
-    /// `last_booted_patch` may be cleared while the running process is still
-    /// using the rolled-back patch — `current_boot_patch` keeps reporting it.
-    #[test]
-    fn current_boot_patch_does_not_fall_back_to_last_successfully_booted() {
-        let tmp_dir = TempDir::new().unwrap();
-        let patch = fake_patch(&tmp_dir, 1);
-        let mut mock_manage_patches = MockManagePatches::new();
-        mock_manage_patches
-            .expect_current_boot_patch()
-            .return_const(None);
-        // last_successfully_booted_patch is set, but current_boot_patch
-        // must not consult it — and so the mock must not be called.
-        mock_manage_patches
-            .expect_last_successfully_booted_patch()
-            .return_const(Some(patch))
-            .times(0);
-        let state = test_state(&tmp_dir, mock_manage_patches);
-        assert_eq!(state.current_boot_patch(), None);
     }
 
     #[test]
