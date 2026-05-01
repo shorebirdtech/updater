@@ -4103,6 +4103,22 @@ mod multi_engine_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn update_status_deferred_displays_as_deferred() {
+        assert_eq!(
+            crate::updater::UpdateStatus::UpdateDeferred.to_string(),
+            "Update deferred: state storage temporarily unavailable",
+        );
+    }
+
+    #[test]
+    fn update_error_state_storage_unavailable_displays_as_unavailable() {
+        assert_eq!(
+            crate::updater::UpdateError::StateStorageUnavailable.to_string(),
+            "State storage temporarily unavailable",
+        );
+    }
 }
 
 /// Regression tests asserting the patch-check request's `current_patch_number`
