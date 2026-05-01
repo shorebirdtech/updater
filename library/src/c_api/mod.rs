@@ -402,6 +402,7 @@ mod test {
     use crate::{
         network::{
             testing_set_network_hooks, DownloadResult, PatchCheckResponse, UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
         },
         test_utils::write_fake_apk,
     };
@@ -992,6 +993,11 @@ mod test {
         // Now the server rolls back patch 1 with no replacement. The device
         // should fall back to the base release on the *next* boot, and the
         // running session should be told a restart is required.
+        // Phase-1 spawned threads (PatchDownload, PatchInstallSuccess) hold a
+        // clone of the config from when they were spawned, so they hit the old
+        // report hook above. Nothing in phase 2 should report — only a
+        // patch-check request happens — so use UNEXPECTED_REPORT to assert
+        // that.
         testing_set_network_hooks(
             |_url, _request| {
                 Ok(PatchCheckResponse {
@@ -1001,7 +1007,7 @@ mod test {
                 })
             },
             UNEXPECTED_DOWNLOAD,
-            |_url, _event| Ok(()),
+            UNEXPECTED_REPORT,
         );
 
         // Server has no downloadable update — just the rollback signal.
@@ -1031,7 +1037,7 @@ mod test {
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
         let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
 
-        // Phase 1: install patch 1, launch successfully, server rolls it back.
+        // Phase 1: install patch 1 and report a successful launch.
         {
             let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
             let c_yaml = c_string("app_id: foo");
@@ -1074,6 +1080,11 @@ mod test {
         shorebird_report_launch_success();
         assert_eq!(shorebird_current_boot_patch_number(), 1);
 
+        // Phase 2: server rolls back patch 1 with no replacement.
+        // Phase-1 spawned threads (PatchDownload, PatchInstallSuccess) hold a
+        // clone of the config from when they were spawned, so they hit the
+        // phase-1 hooks above. Phase 2 only does a patch check, so no report
+        // is expected here.
         testing_set_network_hooks(
             |_url, _request| {
                 Ok(PatchCheckResponse {
@@ -1083,13 +1094,13 @@ mod test {
                 })
             },
             UNEXPECTED_DOWNLOAD,
-            |_url, _event| Ok(()),
+            UNEXPECTED_REPORT,
         );
         assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
         assert_eq!(shorebird_current_boot_patch_number(), 1);
         assert_eq!(shorebird_next_boot_patch_number(), 0);
 
-        // Phase 2: simulate app restart by resetting config and re-initializing
+        // Phase 3: simulate app restart by resetting config and re-initializing
         // against the same on-disk state (same tmp_dir).
         testing_reset_config();
         {
