@@ -37,6 +37,12 @@ struct PatchMetadata {
 /// What gets serialized to disk
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct PatchesState {
+    // TODO(eseidel): rename `last_booted_patch` → `fallback_patch`. Its
+    // single remaining role is "fallback target when next_boot_patch is
+    // invalid"; the rename would make that obvious from the name. Deferred
+    // from this PR because it touches ~30 test names that read in terms of
+    // the current field name. Should land as its own mechanical rename
+    // commit.
     /// The most recently successfully-booted patch, used as a fallback target
     /// by `try_fall_back_from_patch` when the next-boot patch becomes invalid.
     /// This is *not* the running patch — see `current_boot_patch` for that.
@@ -56,6 +62,19 @@ struct PatchesState {
     #[serde(default)]
     current_boot_patch: Option<usize>,
 
+    // TODO(eseidel): `currently_booting_patch` is redundant now that
+    // `current_boot_patch` exists. Its two jobs both collapse into existing
+    // fields:
+    //   - "what patch is mid-boot" → `current_boot_patch` (set at
+    //     report_launch_start, never cleared until the next launch start).
+    //   - "is a boot in progress" → `boot_started_at.is_some()` (already
+    //     true during the boot window; cleared on success/failure).
+    // Crash detection on init then becomes: if `boot_started_at` is Some on
+    // load, the previous run's `current_boot_patch` is the patch that
+    // crashed mid-boot — mark it bad and fall back. Removing this field
+    // touches handle_prior_boot_failure_if_necessary, the boot-record
+    // helpers, and several tests; tracking as its own follow-up so the
+    // rollback fix here stays minimal.
     /// This is given a value when we start booting a patch (record_boot_start_for_patch) and is
     /// cleared when:
     ///  - the patch boots successfully (record_boot_success)
