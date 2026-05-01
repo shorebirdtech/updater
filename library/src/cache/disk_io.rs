@@ -312,4 +312,79 @@ mod test {
             .to_string()
             .contains("simulated flush failure"));
     }
+
+    // The next three tests exercise the call sites of `map_state_io_error`
+    // inside `write()` itself (create_dir_all, File::create, rename), not just
+    // the helper. They use a read-only parent directory to provoke a real
+    // PermissionDenied from the OS. Unix-only because Windows ACLs don't
+    // surface as ErrorKind::PermissionDenied the same way.
+    #[cfg(unix)]
+    fn make_read_only(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn make_writable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_returns_state_storage_unavailable_when_create_dir_all_denied() {
+        let temp_dir = TempDir::new().unwrap();
+        make_read_only(temp_dir.path());
+        // Path with a missing subdirectory under a read-only parent — so
+        // create_dir_all is the call that will fail with PermissionDenied.
+        let path = temp_dir.path().join("subdir/state.json");
+
+        let result = super::write(
+            &TestStruct {
+                a: 1,
+                b: "hi".into(),
+            },
+            &path,
+        );
+
+        // Restore permissions so TempDir can clean up.
+        make_writable(temp_dir.path());
+
+        let err = result.expect_err("write should fail under read-only parent");
+        assert_eq!(
+            err.downcast_ref::<crate::updater::UpdateError>(),
+            Some(&crate::updater::UpdateError::StateStorageUnavailable),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_returns_state_storage_unavailable_when_file_create_denied() {
+        let temp_dir = TempDir::new().unwrap();
+        // Containing dir already exists (so create_dir_all is a no-op),
+        // but is read-only — File::create on the temp sibling is the call
+        // that will fail with PermissionDenied.
+        make_read_only(temp_dir.path());
+        let path = temp_dir.path().join("state.json");
+
+        let result = super::write(
+            &TestStruct {
+                a: 1,
+                b: "hi".into(),
+            },
+            &path,
+        );
+
+        make_writable(temp_dir.path());
+
+        let err = result.expect_err("write should fail under read-only dir");
+        assert_eq!(
+            err.downcast_ref::<crate::updater::UpdateError>(),
+            Some(&crate::updater::UpdateError::StateStorageUnavailable),
+        );
+    }
 }
