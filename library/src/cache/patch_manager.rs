@@ -37,12 +37,23 @@ struct PatchMetadata {
 /// What gets serialized to disk
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct PatchesState {
-    // TODO(eseidel): rename `last_booted_patch` → `fallback_patch`. Its
-    // single remaining role is "fallback target when next_boot_patch is
-    // invalid"; the rename would make that obvious from the name. Deferred
-    // from this PR because it touches ~30 test names that read in terms of
-    // the current field name. Should land as its own mechanical rename
-    // commit.
+    // TODO(eseidel): `last_booted_patch` is conflated. Its name and
+    // `record_boot_success` say it's a *historical* record ("the patch that
+    // last successfully booted, ever"), but `try_fall_back_from_patch`
+    // treats it as an *operational* fallback target and clears it when the
+    // server rolls back the patch — even though the running process is
+    // still using that patch. Those two roles only diverge under server
+    // rollback, which is exactly the customer's bug. This PR sidesteps the
+    // conflation by adding `current_boot_patch` for "what's running"; that
+    // makes the FFI return the right number, but the field-clearing
+    // weirdness in `try_fall_back_from_patch` is still here.
+    //
+    // The underlying fix (tracked separately): stop clearing
+    // `last_booted_patch` in `try_fall_back_from_patch`'s "both bad"
+    // branch. The patch was successfully booted — that's a historical
+    // fact and shouldn't change because the server told us not to use it
+    // next time. The fallback logic that needs "don't fall back to this
+    // patch" can use a separate signal (e.g. `known_bad_patches`).
     /// The most recently successfully-booted patch, used as a fallback target
     /// by `try_fall_back_from_patch` when the next-boot patch becomes invalid.
     /// This is *not* the running patch — see `current_boot_patch` for that.
@@ -360,6 +371,16 @@ impl PatchManager {
         if is_bad_patch_last_booted_patch && is_bad_patch_next_boot_patch {
             // If both patches are bad, delete them both and boot from the base release.
             shorebird_info!("Clearing last booted patch and next boot patch");
+            // TODO(eseidel): see the note on `last_booted_patch` in
+            // `PatchesState`. Clearing it here is the operational behavior
+            // ("don't fall back to this patch") at the cost of erasing the
+            // historical fact that the patch did successfully boot. The
+            // running process is still using this patch when this line
+            // executes, so the field name lies for the rest of the run.
+            // The right fix is probably to remove this line and express
+            // "don't fall back to this patch" via `known_bad_patches` or a
+            // separate set — being prototyped in a sibling PR for
+            // comparison.
             self.patches_state.last_booted_patch = None;
             self.patches_state.next_boot_patch = None;
         } else if is_bad_patch_next_boot_patch {
