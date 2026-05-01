@@ -312,9 +312,21 @@ impl PatchManager {
             .unwrap_or(false);
 
         if is_bad_patch_last_booted_patch && is_bad_patch_next_boot_patch {
-            // If both patches are bad, delete them both and boot from the base release.
-            shorebird_info!("Clearing last booted patch and next boot patch");
-            self.patches_state.last_booted_patch = None;
+            // The bad patch is both the last successfully-booted patch and the
+            // queued next-boot patch. Clear the next-boot pointer so the
+            // device boots the base release on next launch — but leave
+            // `last_booted_patch` alone. The patch *did* successfully boot,
+            // and the running process is still using it; erasing the
+            // historical record while the field is being read by FFI as
+            // "what's running" was the cause of the patch-to-release
+            // rollback bug (shorebirdtech/shorebird#3728). The "don't fall
+            // back to this patch" intent is already covered: the artifacts
+            // are deleted above by `delete_patch_artifacts(bad_patch_number)`,
+            // and validation in `validate_next_boot_patch` will refuse to
+            // boot a patch whose artifacts are missing.
+            shorebird_info!(
+                "Clearing next boot patch (rollback target was both last booted and next boot)"
+            );
             self.patches_state.next_boot_patch = None;
         } else if is_bad_patch_next_boot_patch {
             shorebird_info!("Clearing next boot patch");
@@ -1445,8 +1457,15 @@ mod record_boot_failure_for_patch_tests {
         Ok(())
     }
 
+    /// Patch 1 successfully booted on a prior run; on this run boot fails.
+    /// `last_successfully_booted_patch` reports the historical fact (patch 1
+    /// did successfully boot once), but `next_boot_patch` is cleared and the
+    /// patch is recorded as known-bad so it won't be retried. The artifact
+    /// is deleted. The "don't fall back to this patch" intent is captured
+    /// by `is_known_bad_patch` and the missing artifact, not by erasing the
+    /// boot history.
     #[test]
-    fn clears_last_booted_patch_if_it_is_the_failed_patch() -> Result<()> {
+    fn preserves_last_booted_patch_on_failure_but_marks_bad() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -1463,7 +1482,9 @@ mod record_boot_failure_for_patch_tests {
         // Now pretend it failed to boot
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_failure_for_patch(1).is_ok());
-        assert!(manager.last_successfully_booted_patch().is_none());
+        // Historical fact preserved: patch 1 *did* successfully boot once.
+        assert_eq!(manager.last_successfully_booted_patch().unwrap().number, 1);
+        // Operational state: don't try this patch again.
         assert!(manager.next_boot_patch().is_none());
         assert!(manager.is_known_bad_patch(1));
         assert!(!patch_artifact_path.exists());

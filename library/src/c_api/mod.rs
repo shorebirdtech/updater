@@ -402,6 +402,7 @@ mod test {
     use crate::{
         network::{
             testing_set_network_hooks, DownloadResult, PatchCheckResponse, UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
         },
         test_utils::write_fake_apk,
     };
@@ -923,6 +924,196 @@ mod test {
 
         // After reporting a launch success, the current patch number should not have changed.
         assert_eq!(shorebird_current_boot_patch_number(), 1);
+    }
+
+    /// Regression test for the patch-to-release rollback bug
+    /// (shorebirdtech/shorebird#3728). Device is running patch 1; the server
+    /// rolls patch 1 back to the base release with no replacement. The
+    /// running session must continue to report `current_boot_patch_number`
+    /// as 1 (the process is still using it) while `next_boot_patch_number`
+    /// becomes 0 (the device will boot the release on next launch). Together
+    /// these signal `restartRequired` to the Dart layer.
+    ///
+    /// Path 1 fix: by leaving `last_booted_patch` alone in the rollback path,
+    /// the existing `currently_booting.or(last_successfully_booted_patch)`
+    /// fallback in `current_boot_patch()` returns the right value without
+    /// any new field.
+    #[serial]
+    #[test]
+    fn rollback_to_release_keeps_current_boot_patch() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        let c_yaml = c_string("app_id: foo");
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                let hash = "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: hash.to_owned(),
+                        download_url: "ignored".to_owned(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| {
+                let patch_bytes: Vec<u8> = vec![
+                    40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0,
+                    0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
+                ];
+                let total_bytes = patch_bytes.len() as u64;
+                std::fs::write(dest, &patch_bytes)?;
+                Ok(DownloadResult {
+                    total_bytes,
+                    content_length: Some(total_bytes),
+                })
+            },
+            |_url, _event| Ok(()),
+        );
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
+        shorebird_update();
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+
+        // Server rolls back patch 1 with no replacement. Phase-1 spawned
+        // threads (PatchDownload, PatchInstallSuccess) hold a clone of the
+        // config from when they were spawned, so they hit the phase-1 hook
+        // above. Phase 2 only does a patch check, so no report is expected.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: Some(vec![1]),
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
+        );
+        assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
+
+        // Customer's bug: pre-fix returned 0. Path 1 fix returns 1 because
+        // last_booted_patch is no longer cleared, and the .or() fallback
+        // surfaces it.
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+        // Next boot has been cleared — device boots release on restart.
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
+    }
+
+    /// Path 1's known limitation: after a patch-to-release rollback and a
+    /// restart, the engine boots the base release. But `last_booted_patch`
+    /// is still `Some(1)` on disk from the previous run, and there's no
+    /// session-scoped signal to override it. The `.or()` fallback in
+    /// `current_boot_patch()` returns `Some(1)`, so `checkForUpdate` would
+    /// keep reporting `restartRequired` even though the app is already on
+    /// release.
+    ///
+    /// This test is `#[ignore]` because Path 1 alone doesn't fix it. The
+    /// alternative approach (PR #348) adds a dedicated session-scoped
+    /// `current_boot_patch` field that's reset on `report_launch_start`,
+    /// which closes this gap. To close it within Path 1, we'd need either
+    /// a session-scoped field anyway, or a clear-on-launch hack — at which
+    /// point we're approximating PR #348.
+    #[serial]
+    #[test]
+    #[ignore]
+    fn rollback_to_release_then_restart_clears_current_boot_patch() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
+
+        // Phase 1: install patch 1 and report a successful launch.
+        {
+            let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+            let c_yaml = c_string("app_id: foo");
+            assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+            free_c_string(c_yaml);
+            free_parameters(c_params);
+        }
+
+        testing_set_network_hooks(
+            |_url, _request| {
+                let hash = "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: hash.to_owned(),
+                        download_url: "ignored".to_owned(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| {
+                let patch_bytes: Vec<u8> = vec![
+                    40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0,
+                    0, 0, 0, 5, 116, 101, 115, 116, 115, 0,
+                ];
+                let total_bytes = patch_bytes.len() as u64;
+                std::fs::write(dest, &patch_bytes)?;
+                Ok(DownloadResult {
+                    total_bytes,
+                    content_length: Some(total_bytes),
+                })
+            },
+            |_url, _event| Ok(()),
+        );
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
+        shorebird_update();
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+
+        // Phase 2: server rolls back patch 1.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: Some(vec![1]),
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
+        );
+        assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
+
+        // Phase 3: simulate restart — the engine boots release because
+        // next_boot is None. There's no session-scoped reset to clear
+        // last_booted_patch, so .or() still returns the stale 1.
+        testing_reset_config();
+        {
+            let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+            let c_yaml = c_string("app_id: foo");
+            assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+            free_c_string(c_yaml);
+            free_parameters(c_params);
+        }
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
+        shorebird_report_launch_start();
+        // FAILS under Path 1: returns 1 (stale last_booted_patch from the
+        // previous run, surfaced by the .or() fallback). PR #348 fixes
+        // this by resetting current_boot_patch on report_launch_start.
+        assert_eq!(shorebird_current_boot_patch_number(), 0);
     }
 
     #[serial]
