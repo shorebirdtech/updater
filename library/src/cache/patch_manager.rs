@@ -37,12 +37,24 @@ struct PatchMetadata {
 /// What gets serialized to disk
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct PatchesState {
-    /// The patch we are currently running, if any.
+    /// The most recently successfully-booted patch, used as a fallback target
+    /// by `try_fall_back_from_patch` when the next-boot patch becomes invalid.
+    /// This is *not* the running patch — see `current_boot_patch` for that.
     last_booted_patch: Option<PatchMetadata>,
 
     /// The patch that will be run on the next app boot, if any. This may be the same
     /// as the last booted patch patch if no new patch has been downloaded.
     next_boot_patch: Option<PatchMetadata>,
+
+    /// Patch number this process is using, captured at `report_launch_start`
+    /// from whatever `next_boot_patch` was at that moment. `None` when running
+    /// the base release. Persists for the lifetime of the run; survives a
+    /// server-driven rollback of that patch (the process is still using it,
+    /// even though it won't boot from it again). Reset on the next
+    /// `report_launch_start`. Only the patch number is needed — this field
+    /// reports running state, not bootable-patch metadata.
+    #[serde(default)]
+    current_boot_patch: Option<usize>,
 
     /// This is given a value when we start booting a patch (record_boot_start_for_patch) and is
     /// cleared when:
@@ -84,9 +96,24 @@ pub trait ManagePatches {
         signature: Option<&'a str>,
     ) -> Result<()>;
 
-    /// Returns the patch we most recently successfully booted from (usually the currently running patch),
-    /// or None if no patch is installed.
+    /// The patch most recently known to have successfully booted on a prior
+    /// run, or None if no patch is installed. Used as a fallback target by
+    /// `try_fall_back_from_patch` when the next-boot patch becomes invalid.
+    /// Not the same thing as the patch this process is running; for that, see
+    /// [`current_boot_patch`].
     fn last_successfully_booted_patch(&self) -> Option<PatchInfo>;
+
+    /// The patch this process is using, set at `report_launch_start` from
+    /// whatever `next_boot_patch` was at that moment. `None` means the
+    /// process is running the base release. Survives server-driven rollbacks
+    /// of that patch (the process is still using it). Reset on the next
+    /// `report_launch_start`.
+    fn current_boot_patch(&self) -> Option<PatchInfo>;
+
+    /// Sets the patch this process is using. Called from `report_launch_start`
+    /// with `Some(n)` when launching a patch, or `None` when launching the
+    /// base release.
+    fn set_current_boot_patch(&mut self, patch_number: Option<usize>) -> Result<()>;
 
     /// The patch we are currently booting, if any. This will only have a value:
     ///   1. Between record_boot_start_for_patch and record_boot_success or record_boot_failure_for_patch
@@ -445,6 +472,17 @@ impl ManagePatches for PatchManager {
             .map(|patch| self.patch_info_for_number(patch.number))
     }
 
+    fn current_boot_patch(&self) -> Option<PatchInfo> {
+        self.patches_state
+            .current_boot_patch
+            .map(|number| self.patch_info_for_number(number))
+    }
+
+    fn set_current_boot_patch(&mut self, patch_number: Option<usize>) -> Result<()> {
+        self.patches_state.current_boot_patch = patch_number;
+        self.save_patches_state()
+    }
+
     fn currently_booting_patch(&self) -> Option<PatchInfo> {
         self.patches_state
             .currently_booting_patch
@@ -612,7 +650,7 @@ mod debug_tests {
             PatchVerificationMode::default(),
         );
         let actual = format!("{:?}", patch_manager);
-        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, currently_booting_patch: None, boot_started_at: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
+        assert!(actual.contains(r#"patches_state: PatchesState { last_booted_patch: None, next_boot_patch: None, current_boot_patch: None, currently_booting_patch: None, boot_started_at: None, known_bad_patches: {} }, patch_public_key: Some("public_key")"#));
     }
 }
 

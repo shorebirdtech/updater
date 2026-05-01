@@ -810,18 +810,19 @@ pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
-    // We previously set the "current" patch the value of the "next" patch, but no longer
-    // do so because the semantics have changed:
-    //   current is now "last successfully booted patch"
-    //   next is now "patch to boot next"
     shorebird_info!("Reporting launch start.");
 
     with_mut_state(|state| {
-        if let Some(next_boot_patch) = state.next_boot_patch() {
-            state.record_boot_start_for_patch(next_boot_patch.number)
-        } else {
-            Ok(())
+        let next_boot_patch = state.next_boot_patch();
+        // Capture what this run is using. None means we're booting the base
+        // release. This is the source of truth for `current_boot_patch()` and
+        // is independent of the boot-in-progress / last-successfully-booted
+        // bookkeeping.
+        state.set_current_boot_patch(next_boot_patch.as_ref().map(|p| p.number))?;
+        if let Some(next_boot_patch) = next_boot_patch {
+            state.record_boot_start_for_patch(next_boot_patch.number)?;
         }
+        Ok(())
     })
 }
 
