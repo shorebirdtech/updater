@@ -37,26 +37,13 @@ struct PatchMetadata {
 /// What gets serialized to disk
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct PatchesState {
-    // TODO(eseidel): `last_booted_patch` is conflated. Its name and
-    // `record_boot_success` say it's a *historical* record ("the patch that
-    // last successfully booted, ever"), but `try_fall_back_from_patch`
-    // treats it as an *operational* fallback target and clears it when the
-    // server rolls back the patch — even though the running process is
-    // still using that patch. Those two roles only diverge under server
-    // rollback, which is exactly the customer's bug. This PR sidesteps the
-    // conflation by adding `current_boot_patch` for "what's running"; that
-    // makes the FFI return the right number, but the field-clearing
-    // weirdness in `try_fall_back_from_patch` is still here.
-    //
-    // The underlying fix (tracked separately): stop clearing
-    // `last_booted_patch` in `try_fall_back_from_patch`'s "both bad"
-    // branch. The patch was successfully booted — that's a historical
-    // fact and shouldn't change because the server told us not to use it
-    // next time. The fallback logic that needs "don't fall back to this
-    // patch" can use a separate signal (e.g. `known_bad_patches`).
-    /// The most recently successfully-booted patch, used as a fallback target
-    /// by `try_fall_back_from_patch` when the next-boot patch becomes invalid.
-    /// This is *not* the running patch — see `current_boot_patch` for that.
+    /// Historical record of the patch that most recently completed
+    /// `record_boot_success` on any run. Used as a fallback target by
+    /// `try_fall_back_from_patch` when the next-boot patch is invalid.
+    /// Updated only by `record_boot_success` — boot failures and
+    /// server-driven rollbacks of the running patch don't erase the
+    /// historical fact that the patch booted. Not the same thing as the
+    /// patch this process is running; see `current_boot_patch` for that.
     last_booted_patch: Option<PatchMetadata>,
 
     /// The patch that will be run on the next app boot, if any. This may be the same
@@ -369,19 +356,22 @@ impl PatchManager {
             .unwrap_or(false);
 
         if is_bad_patch_last_booted_patch && is_bad_patch_next_boot_patch {
-            // If both patches are bad, delete them both and boot from the base release.
-            shorebird_info!("Clearing last booted patch and next boot patch");
-            // TODO(eseidel): see the note on `last_booted_patch` in
-            // `PatchesState`. Clearing it here is the operational behavior
-            // ("don't fall back to this patch") at the cost of erasing the
-            // historical fact that the patch did successfully boot. The
-            // running process is still using this patch when this line
-            // executes, so the field name lies for the rest of the run.
-            // The right fix is probably to remove this line and express
-            // "don't fall back to this patch" via `known_bad_patches` or a
-            // separate set — being prototyped in a sibling PR for
-            // comparison.
-            self.patches_state.last_booted_patch = None;
+            // The bad patch is both the last successfully-booted patch and
+            // the queued next-boot patch. Clear `next_boot_patch` so we boot
+            // the base release on next launch, but leave `last_booted_patch`
+            // alone — the patch *did* successfully boot, and the running
+            // process is still using it. Erasing that historical record
+            // while the field was being read by FFI as "what's running"
+            // caused the patch-to-release rollback bug in
+            // shorebirdtech/shorebird#3728. The "don't fall back to this
+            // patch" intent is already covered: artifacts are deleted above
+            // by `delete_patch_artifacts(bad_patch_number)`, validation in
+            // `validate_next_boot_patch` will refuse to boot a patch whose
+            // artifacts are missing, and `is_known_bad_patch` records boot
+            // failures explicitly.
+            shorebird_info!(
+                "Clearing next boot patch (rollback target was both last booted and next boot)"
+            );
             self.patches_state.next_boot_patch = None;
         } else if is_bad_patch_next_boot_patch {
             shorebird_info!("Clearing next boot patch");
@@ -1523,8 +1513,14 @@ mod record_boot_failure_for_patch_tests {
         Ok(())
     }
 
+    /// Patch 1 successfully booted on a prior run; on this run boot fails.
+    /// `last_successfully_booted_patch` keeps reporting patch 1 — it *did*
+    /// successfully boot once, that's a historical fact. The operational
+    /// "don't try this patch again" intent is captured by
+    /// `is_known_bad_patch` and by deleting the artifacts; nobody falls
+    /// back to a patch with missing artifacts.
     #[test]
-    fn clears_last_booted_patch_if_it_is_the_failed_patch() -> Result<()> {
+    fn preserves_last_booted_patch_on_failure_but_marks_bad() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let mut manager = PatchManager::manager_for_test(&temp_dir);
         manager.add_patch_for_test(&temp_dir, 1)?;
@@ -1541,7 +1537,9 @@ mod record_boot_failure_for_patch_tests {
         // Now pretend it failed to boot
         assert!(manager.record_boot_start_for_patch(1).is_ok());
         assert!(manager.record_boot_failure_for_patch(1).is_ok());
-        assert!(manager.last_successfully_booted_patch().is_none());
+        // Historical fact preserved.
+        assert_eq!(manager.last_successfully_booted_patch().unwrap().number, 1);
+        // Operational state: don't try this patch again.
         assert!(manager.next_boot_patch().is_none());
         assert!(manager.is_known_bad_patch(1));
         assert!(!patch_artifact_path.exists());
