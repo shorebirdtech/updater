@@ -2,7 +2,7 @@ use std::io::{Read, Seek};
 
 use crate::{ExternalFileProvider, ReadSeek};
 
-use super::FileCallbacks;
+use super::engine::FileCallbacks;
 
 struct CFile {
     file_callbacks: FileCallbacks,
