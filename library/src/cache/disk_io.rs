@@ -1,9 +1,10 @@
 use crate::file_errors::{FileOperation, IoResultExt};
+use crate::updater::UpdateError;
 use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -21,8 +22,13 @@ where
 
     // Because File::create can sometimes fail if the full directory path doesn't exist,
     // we create the directories in its path first.
-    std::fs::create_dir_all(containing_dir)
-        .with_file_context(FileOperation::CreateDir, containing_dir)?;
+    if let Err(e) = std::fs::create_dir_all(containing_dir) {
+        return Err(map_state_io_error(
+            e,
+            FileOperation::CreateDir,
+            containing_dir,
+        ));
+    }
 
     // Write to a sibling temp file first, then atomically rename into place.
     // Two problems with writing directly to `path`:
@@ -36,7 +42,10 @@ where
     // flush error (we unwrap `BufWriter` below), and on-disk `path` is only
     // replaced by a fully-written sibling via an atomic `rename`.
     let temp_path = temp_sibling_path(path_as_ref);
-    let file = File::create(&temp_path).with_file_context(FileOperation::CreateFile, &temp_path)?;
+    let file = match File::create(&temp_path) {
+        Ok(f) => f,
+        Err(e) => return Err(map_state_io_error(e, FileOperation::CreateFile, &temp_path)),
+    };
     if let Err(err) = serialize_and_flush(serializable, file)
         .with_context(|| format!("failed to serialize to {:?}", &temp_path))
     {
@@ -44,8 +53,10 @@ where
         let _ = std::fs::remove_file(&temp_path);
         return Err(err);
     }
-    std::fs::rename(&temp_path, path_as_ref)
-        .with_file_context(FileOperation::RenameFile, &temp_path)
+    if let Err(e) = std::fs::rename(&temp_path, path_as_ref) {
+        return Err(map_state_io_error(e, FileOperation::RenameFile, &temp_path));
+    }
+    Ok(())
 }
 
 /// Serializes `value` as pretty JSON into `writer`, then explicitly unwraps
@@ -72,6 +83,44 @@ where
 fn temp_sibling_path(path: &Path) -> PathBuf {
     let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("state");
     path.with_file_name(format!("{file_name}.tmp"))
+}
+
+/// Maps an IO error from a state write operation into an `anyhow::Error`.
+///
+/// Most errors are wrapped with the standard file-operation context and
+/// propagated as-is. A `PermissionDenied` error, however, is translated into
+/// a dedicated `UpdateError::StateStorageUnavailable` so higher layers can
+/// distinguish "the device is locked and our state directory is temporarily
+/// unwritable" from a real failure.
+///
+/// On iOS, files under `Library/Application Support/` inherit the default
+/// Data Protection class `NSFileProtectionCompleteUntilFirstUserAuthentication`.
+/// Before the user has unlocked the device for the first time since boot
+/// (and in some edge cases while the device is locked), the OS refuses
+/// writes with `EPERM` / `EACCES`, which Rust surfaces as
+/// `ErrorKind::PermissionDenied`. This is transient — the next update
+/// attempt after the device is unlocked and the app is foregrounded will
+/// typically succeed — so we deliberately do not treat it as an error.
+fn map_state_io_error(
+    error: std::io::Error,
+    operation: FileOperation,
+    path: &Path,
+) -> anyhow::Error {
+    if error.kind() == ErrorKind::PermissionDenied {
+        shorebird_info!(
+            "State storage temporarily unavailable ({} {}): {}. \
+             Update will be deferred until storage becomes writable.",
+            operation,
+            path.display(),
+            error
+        );
+        return anyhow::Error::new(UpdateError::StateStorageUnavailable);
+    }
+    // Re-wrap non-PermissionDenied errors with the same enhanced context the
+    // `with_file_context` trait would have produced.
+    Err::<(), _>(error)
+        .with_file_context(operation, path)
+        .unwrap_err()
 }
 
 pub fn read<D, P>(path: &P) -> anyhow::Result<D>
@@ -126,6 +175,48 @@ mod test {
     #[test]
     fn read_errs_if_file_does_not_exist() {
         assert!(super::read::<TestStruct, _>(&Path::new("nonexistent.json")).is_err());
+    }
+
+    #[test]
+    fn permission_denied_maps_to_state_storage_unavailable() {
+        // Emulate the iOS-locked-device case: PermissionDenied on File::create
+        // should translate to UpdateError::StateStorageUnavailable rather than
+        // propagating as a generic "failed to create file" error.
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied");
+        let path = Path::new("/protected/state.json");
+
+        let anyhow_err =
+            super::map_state_io_error(error, crate::file_errors::FileOperation::CreateFile, path);
+
+        let downcast = anyhow_err.downcast_ref::<crate::updater::UpdateError>();
+        assert_eq!(
+            downcast,
+            Some(&crate::updater::UpdateError::StateStorageUnavailable),
+        );
+    }
+
+    #[test]
+    fn non_permission_denied_errors_retain_file_context() {
+        // Errors other than PermissionDenied should still be wrapped with the
+        // standard enhanced file-operation context and NOT be treated as a
+        // state-storage-unavailable deferral.
+        let error = std::io::Error::new(std::io::ErrorKind::StorageFull, "No space left on device");
+        let path = Path::new("/data/state.json");
+
+        let anyhow_err =
+            super::map_state_io_error(error, crate::file_errors::FileOperation::CreateFile, path);
+
+        assert!(
+            anyhow_err
+                .downcast_ref::<crate::updater::UpdateError>()
+                .is_none(),
+            "StorageFull must not be treated as StateStorageUnavailable"
+        );
+        let message = format!("{anyhow_err:?}");
+        assert!(
+            message.contains("Failed to create file"),
+            "expected enhanced file context, got: {message}"
+        );
     }
 
     #[test]
@@ -220,5 +311,80 @@ mod test {
             .unwrap_err()
             .to_string()
             .contains("simulated flush failure"));
+    }
+
+    // The next three tests exercise the call sites of `map_state_io_error`
+    // inside `write()` itself (create_dir_all, File::create, rename), not just
+    // the helper. They use a read-only parent directory to provoke a real
+    // PermissionDenied from the OS. Unix-only because Windows ACLs don't
+    // surface as ErrorKind::PermissionDenied the same way.
+    #[cfg(unix)]
+    fn make_read_only(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn make_writable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_returns_state_storage_unavailable_when_create_dir_all_denied() {
+        let temp_dir = TempDir::new().unwrap();
+        make_read_only(temp_dir.path());
+        // Path with a missing subdirectory under a read-only parent — so
+        // create_dir_all is the call that will fail with PermissionDenied.
+        let path = temp_dir.path().join("subdir/state.json");
+
+        let result = super::write(
+            &TestStruct {
+                a: 1,
+                b: "hi".into(),
+            },
+            &path,
+        );
+
+        // Restore permissions so TempDir can clean up.
+        make_writable(temp_dir.path());
+
+        let err = result.expect_err("write should fail under read-only parent");
+        assert_eq!(
+            err.downcast_ref::<crate::updater::UpdateError>(),
+            Some(&crate::updater::UpdateError::StateStorageUnavailable),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_returns_state_storage_unavailable_when_file_create_denied() {
+        let temp_dir = TempDir::new().unwrap();
+        // Containing dir already exists (so create_dir_all is a no-op),
+        // but is read-only — File::create on the temp sibling is the call
+        // that will fail with PermissionDenied.
+        make_read_only(temp_dir.path());
+        let path = temp_dir.path().join("state.json");
+
+        let result = super::write(
+            &TestStruct {
+                a: 1,
+                b: "hi".into(),
+            },
+            &path,
+        );
+
+        make_writable(temp_dir.path());
+
+        let err = result.expect_err("write should fail under read-only dir");
+        assert_eq!(
+            err.downcast_ref::<crate::updater::UpdateError>(),
+            Some(&crate::updater::UpdateError::StateStorageUnavailable),
+        );
     }
 }

@@ -123,9 +123,15 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       // - SHOREBIRD_UPDATE_IN_PROGRESS: another update (typically the automatic
       //   updater thread) was already running; the caller did not start a new
       //   one. This is benign and must not surface as an exception.
+      // - SHOREBIRD_UPDATE_DEFERRED: the updater's state storage was
+      //   temporarily unwritable (on iOS, typically Data Protection on a
+      //   locked device blocking writes under Library/Application Support).
+      //   The next update attempt after the device is unlocked will
+      //   typically succeed. Benign, must not throw.
       if (status == SHOREBIRD_UPDATE_INSTALLED ||
           status == SHOREBIRD_NO_UPDATE ||
-          status == SHOREBIRD_UPDATE_IN_PROGRESS) {
+          status == SHOREBIRD_UPDATE_IN_PROGRESS ||
+          status == SHOREBIRD_UPDATE_DEFERRED) {
         return;
       }
 

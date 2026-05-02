@@ -49,6 +49,16 @@
 #define SHOREBIRD_UPDATE_IN_PROGRESS 4
 
 /**
+ * The update could not be performed right now because the updater's state
+ * storage directory is temporarily unwritable. On iOS this typically means
+ * the device is locked and Data Protection is blocking writes under
+ * `Library/Application Support/`. The next update attempt after the device
+ * is unlocked will typically succeed. This is a benign outcome, not an
+ * error.
+ */
+#define SHOREBIRD_UPDATE_DEFERRED 5
+
+/**
  * Struct containing configuration parameters for the updater.
  * Passed to all updater functions.
  * NOTE: If this struct is changed all language bindings must be updated.
