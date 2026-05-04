@@ -2901,19 +2901,20 @@ mod state_recovery_tests {
             Ok(())
         })?;
 
-        // Corrupt the patches_state.json file.
-        let patches_state_path = tmp_dir.path().join("patches_state.json");
+        // Corrupt the pointers.json file.
+        let pointers_path = tmp_dir.path().join("pointers.json");
         assert!(
-            patches_state_path.exists(),
-            "patches_state.json should exist before we corrupt it"
+            pointers_path.exists(),
+            "pointers.json should exist before we corrupt it"
         );
-        std::fs::write(&patches_state_path, "{{{{not json at all")?;
+        std::fs::write(&pointers_path, "{{{{not json at all")?;
 
         // Reinitialize — should recover gracefully.
         init_for_testing(&tmp_dir, None);
 
         with_mut_state(|state| {
-            // Corrupt state means we lose knowledge of the patch.
+            // Corrupt pointers means we lose knowledge of which patch
+            // to boot.
             assert!(
                 state.next_boot_patch().is_none(),
                 "Expected no next_boot_patch after state corruption"
@@ -2924,7 +2925,7 @@ mod state_recovery_tests {
         Ok(())
     }
 
-    /// When patches_state.json is deleted but patch artifacts remain on disk,
+    /// When pointers.json is deleted but patch artifacts remain on disk,
     /// the updater should not try to boot from orphaned artifacts.
     #[serial]
     #[test]
@@ -2936,15 +2937,15 @@ mod state_recovery_tests {
         report_launch_start()?;
         report_launch_success()?;
 
-        // Delete patches_state.json but leave artifacts.
-        let patches_state_path = tmp_dir.path().join("patches_state.json");
-        std::fs::remove_file(&patches_state_path)?;
+        // Delete pointers.json but leave per-patch artifacts.
+        let pointers_path = tmp_dir.path().join("pointers.json");
+        std::fs::remove_file(&pointers_path)?;
 
         // Reinitialize.
         init_for_testing(&tmp_dir, None);
 
         with_mut_state(|state| {
-            // Without state, we shouldn't boot from any patch.
+            // Without pointers, we shouldn't boot from any patch.
             assert!(state.next_boot_patch().is_none());
             assert!(state.last_successfully_booted_patch().is_none());
             Ok(())
@@ -3117,16 +3118,13 @@ mod state_recovery_tests {
         install_fake_patch(1)?;
         report_launch_start()?;
 
-        // Manually clear boot_started_at from the state file to simulate
-        // an old state format that doesn't have this field.
-        let state_path = tmp_dir.path().join("patches_state.json");
-        let state_json = std::fs::read_to_string(&state_path)?;
-        let mut state_value: serde_json::Value = serde_json::from_str(&state_json)?;
-        state_value
-            .as_object_mut()
-            .unwrap()
-            .remove("boot_started_at");
-        std::fs::write(&state_path, serde_json::to_string(&state_value)?)?;
+        // Manually clear boot_started_at from the pointers file to
+        // simulate an old state format that doesn't have this field.
+        let pointers_path = tmp_dir.path().join("pointers.json");
+        let json = std::fs::read_to_string(&pointers_path)?;
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        value.as_object_mut().unwrap().remove("boot_started_at");
+        std::fs::write(&pointers_path, serde_json::to_string(&value)?)?;
 
         // Reinitialize — triggers crash recovery.
         init_for_testing(&tmp_dir, None);
@@ -3193,13 +3191,18 @@ mod state_recovery_tests {
 
         let original_client_id = with_state(|state| Ok(state.client_id()))?;
 
-        // Corrupt patches_state.json only.
-        let patches_state_path = tmp_dir.path().join("patches_state.json");
+        // Install a patch so pointers.json gets written (it's lazy
+        // otherwise — load_or_default doesn't write a file until a
+        // pointer is set).
+        install_fake_patch(1)?;
+
+        // Corrupt pointers.json only.
+        let pointers_path = tmp_dir.path().join("pointers.json");
         assert!(
-            patches_state_path.exists(),
-            "patches_state.json should exist before we corrupt it"
+            pointers_path.exists(),
+            "pointers.json should exist before we corrupt it"
         );
-        std::fs::write(&patches_state_path, "corrupt")?;
+        std::fs::write(&pointers_path, "corrupt")?;
 
         // Reinitialize — state.json is fine, so client_id should survive.
         init_for_testing(&tmp_dir, None);

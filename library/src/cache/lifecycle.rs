@@ -115,6 +115,7 @@ pub struct ReleasePointers {
 
 /// Per-release patch lifecycle and storage. Owns `{root}/patches/` and
 /// `{root}/pointers.json`.
+#[derive(Debug)]
 pub struct PatchLifecycle {
     root: PathBuf,
     pointers: ReleasePointers,
@@ -448,36 +449,32 @@ impl PatchLifecycle {
         Ok(())
     }
 
-    /// Records a boot failure. Marks the in-flight patch
-    /// `Bad{BootCrash}` and recomputes `next_boot_patch` from the
-    /// remaining state. Returns the patch number that was marked bad.
-    pub fn record_boot_failure(&mut self) -> Result<usize> {
-        let n = self
-            .pointers
-            .currently_booting_patch
-            .context("record_boot_failure without currently_booting_patch")?;
+    /// Records that patch `n` failed to boot. Clears the boot
+    /// breadcrumb, marks the patch `Bad{BootCrash}`, and recomputes
+    /// `next_boot_patch`.
+    ///
+    /// The patch number is passed in (rather than read from
+    /// `currently_booting_patch`) to match the prior PatchManager API
+    /// shape — most call sites already have the number in hand. The
+    /// breadcrumb is cleared regardless of whether it matched.
+    pub fn record_boot_failure(&mut self, n: usize) -> Result<()> {
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
         self.save_pointers()?;
         self.mark_bad(n, BadReason::BootCrash)?;
-        self.recompute_next_boot()?;
-        Ok(n)
+        self.recompute_next_boot()
     }
 
     /// Called at init. If `currently_booting_patch` is still set from a
     /// prior process, that boot crashed without recording success or
     /// failure — transition the patch to `Bad{BootCrash}` and recompute
-    /// `next_boot_patch`. Returns the patch number that was recovered, if
-    /// any.
+    /// `next_boot_patch`. Returns the patch number that was recovered,
+    /// if any.
     pub fn detect_boot_crash_on_init(&mut self) -> Result<Option<usize>> {
         let Some(n) = self.pointers.currently_booting_patch else {
             return Ok(None);
         };
-        self.pointers.currently_booting_patch = None;
-        self.pointers.boot_started_at = None;
-        self.save_pointers()?;
-        self.mark_bad(n, BadReason::BootCrash)?;
-        self.recompute_next_boot()?;
+        self.record_boot_failure(n)?;
         Ok(Some(n))
     }
 
@@ -502,15 +499,26 @@ impl PatchLifecycle {
         Ok(())
     }
 
-    /// Sets `next_boot_patch` to the best Installed candidate. Today the
-    /// only fallback target is `last_booted_patch` if that patch is
-    /// currently `Installed`; otherwise we boot the base release.
+    /// Ensures `next_boot_patch` points at a usable Installed patch.
+    /// If it already does, no-op. Otherwise (None, Bad, or Unknown) it
+    /// falls back to `last_booted_patch` if that patch is currently
+    /// Installed; otherwise None (boot the base release).
+    ///
+    /// Crucially, this does not stomp a valid `next_boot_patch` —
+    /// otherwise a check that processes server rollbacks would clobber
+    /// a freshly installed newer patch by promoting the older
+    /// `last_booted_patch` back into `next_boot_patch`.
     ///
     /// We deliberately don't scan `patches/` for arbitrary Installed
     /// patches — within a release there are at most a couple of patches
     /// active at once, and the last successfully booted patch is the
     /// only one we have evidence works on this device.
     pub fn recompute_next_boot(&mut self) -> Result<()> {
+        if let Some(n) = self.pointers.next_boot_patch {
+            if matches!(self.read_state(n), Some(PatchState::Installed { .. })) {
+                return Ok(());
+            }
+        }
         let new_target = self
             .pointers
             .last_booted_patch
@@ -1182,9 +1190,7 @@ mod tests {
         lifecycle.save_pointers().unwrap();
 
         lifecycle.record_boot_start(2).unwrap();
-        let bad_n = lifecycle.record_boot_failure().unwrap();
-
-        assert_eq!(bad_n, 2);
+        lifecycle.record_boot_failure(2).unwrap();
         assert!(matches!(
             lifecycle.read_state(2),
             Some(PatchState::Bad { .. })
@@ -1205,7 +1211,7 @@ mod tests {
         lifecycle.save_pointers().unwrap();
 
         lifecycle.record_boot_start(2).unwrap();
-        lifecycle.record_boot_failure().unwrap();
+        lifecycle.record_boot_failure(2).unwrap();
 
         // Both candidates are Bad; no fallback target → boot base.
         assert_eq!(lifecycle.pointers().next_boot_patch, None);
