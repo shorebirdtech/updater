@@ -14,7 +14,9 @@ use crate::config::{set_config, with_config, UpdateConfig};
 use crate::download_state::{self, DownloadState};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
-use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest};
+use crate::network::{
+    download_to_path, patches_check_url, DownloadResult, NetworkHooks, PatchCheckRequest,
+};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -431,8 +433,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     let download_dir = PathBuf::from(&config.download_dir);
     let download_path = download_dir.join(patch.number.to_string());
 
-    // Compute resume offset (checks sidecar for matching URL/patch/hash).
-    let resume_from = compute_resume_offset(
+    let start_state = determine_download_start_state(
         &download_path,
         &patch.download_url,
         patch.number,
@@ -449,37 +450,89 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // partial download for a patch that's since been replaced).
     clean_download_dir(&download_dir, patch.number);
 
-    // Write sidecar *before* downloading so we can resume on crash.
-    let dl_state = DownloadState {
-        url: patch.download_url.clone(),
-        patch_number: patch.number,
-        expected_size: None,
-        expected_hash: patch.hash.clone(),
+    let dl_result = match start_state {
+        DownloadStartState::Complete(size) => {
+            // Bytes from a prior attempt are already on disk and the sidecar
+            // says they're the expected size. Skip the network request and
+            // let the install path validate them — re-downloading would just
+            // waste bandwidth in cases like the app being killed between the
+            // download finishing and install starting.
+            shorebird_info!(
+                "Prior download already complete ({} bytes); skipping fetch.",
+                size
+            );
+            DownloadResult {
+                total_bytes: size,
+                content_length: Some(size),
+            }
+        }
+        DownloadStartState::Fresh | DownloadStartState::Resume(_) => {
+            // Write sidecar *before* downloading so we can resume on crash.
+            let dl_state = DownloadState {
+                url: patch.download_url.clone(),
+                patch_number: patch.number,
+                expected_size: None,
+                expected_hash: patch.hash.clone(),
+            };
+            download_state::write_download_state(&download_path, &dl_state)?;
+
+            let resume_from = match start_state {
+                DownloadStartState::Resume(offset) => {
+                    shorebird_info!("Resuming download from byte {}", offset);
+                    offset
+                }
+                _ => 0,
+            };
+
+            // Consider supporting allowing the system to download for us (e.g. iOS).
+            let dl_result = download_to_path(
+                &config.network_hooks,
+                &patch.download_url,
+                &download_path,
+                resume_from,
+            )?;
+
+            // Update sidecar with the now-known total size. content_length is
+            // already the total file size (from Content-Range for 206, or
+            // Content-Length for 200).
+            let dl_state = DownloadState {
+                expected_size: dl_result.content_length,
+                ..dl_state
+            };
+            download_state::write_download_state(&download_path, &dl_state)?;
+
+            dl_result
+        }
     };
-    download_state::write_download_state(&download_path, &dl_state)?;
 
-    // Consider supporting allowing the system to download for us (e.g. iOS).
-    let dl_result = download_to_path(
-        &config.network_hooks,
-        &patch.download_url,
-        &download_path,
-        resume_from,
-    )?;
+    let output_path = download_dir.join(format!("{}.full", patch.number));
+    // Once the download bytes are on disk, they will either be consumed
+    // (install success) or rejected (any failure). Either way the artifacts
+    // have served their purpose — clean them up unconditionally so a stuck
+    // partial file can't make a future Range request go past the end of the
+    // file and yield HTTP 416.
+    let result =
+        install_downloaded_patch(&config, &patch, &dl_result, &download_path, &output_path);
+    cleanup_download_artifacts(&download_path);
+    result
+}
 
-    // Update sidecar with the now-known total size.
-    // content_length is already the total file size (from Content-Range for
-    // 206, or Content-Length for 200).
-    let dl_state = DownloadState {
-        expected_size: dl_result.content_length,
-        ..dl_state
-    };
-    download_state::write_download_state(&download_path, &dl_state)?;
-
+/// Consumes the bytes at `download_path`: validates the size, inflates them,
+/// hash-checks the result, and installs the patch. Returns `UpdateInstalled`
+/// on success.
+///
+/// Caller is responsible for cleaning up `download_path` artifacts after this
+/// returns, regardless of outcome.
+fn install_downloaded_patch(
+    config: &UpdateConfig,
+    patch: &crate::network::Patch,
+    dl_result: &DownloadResult,
+    download_path: &Path,
+    output_path: &Path,
+) -> anyhow::Result<UpdateStatus> {
     // Validate download size if Content-Length was provided.
-    if let Some(expected) = dl_state.expected_size {
+    if let Some(expected) = dl_result.content_length {
         if dl_result.total_bytes != expected {
-            // Corrupted — clean up so next attempt starts fresh.
-            cleanup_download_artifacts(&download_path);
             bail!(
                 "Download size mismatch: expected {} bytes, got {}",
                 expected,
@@ -488,12 +541,11 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         }
     }
 
-    let output_path = download_dir.join(format!("{}.full", patch.number));
-    let patch_base_rs = patch_base(&config)?;
-    inflate(&download_path, patch_base_rs, &output_path)?;
+    let patch_base_rs = patch_base(config)?;
+    inflate(download_path, patch_base_rs, output_path)?;
 
     // Check the hash before moving into place.
-    check_hash(&output_path, &patch.hash).with_context(|| {
+    check_hash(output_path, &patch.hash).with_context(|| {
         format!(
             "This app reports version {}, but the binary is different from \
         the version {} that was submitted to Shorebird.",
@@ -506,7 +558,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // two threads at once. We could give UpdateState its own lock instead.
     with_mut_state(|state| {
         let patch_info = PatchInfo {
-            path: output_path,
+            path: output_path.to_path_buf(),
             number: patch.number,
         };
         // Move/state update should be "atomic" (it isn't today).
@@ -516,15 +568,14 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
             patch.number
         );
 
-        // Clean up download artifacts now that installation succeeded.
-        cleanup_download_artifacts(&download_path);
-
         let client_id = state.client_id();
+        let config = config.clone();
+        let patch_number = patch.number;
         std::thread::spawn(move || {
             let event = PatchEvent::new(
                 &config,
                 EventType::PatchDownload,
-                patch.number,
+                patch_number,
                 client_id,
                 None,
             );
@@ -573,39 +624,61 @@ fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckRe
     Ok(ShouldInstallPatchCheckResult::PatchOkToInstall)
 }
 
-/// Determines how many bytes of a prior partial download we can resume from.
-/// Returns 0 if we should start fresh.
-fn compute_resume_offset(
+/// What the prior attempt left on disk, and what to do about it.
+#[derive(Debug, PartialEq)]
+enum DownloadStartState {
+    /// No usable prior artifacts — request the full file.
+    Fresh,
+    /// Partial file from an interrupted prior attempt. Send a Range header
+    /// from this byte offset to ask the server for the remainder.
+    Resume(u64),
+    /// Prior attempt finished downloading but didn't finish installing
+    /// (e.g. the process was killed between download and inflate, or
+    /// inflate/install failed). Skip the network request and let the
+    /// install path validate the bytes already on disk.
+    Complete(u64),
+}
+
+/// Inspects the sidecar and partial file to decide how the next download
+/// attempt should begin. Read-only — does not modify on-disk state.
+fn determine_download_start_state(
     download_path: &Path,
     url: &str,
     patch_number: usize,
     expected_hash: &str,
-) -> u64 {
-    // Check for a sidecar file describing a prior download attempt.
+) -> DownloadStartState {
     let prior_state = match download_state::read_download_state(download_path) {
         Ok(Some(state)) => state,
-        _ => return 0,
+        _ => return DownloadStartState::Fresh,
     };
 
-    // Only resume if URL, patch number, and hash all match. The hash check
-    // catches the case where a patch is deleted and re-added with the same
-    // number — the URL might stay the same but the content differs.
+    // The hash check catches the case where a patch is deleted and re-added
+    // with the same number — the URL might stay the same but the content
+    // differs.
     if prior_state.url != url
         || prior_state.patch_number != patch_number
         || prior_state.expected_hash != expected_hash
     {
         shorebird_info!("Download state mismatch, starting fresh.");
-        return 0;
+        return DownloadStartState::Fresh;
     }
 
-    // Check that the partial file exists and has some content.
-    match std::fs::metadata(download_path) {
-        Ok(meta) if meta.len() > 0 => {
-            shorebird_info!("Resuming download from byte {}", meta.len());
-            meta.len()
+    let file_size = match std::fs::metadata(download_path) {
+        Ok(meta) if meta.len() > 0 => meta.len(),
+        _ => return DownloadStartState::Fresh,
+    };
+
+    // If the prior attempt's bytes look complete, skip the network request.
+    // The install path will validate them; if they're bad it will fail and
+    // the unconditional cleanup at the end of `update_internal` will wipe
+    // them so the next attempt re-downloads.
+    if let Some(expected) = prior_state.expected_size {
+        if file_size >= expected {
+            return DownloadStartState::Complete(file_size);
         }
-        _ => 0,
     }
+
+    DownloadStartState::Resume(file_size)
 }
 
 /// Removes everything in `download_dir` except files belonging to
@@ -1729,55 +1802,65 @@ patch_verification: bogus_mode
         .unwrap();
     }
 
-    #[test]
-    fn compute_resume_offset_no_sidecar() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+    use super::DownloadStartState;
 
-        // No sidecar, no partial file → fresh download.
-        assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
-            0
-        );
-    }
-
-    #[test]
-    fn compute_resume_offset_matching_sidecar() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        // Write partial file.
-        fs::write(&download_path, vec![0u8; 500]).unwrap();
-
-        // Write matching sidecar.
+    fn write_state(download_path: &Path, expected_size: Option<u64>) {
         crate::download_state::write_download_state(
-            &download_path,
+            download_path,
             &crate::download_state::DownloadState {
                 url: "http://example.com/patch".to_string(),
                 patch_number: 1,
-                expected_size: Some(1000),
+                expected_size,
                 expected_hash: "abc123".to_string(),
             },
         )
         .unwrap();
+    }
 
-        // Should resume from 500 bytes.
+    #[test]
+    fn download_start_state_no_sidecar() {
+        let tmp = TempDir::new().unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
-            500
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                1,
+                "abc123"
+            ),
+            DownloadStartState::Fresh
         );
     }
 
     #[test]
-    fn compute_resume_offset_mismatched_url() {
+    fn download_start_state_matching_sidecar_resumes() {
         let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
         fs::write(&download_path, vec![0u8; 500]).unwrap();
+        write_state(&download_path, Some(1000));
 
+        assert_eq!(
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                1,
+                "abc123"
+            ),
+            DownloadStartState::Resume(500)
+        );
+    }
+
+    #[test]
+    fn download_start_state_mismatched_url_starts_fresh() {
+        let tmp = TempDir::new().unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, vec![0u8; 500]).unwrap();
         crate::download_state::write_download_state(
             &download_path,
             &crate::download_state::DownloadState {
@@ -1789,26 +1872,24 @@ patch_verification: bogus_mode
         )
         .unwrap();
 
-        // Different URL → fresh download.
         assert_eq!(
-            super::compute_resume_offset(
+            super::determine_download_start_state(
                 &download_path,
                 "http://example.com/new-patch",
                 1,
                 "abc123"
             ),
-            0
+            DownloadStartState::Fresh
         );
     }
 
     #[test]
-    fn compute_resume_offset_mismatched_hash() {
+    fn download_start_state_mismatched_hash_starts_fresh() {
         let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
         fs::write(&download_path, vec![0u8; 500]).unwrap();
-
         crate::download_state::write_download_state(
             &download_path,
             &crate::download_state::DownloadState {
@@ -1820,83 +1901,105 @@ patch_verification: bogus_mode
         )
         .unwrap();
 
-        // Same URL but different hash (patch was re-created) → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "hash_new"),
-            0
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                1,
+                "hash_new"
+            ),
+            DownloadStartState::Fresh
         );
     }
 
     #[test]
-    fn compute_resume_offset_mismatched_patch_number() {
+    fn download_start_state_mismatched_patch_number_starts_fresh() {
         let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
         fs::write(&download_path, vec![0u8; 500]).unwrap();
+        write_state(&download_path, None);
 
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
-                url: "http://example.com/patch".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "abc123".to_string(),
-            },
-        )
-        .unwrap();
-
-        // Same URL but different patch number → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 2, "abc123"),
-            0
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                2,
+                "abc123"
+            ),
+            DownloadStartState::Fresh
         );
     }
 
     #[test]
-    fn compute_resume_offset_corrupt_sidecar() {
+    fn download_start_state_corrupt_sidecar_starts_fresh() {
         let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
         fs::write(&download_path, vec![0u8; 500]).unwrap();
-
-        // Write garbage to the sidecar file.
         let sidecar = crate::download_state::sidecar_path(&download_path);
         fs::write(&sidecar, "not valid json").unwrap();
 
-        // Corrupt sidecar → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
-            0
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                1,
+                "abc123"
+            ),
+            DownloadStartState::Fresh
         );
     }
 
     #[test]
-    fn compute_resume_offset_empty_file() {
+    fn download_start_state_empty_file_starts_fresh() {
         let tmp = TempDir::new().unwrap();
         let download_path = tmp.path().join("downloads/1");
         fs::create_dir_all(download_path.parent().unwrap()).unwrap();
 
-        // Write empty file.
         fs::write(&download_path, []).unwrap();
+        write_state(&download_path, None);
 
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
-                url: "http://example.com/patch".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "abc123".to_string(),
-            },
-        )
-        .unwrap();
-
-        // Empty file → fresh download.
         assert_eq!(
-            super::compute_resume_offset(&download_path, "http://example.com/patch", 1, "abc123"),
-            0
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                1,
+                "abc123"
+            ),
+            DownloadStartState::Fresh
         );
+    }
+
+    #[test]
+    fn download_start_state_full_file_reports_complete() {
+        // Reproduces the customer's stuck state: a prior attempt finished
+        // downloading (file size == expected_size) but install failed (or the
+        // app was killed before install). The function should report Complete
+        // so the caller skips the network request and validates the bytes.
+        // It must NOT delete anything — that's the caller's job after install.
+        let tmp = TempDir::new().unwrap();
+        let download_path = tmp.path().join("downloads/1");
+        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
+
+        fs::write(&download_path, vec![0u8; 1000]).unwrap();
+        write_state(&download_path, Some(1000));
+
+        assert_eq!(
+            super::determine_download_start_state(
+                &download_path,
+                "http://example.com/patch",
+                1,
+                "abc123"
+            ),
+            DownloadStartState::Complete(1000)
+        );
+
+        // determine_download_start_state must be read-only.
+        assert!(download_path.exists());
+        assert!(crate::download_state::sidecar_path(&download_path).exists());
     }
 
     #[test]
@@ -3618,6 +3721,106 @@ mod resume_edge_case_tests {
                 content_length: Some(PATCH_BYTES.len() as u64),
             })
         });
+
+        let result = crate::update(None)?;
+        assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
+
+        Ok(())
+    }
+
+    /// When the downloaded bytes are unusable (e.g. non-zstd garbage that
+    /// fails inflate), the next attempt must not try to resume from them —
+    /// otherwise we'd hit the same failure on every cycle. Verify the
+    /// download artifacts are cleaned up after a post-download failure.
+    #[serial]
+    #[test]
+    fn inflate_failure_cleans_up_download_artifacts() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        setup_hooks_with_download(|_url, dest: &Path, _resume_from: u64| {
+            // Write garbage that will fail zstd magic check during inflate.
+            fs::write(dest, b"this is not zstd data and never will be xx")?;
+            Ok(DownloadResult {
+                total_bytes: 42,
+                content_length: Some(42),
+            })
+        });
+
+        let result = crate::update(None);
+        assert!(result.is_err());
+
+        let download_path = tmp_dir.path().join("downloads/1");
+        let sidecar_path = crate::download_state::sidecar_path(&download_path);
+        assert!(
+            !download_path.exists(),
+            "download file should be cleaned up after inflate failure"
+        );
+        assert!(
+            !sidecar_path.exists(),
+            "sidecar should be cleaned up after inflate failure"
+        );
+
+        Ok(())
+    }
+
+    /// Covers two scenarios that look identical on disk but used to manifest
+    /// as the customer-reported 416 loop:
+    ///
+    /// 1. The app was killed between the download finishing and install
+    ///    starting. The bytes are valid; we just need to install them.
+    /// 2. A post-download step (inflate / hash / install) failed previously.
+    ///
+    /// Both leave the sidecar with `expected_size == file_size`. Resuming
+    /// from that offset would send `Range: bytes=N-` for an N-byte file and
+    /// get HTTP 416. Verify we skip the network request entirely and let the
+    /// install path validate the existing bytes.
+    #[serial]
+    #[test]
+    fn full_size_partial_skips_download_and_installs() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        let base = "hello world";
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
+
+        // Simulate the stuck state: full-size partial file plus matching sidecar.
+        let download_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&download_dir)?;
+        let download_path = download_dir.join("1");
+        fs::write(&download_path, PATCH_BYTES)?;
+        crate::download_state::write_download_state(
+            &download_path,
+            &crate::download_state::DownloadState {
+                url: "http://example.com/patch/1".to_string(),
+                patch_number: 1,
+                expected_size: Some(PATCH_BYTES.len() as u64),
+                expected_hash: PATCH_HASH.to_string(),
+            },
+        )?;
+
+        // The download hook must NOT be called — bytes are already on disk.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: PATCH_HASH.to_string(),
+                        download_url: "http://example.com/patch/1".to_string(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            crate::network::UNEXPECTED_DOWNLOAD,
+            |_url, _event| Ok(()),
+        );
 
         let result = crate::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
