@@ -511,8 +511,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     // have served their purpose — clean them up unconditionally so a stuck
     // partial file can't make a future Range request go past the end of the
     // file and yield HTTP 416.
-    let result =
-        install_downloaded_patch(&config, &patch, &dl_result, &download_path, &output_path);
+    let result = install_downloaded_patch(&config, &patch, &dl_result, &download_path, output_path);
     cleanup_download_artifacts(&download_path);
     result
 }
@@ -528,7 +527,7 @@ fn install_downloaded_patch(
     patch: &crate::network::Patch,
     dl_result: &DownloadResult,
     download_path: &Path,
-    output_path: &Path,
+    output_path: PathBuf,
 ) -> anyhow::Result<UpdateStatus> {
     // Validate download size if Content-Length was provided.
     if let Some(expected) = dl_result.content_length {
@@ -542,10 +541,10 @@ fn install_downloaded_patch(
     }
 
     let patch_base_rs = patch_base(config)?;
-    inflate(download_path, patch_base_rs, output_path)?;
+    inflate(download_path, patch_base_rs, &output_path)?;
 
     // Check the hash before moving into place.
-    check_hash(output_path, &patch.hash).with_context(|| {
+    check_hash(&output_path, &patch.hash).with_context(|| {
         format!(
             "This app reports version {}, but the binary is different from \
         the version {} that was submitted to Shorebird.",
@@ -558,7 +557,7 @@ fn install_downloaded_patch(
     // two threads at once. We could give UpdateState its own lock instead.
     with_mut_state(|state| {
         let patch_info = PatchInfo {
-            path: output_path.to_path_buf(),
+            path: output_path,
             number: patch.number,
         };
         // Move/state update should be "atomic" (it isn't today).
