@@ -492,11 +492,24 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
                 resume_from,
             )?;
 
-            // Update sidecar with the now-known total size. content_length is
-            // already the total file size (from Content-Range for 206, or
-            // Content-Length for 200).
+            // Record the actual on-disk size, not the server's Content-Length.
+            // For chunked transfer encoding the server doesn't send
+            // Content-Length, so dl_result.content_length would be None — and
+            // a subsequent crash-before-install attempt would then see
+            // expected_size: None plus a full-size file, fall through to
+            // Resume(file_size), and re-create the same HTTP 416 this PR
+            // fixes. Using total_bytes works for both chunked and
+            // Content-Length responses (they're equal in the latter case).
+            //
+            // KNOWN GAP: if the process dies between download_to_path
+            // returning above and this sidecar write succeeding, expected_size
+            // stays None from the pre-download write and we hit the 416 loop
+            // anyway. The window is microseconds; closing it requires
+            // restructuring (e.g. download_to_path writing the sidecar
+            // itself, or a single atomic per-patch state document) — tracked
+            // in shorebirdtech/shorebird#3737.
             let dl_state = DownloadState {
-                expected_size: dl_result.content_length,
+                expected_size: Some(dl_result.total_bytes),
                 ..dl_state
             };
             download_state::write_download_state(&download_path, &dl_state)?;
@@ -715,8 +728,15 @@ fn clean_download_dir(download_dir: &Path, current_patch_number: usize) {
     }
 }
 
-/// Removes the compressed download file and its sidecar after a successful
-/// install.
+/// Removes the compressed download file and its sidecar.
+///
+/// KNOWN GAP: delete errors are logged but not propagated. If a delete
+/// silently fails (e.g. transient filesystem error), the stale artifacts
+/// persist into the next cycle and could re-create the same 416 loop this
+/// PR fixes — `determine_download_start_state` would still see a sidecar
+/// with `expected_size` matching the file and try to resume against a
+/// resource that's no longer the right one. Disk delete failures are rare
+/// in practice; the proper fix lives in shorebirdtech/shorebird#3737.
 fn cleanup_download_artifacts(download_path: &Path) {
     if let Err(e) = download_state::delete_download_state(download_path) {
         shorebird_error!("Failed to delete download sidecar: {:?}", e);
