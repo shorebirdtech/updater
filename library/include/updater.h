@@ -130,7 +130,9 @@ SHOREBIRD_EXPORT bool shorebird_should_auto_update(void);
 
 /**
  * The currently running patch number, or 0 if the release has not been
- * patched.
+ * patched. The internal name for this concept is `running_patch`; the
+ * FFI symbol keeps the historical `current_boot_patch_number` spelling
+ * because Flutter Engine links against it.
  */
 SHOREBIRD_EXPORT uintptr_t shorebird_current_boot_patch_number(void);
 

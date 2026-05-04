@@ -219,6 +219,11 @@ impl UpdaterState {
         self.patch_manager.currently_booting_patch()
     }
 
+    /// Unix timestamp (seconds) when the current boot attempt started, if known.
+    pub fn boot_started_at(&self) -> Option<u64> {
+        self.patch_manager.boot_started_at()
+    }
+
     /// The last patch that was successfully booted (e.g., for which we record_boot_success was
     /// called).
     /// Will be None if:
@@ -228,11 +233,19 @@ impl UpdaterState {
         self.patch_manager.last_successfully_booted_patch()
     }
 
-    /// This is the current patch that is running.
-    pub fn current_boot_patch(&self) -> Option<PatchInfo> {
-        self.patch_manager
-            .currently_booting_patch()
-            .or(self.patch_manager.last_successfully_booted_patch())
+    /// The patch this process is using, set at `report_launch_start` and
+    /// kept until the next launch. `None` means the process is running the
+    /// base release. Survives server-driven rollbacks of that patch — the
+    /// running process is still using it.
+    pub fn running_patch(&self) -> Option<PatchInfo> {
+        self.patch_manager.running_patch()
+    }
+
+    /// Records which patch this process is using. Called from
+    /// `report_launch_start` with `Some(n)` when launching a patch, or
+    /// `None` when launching the base release.
+    pub fn set_running_patch(&mut self, patch_number: Option<usize>) {
+        self.patch_manager.set_running_patch(patch_number);
     }
 
     /// This is the patch that will be used for the next boot.
@@ -479,37 +492,6 @@ mod tests {
             .return_const(Some(patch.clone()));
         let state = test_state(&tmp_dir, mock_manage_patches);
         assert_eq!(state.last_successfully_booted_patch(), Some(patch));
-    }
-
-    #[test]
-    fn current_boot_patch_returns_currently_booting_patch_if_present() {
-        let tmp_dir = TempDir::new().unwrap();
-        let patch1 = fake_patch(&tmp_dir, 1);
-        let patch2 = fake_patch(&tmp_dir, 2);
-        let mut mock_manage_patches = MockManagePatches::new();
-        mock_manage_patches
-            .expect_last_successfully_booted_patch()
-            .return_const(Some(patch1.clone()));
-        mock_manage_patches
-            .expect_currently_booting_patch()
-            .return_const(Some(patch2.clone()));
-        let state = test_state(&tmp_dir, mock_manage_patches);
-        assert_eq!(state.current_boot_patch(), Some(patch2));
-    }
-
-    #[test]
-    fn current_boot_patch_returns_last_successfully_booted_patch_if_no_patch_is_booting() {
-        let tmp_dir = TempDir::new().unwrap();
-        let patch = fake_patch(&tmp_dir, 1);
-        let mut mock_manage_patches = MockManagePatches::new();
-        mock_manage_patches
-            .expect_last_successfully_booted_patch()
-            .return_const(Some(patch.clone()));
-        mock_manage_patches
-            .expect_currently_booting_patch()
-            .return_const(None);
-        let state = test_state(&tmp_dir, mock_manage_patches);
-        assert_eq!(state.current_boot_patch(), Some(patch));
     }
 
     #[test]

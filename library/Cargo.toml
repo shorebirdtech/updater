@@ -13,7 +13,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 # Used for error handling for now.
-anyhow = { version = "1.0.69", features = ["backtrace"] }
+anyhow = "1.0.69"
 base64 = "0.22.0"
 # For inflating compressed patch files.
 bipatch = "1.0.0"
@@ -50,11 +50,11 @@ zip = { version = "8.5.1", default-features = false, features = ["deflate"] }
 # For logging to Android logcat.
 android_logger = "0.15.0"
 # Send panics to log (instead of stderr), thus logcat on Android.
-log-panics = { version = "2", features = ["with-backtrace"] }
+log-panics = "2"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 # Send panics to syslog (instead of stderr).
-log-panics = { version = "2", features = ["with-backtrace"] }
+log-panics = "2"
 # Support for logging on iOS (https://developer.apple.com/documentation/oslog)
 oslog = "0.2.0"
 

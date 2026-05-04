@@ -224,19 +224,29 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
+            let boot_time_info = match state.boot_started_at() {
+                Some(ts) => format!("boot_started_at={ts}"),
+                None => "boot_started_at=unknown".to_string(),
+            };
+
+            let file_info = match std::fs::metadata(&patch.path) {
+                Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
+                Err(_) => "file_ok=false,file_missing".to_string(),
+            };
+
+            let now = crate::time::unix_timestamp();
+            let message = format!(
+                "crash_recovery: patch {} failed to boot (detected_at={now},{boot_time_info},{file_info})",
+                patch.number
+            );
+
             state.record_boot_failure_for_patch(patch.number)?;
             state.queue_event(PatchEvent::new(
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
                 state.client_id(),
-                Some(
-                    format!(
-                        "Patch {} was marked currently_booting in init",
-                        patch.number
-                    )
-                    .as_ref(),
-                ),
+                Some(&message),
             ))?;
         }
 
@@ -801,26 +811,28 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_mut_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch that was last successfully booted. If we're booting a patch for the first time, this
-/// will be the previous patch (or None, if there was no previous patch) until the boot is
-/// reported as successful.
-pub fn current_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_state(|state| Ok(state.current_boot_patch()))
+/// The patch this process is using, set at `report_launch_start` and
+/// surfaced over FFI as `shorebird_current_boot_patch_number`. `None`
+/// means the process is running the base release. Survives server-driven
+/// rollbacks of the running patch — the process is still using it.
+pub fn running_patch() -> anyhow::Result<Option<PatchInfo>> {
+    with_state(|state| Ok(state.running_patch()))
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
-    // We previously set the "current" patch the value of the "next" patch, but no longer
-    // do so because the semantics have changed:
-    //   current is now "last successfully booted patch"
-    //   next is now "patch to boot next"
     shorebird_info!("Reporting launch start.");
 
     with_mut_state(|state| {
-        if let Some(next_boot_patch) = state.next_boot_patch() {
-            state.record_boot_start_for_patch(next_boot_patch.number)
-        } else {
-            Ok(())
+        let next_boot_patch = state.next_boot_patch();
+        // Capture what this run is using. None means we're booting the base
+        // release. Backed by a session-scoped global, not by PatchesState
+        // on disk, so this is in-memory only — the record_boot_start_for_patch
+        // call below is the only disk write on this path.
+        state.set_running_patch(next_boot_patch.as_ref().map(|p| p.number));
+        if let Some(next_boot_patch) = next_boot_patch {
+            state.record_boot_start_for_patch(next_boot_patch.number)?;
         }
+        Ok(())
     })
 }
 
@@ -847,18 +859,13 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
         let client_id = state.client_id();
+        let message = format!("engine_report: patch {} failed to launch", patch.number);
         let event = PatchEvent::new(
             config,
             EventType::PatchInstallFailure,
             patch.number,
             client_id,
-            Some(
-                format!(
-                    "Install failure reported from engine for patch {}",
-                    patch.number
-                )
-                .as_ref(),
-            ),
+            Some(&message),
         );
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
@@ -893,13 +900,13 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
         // Check whether last_successfully_booted_patch has changed. If so, we should report a
         // PatchInstallSuccess event.
-        if let (Some(previous_boot_patch), Some(current_boot_patch)) = (
+        if let (Some(previous_boot_patch), Some(latest_boot_patch)) = (
             maybe_previous_boot_patch,
             state.last_successfully_booted_patch(),
         ) {
             // If we had previously booted from a patch and it has the same number as the
             // patch we just booted from, then we shouldn't report a patch install.
-            if previous_boot_patch.number == current_boot_patch.number {
+            if previous_boot_patch.number == latest_boot_patch.number {
                 return Ok(());
             }
         }
@@ -1701,7 +1708,7 @@ patch_verification: bogus_mode
                 platform: current_platform().to_string(),
                 release_version: config.release_version.clone(),
                 timestamp: time::unix_timestamp(),
-                message: Some("Install failure reported from engine for patch 1".to_string()),
+                message: Some("engine_report: patch 1 failed to launch".to_string()),
             };
             // Queue 5 events.
             assert!(state.queue_event(fail_event.clone()).is_ok());
@@ -2922,6 +2929,94 @@ mod state_recovery_tests {
                 crate::events::EventType::PatchInstallFailure
             );
             assert_eq!(events[0].patch_number, 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.starts_with("crash_recovery: patch 1 failed to boot"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("detected_at="),
+                "message should include detection time: {message}"
+            );
+            assert!(
+                message.contains("boot_started_at="),
+                "message should include boot start time: {message}"
+            );
+            assert!(
+                message.contains("file_ok="),
+                "message should include file status: {message}"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Crash recovery when the patch file was deleted before recovery runs.
+    /// The message should report file_ok=false,file_missing.
+    #[serial]
+    #[test]
+    fn crash_recovery_with_missing_file() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+
+        // Delete the patch artifact to simulate file going missing.
+        let patches_dir = tmp_dir.path().join("patches");
+        std::fs::remove_dir_all(&patches_dir)?;
+
+        // Reinitialize — triggers crash recovery.
+        init_for_testing(&tmp_dir, None);
+
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.contains("file_ok=false,file_missing"),
+                "expected file_missing in message: {message}"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// Crash recovery when boot_started_at is not set (old state file format).
+    /// The message should report elapsed_secs=unknown.
+    #[serial]
+    #[test]
+    fn crash_recovery_without_boot_timestamp() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+
+        // Manually clear boot_started_at from the state file to simulate
+        // an old state format that doesn't have this field.
+        let state_path = tmp_dir.path().join("patches_state.json");
+        let state_json = std::fs::read_to_string(&state_path)?;
+        let mut state_value: serde_json::Value = serde_json::from_str(&state_json)?;
+        state_value
+            .as_object_mut()
+            .unwrap()
+            .remove("boot_started_at");
+        std::fs::write(&state_path, serde_json::to_string(&state_value)?)?;
+
+        // Reinitialize — triggers crash recovery.
+        init_for_testing(&tmp_dir, None);
+
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.contains("boot_started_at=unknown"),
+                "expected boot_started_at=unknown in message: {message}"
+            );
             Ok(())
         })?;
 
