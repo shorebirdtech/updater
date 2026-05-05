@@ -653,23 +653,38 @@ impl PatchLifecycle {
 
     /// Walks `patches/` and runs [`cleanup`] on every patch with number
     /// < `n`. State-aware per-patch: Bad tombstones survive, everything
-    /// else is forgotten. Best-effort — read errors are logged and
-    /// skipped so a single bad entry can't block the cleanup of others.
+    /// else is forgotten. Anything in `patches/` whose name doesn't
+    /// parse as a patch number is unrecognized garbage (we own the
+    /// directory) and gets removed wholesale. Best-effort — errors
+    /// are logged so a single bad entry can't block the cleanup of
+    /// others.
     fn cleanup_older_than(&self, n: usize) {
         let entries = match std::fs::read_dir(self.patches_root()) {
             Ok(e) => e,
             Err(_) => return,
         };
         for entry in entries.flatten() {
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
-            let Ok(num) = name.parse::<usize>() else {
-                continue;
-            };
-            if num < n {
-                if let Err(e) = self.cleanup(num) {
-                    shorebird_error!("cleanup({}) failed: {:?}", num, e);
+            let path = entry.path();
+            let name_string = entry.file_name().to_string_lossy().into_owned();
+            match name_string.parse::<usize>() {
+                Ok(num) if num < n => {
+                    if let Err(e) = self.cleanup(num) {
+                        shorebird_error!("cleanup({}) failed: {:?}", num, e);
+                    }
+                }
+                Ok(_) => {} // current or newer; leave alone.
+                Err(_) => {
+                    // We own this directory; anything not named like a
+                    // patch number is corruption / leftover from prior
+                    // versions / debug residue and is safe to remove.
+                    let result = if path.is_dir() {
+                        std::fs::remove_dir_all(&path)
+                    } else {
+                        std::fs::remove_file(&path)
+                    };
+                    if let Err(e) = result {
+                        shorebird_error!("Failed to remove unrecognized entry {:?}: {:?}", path, e);
+                    }
                 }
             }
         }
@@ -1386,6 +1401,70 @@ mod tests {
             Some(PatchState::Bad { .. })
         ));
         assert!(lifecycle.patch_dir(3).exists());
+    }
+
+    #[test]
+    // Ports
+    // `patch_manager.rs::record_boot_success_for_patch_tests::deletes_unrecognized_directories_in_patches_dir`.
+    // We own `patches/` — anything in it whose name isn't a patch
+    // number is corruption / debug residue / leftover-from-prior-code,
+    // and the older-than walk takes the opportunity to sweep it up.
+    fn record_boot_success_deletes_unrecognized_directories_in_patches_dir() {
+        let (_tmp, mut lifecycle) = fixture();
+        // Drop a junk directory and a stray file in patches/ before any
+        // installs.
+        std::fs::create_dir_all(lifecycle.patches_root().join("junk_dir")).unwrap();
+        std::fs::write(lifecycle.patches_root().join("not_a_number.txt"), b"x").unwrap();
+
+        install_state(&lifecycle, 3, 300);
+        lifecycle.pointers.next_boot_patch = Some(3);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(3).unwrap();
+        lifecycle.record_boot_success().unwrap();
+
+        assert!(!lifecycle.patches_root().join("junk_dir").exists());
+        assert!(!lifecycle.patches_root().join("not_a_number.txt").exists());
+        assert!(lifecycle.patch_dir(3).exists());
+    }
+
+    #[test]
+    // Ports
+    // `patch_manager.rs::fall_back_tests::succeeds_if_deleting_artifacts_fails`.
+    // The patch dirs were already deleted out from under us — every
+    // delete in mark_bad's cleanup path is graceful so the operation
+    // still succeeds and the pointer state is recomputed correctly.
+    fn record_boot_failure_succeeds_if_artifact_dirs_are_already_gone() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.last_booted_patch = Some(1);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+
+        // Wipe both patch dirs (state.json and artifact alike) before
+        // recording the failure — simulates filesystem-level corruption.
+        std::fs::remove_dir_all(lifecycle.patch_dir(1)).unwrap();
+        std::fs::remove_dir_all(lifecycle.patch_dir(2)).unwrap();
+
+        // Need to set next_boot=2 manually since record_boot_start
+        // requires the matching state, but for this test we skip that
+        // and call record_boot_failure directly.
+        // record_boot_failure doesn't require currently_booting; clears it.
+        lifecycle.record_boot_failure(2).unwrap();
+
+        // Patch 2 transitioned to Bad{BootCrash}; mark_bad recreated
+        // its directory just for the tombstone state.json.
+        assert!(matches!(
+            lifecycle.read_state(2),
+            Some(PatchState::Bad { .. })
+        ));
+        // Patch 1's state file is gone, so recompute can't promote it.
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+        assert_eq!(
+            lifecycle.pointers().last_booted_patch,
+            None,
+            "stale last_booted pointer cleared by recompute"
+        );
     }
 
     #[test]
