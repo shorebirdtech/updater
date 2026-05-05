@@ -692,49 +692,87 @@ impl PatchLifecycle {
         Ok(())
     }
 
-    /// Walks `patches/` and runs [`cleanup`] on every patch with number
-    /// < `n`. State-aware per-patch: Bad tombstones survive, everything
-    /// else is forgotten. Anything in `patches/` whose name doesn't
-    /// parse as a patch number is unrecognized garbage (we own the
-    /// directory) and gets removed wholesale. Best-effort — errors
-    /// are logged so a single bad entry can't block the cleanup of
-    /// others.
+    /// Walks `state_root/patches/` and runs [`cleanup`] on every patch
+    /// with number < `n`. State-aware per-patch: Bad tombstones
+    /// survive, everything else is forgotten. Anything in `patches/`
+    /// whose name doesn't parse as a patch number is unrecognized
+    /// garbage (we own the directory) and gets removed wholesale.
     ///
-    /// Note: only walks the persistent `state_root/patches/` tree.
-    /// Compressed download files in `download_root/` are removed via
-    /// each patch's `cleanup` call (which deletes both roots), so any
-    /// download whose state.json still exists gets swept here. A
-    /// download file in `download_root/` whose state.json no longer
-    /// exists (out-of-band corruption, never seen in practice) would
-    /// persist until the OS evicts it from cache.
+    /// Then sweeps `download_root/` via [`cleanup_orphan_downloads`]:
+    /// every file in there should correspond to a patch in
+    /// `Downloading` or `Downloaded` state; anything else is orphan
+    /// or stale and gets removed. We own `download_root/` and don't
+    /// rely on OS cache eviction to clean up after us.
+    ///
+    /// Best-effort — errors are logged so a single bad entry can't
+    /// block the cleanup of others.
     fn cleanup_older_than(&self, n: usize) {
-        let entries = match std::fs::read_dir(self.patches_root()) {
-            Ok(e) => e,
-            Err(_) => return,
+        if let Ok(entries) = std::fs::read_dir(self.patches_root()) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name_string = entry.file_name().to_string_lossy().into_owned();
+                match name_string.parse::<usize>() {
+                    Ok(num) if num < n => {
+                        if let Err(e) = self.cleanup(num) {
+                            shorebird_error!("cleanup({}) failed: {:?}", num, e);
+                        }
+                    }
+                    Ok(_) => {} // current or newer; leave alone.
+                    Err(_) => {
+                        // Anything in patches/ whose name isn't a patch
+                        // number is corruption / leftover from prior
+                        // versions / debug residue and is safe to remove.
+                        let result = if path.is_dir() {
+                            std::fs::remove_dir_all(&path)
+                        } else {
+                            std::fs::remove_file(&path)
+                        };
+                        if let Err(e) = result {
+                            shorebird_error!(
+                                "Failed to remove unrecognized entry {:?}: {:?}",
+                                path,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        self.cleanup_orphan_downloads();
+    }
+
+    /// Sweeps `download_root/` for files that don't correspond to a
+    /// live download. A download file is "live" only when its patch
+    /// is in `Downloading` or `Downloaded` state — any other
+    /// situation (no state.json, state is `Installed` or `Bad`, name
+    /// isn't a patch number) is an orphan we should clean up. The
+    /// `Installed` and `Bad` cases shouldn't happen in normal flow
+    /// (`record_install_complete` and `mark_bad` already remove the
+    /// download), but the safety net costs nothing.
+    fn cleanup_orphan_downloads(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.download_root) else {
+            return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            let name_string = entry.file_name().to_string_lossy().into_owned();
-            match name_string.parse::<usize>() {
-                Ok(num) if num < n => {
-                    if let Err(e) = self.cleanup(num) {
-                        shorebird_error!("cleanup({}) failed: {:?}", num, e);
-                    }
-                }
-                Ok(_) => {} // current or newer; leave alone.
-                Err(_) => {
-                    // We own this directory; anything not named like a
-                    // patch number is corruption / leftover from prior
-                    // versions / debug residue and is safe to remove.
-                    let result = if path.is_dir() {
-                        std::fs::remove_dir_all(&path)
-                    } else {
-                        std::fs::remove_file(&path)
-                    };
-                    if let Err(e) = result {
-                        shorebird_error!("Failed to remove unrecognized entry {:?}: {:?}", path, e);
-                    }
-                }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let keep = match name.parse::<usize>() {
+                Ok(num) => matches!(
+                    self.read_state(num),
+                    Some(PatchState::Downloading { .. } | PatchState::Downloaded { .. })
+                ),
+                Err(_) => false,
+            };
+            if keep {
+                continue;
+            }
+            let result = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if let Err(e) = result {
+                shorebird_error!("Failed to remove orphan download {:?}: {:?}", path, e);
             }
         }
     }

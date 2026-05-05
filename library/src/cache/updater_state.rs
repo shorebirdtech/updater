@@ -17,6 +17,17 @@ use super::{disk_io, PatchInfo};
 
 const STATE_FILE_NAME: &str = "state.json";
 
+/// Files and directories under `cache_dir` that shorebird has ever
+/// written. On a release-version change or unparseable state we wipe
+/// these and keep going. `state.json` is intentionally absent — it's
+/// rewritten in place with the preserved `client_id` (so removing it
+/// would lose the only thing we want to carry forward).
+///
+/// `patches_state.json` is the legacy file from the prior `PatchManager`
+/// implementation; carrying it forward would orphan ~few-KB of stale
+/// state on every device upgrading through this PR.
+const SHOREBIRD_OWNED_PATHS: &[&str] = &["patches", "pointers.json", "patches_state.json"];
+
 /// Records the updater's "state of the world": which patches we have
 /// downloaded or installed, which patch booted last, events that need to
 /// be reported to the server, etc.
@@ -128,9 +139,18 @@ impl UpdaterState {
         })
     }
 
-    /// Initializes a new UpdaterState and saves it to disk. Wipes any
-    /// existing per-release patch state — used when the release version
-    /// changes or when the on-disk state was unparseable.
+    /// Initializes a new UpdaterState and saves it to disk. Wipes the
+    /// shorebird-managed files in `cache_dir` and the entire
+    /// `download_dir` — used when the release version changes or when
+    /// the on-disk state was unparseable.
+    ///
+    /// We *don't* blanket-wipe `cache_dir` because the embedder may
+    /// configure it to be shared with non-shorebird files (the test
+    /// suite does this; production engines typically hand us a
+    /// dedicated subdir but the API doesn't enforce that). Instead we
+    /// enumerate the set of files we've ever written there. Add new
+    /// entries to `SHOREBIRD_OWNED_PATHS` when introducing new files
+    /// or directories under `cache_dir`.
     fn create_new_and_save(
         cache_dir: &Path,
         download_dir: &Path,
@@ -139,6 +159,27 @@ impl UpdaterState {
         verification_mode: PatchVerificationMode,
         client_id: String,
     ) -> Self {
+        for relative in SHOREBIRD_OWNED_PATHS {
+            let path = cache_dir.join(relative);
+            if !path.exists() {
+                continue;
+            }
+            let result = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if let Err(e) = result {
+                shorebird_error!("Failed to wipe {:?} on reset: {:?}", path, e);
+            }
+        }
+        // The download dir is fully shorebird-owned — wipe it whole.
+        if download_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(download_dir) {
+                shorebird_error!("Failed to wipe download dir on reset: {:?}", e);
+            }
+        }
+
         let mut state = Self::new(
             cache_dir.to_owned(),
             download_dir.to_owned(),
@@ -150,24 +191,6 @@ impl UpdaterState {
         if let Err(e) = state.save() {
             shorebird_warn!("Error saving state {:?}, ignoring.", e);
         }
-        // Wipe per-release patch storage from any prior release.
-        let patches_root = cache_dir.join("patches");
-        if patches_root.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&patches_root) {
-                shorebird_error!("Failed to wipe patches dir on reset: {:?}", e);
-            }
-        }
-        let pointers_path = cache_dir.join("pointers.json");
-        if pointers_path.exists() {
-            let _ = std::fs::remove_file(&pointers_path);
-        }
-        // Also wipe stale compressed downloads from the prior release.
-        if download_dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(download_dir) {
-                shorebird_error!("Failed to wipe download dir on reset: {:?}", e);
-            }
-        }
-        // Reload lifecycle from a clean slate.
         state.lifecycle =
             PatchLifecycle::load_or_default(cache_dir.to_path_buf(), download_dir.to_path_buf());
         state
@@ -444,6 +467,29 @@ mod tests {
 
         let mut next = load(&tmp, "1.0.0+2");
         assert!(next.next_boot_patch().is_none());
+    }
+
+    #[test]
+    fn release_version_change_wipes_legacy_patches_state_json() {
+        // Devices upgrading from the prior `PatchManager` will have a
+        // `patches_state.json` left behind in cache_dir from the old
+        // code. The new code never reads or writes it, but leaving it
+        // on disk would orphan a few KB on every release upgrade.
+        // Belongs to the SHOREBIRD_OWNED_PATHS wipe list.
+        let tmp = TempDir::new().unwrap();
+        let _state = load(&tmp, "1.0.0+1");
+        std::fs::write(
+            tmp.path().join("patches_state.json"),
+            br#"{"legacy":"junk"}"#,
+        )
+        .unwrap();
+        assert!(tmp.path().join("patches_state.json").exists());
+
+        let _next = load(&tmp, "1.0.0+2");
+        assert!(
+            !tmp.path().join("patches_state.json").exists(),
+            "legacy patches_state.json should be wiped on release-version change"
+        );
     }
 
     #[test]
