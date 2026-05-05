@@ -335,22 +335,36 @@ impl PatchLifecycle {
     /// through a different CDN URL, and the prior bytes can't be
     /// trusted.
     pub fn decide_start(&self, n: usize, url: &str, hash: &str) -> DownloadAction {
+        // For Downloading/Downloaded, the on-disk file is the source
+        // of truth for "how many bytes do we have." `partial_size` in
+        // the state is denormalized info from when the state was last
+        // written and may lag a partially-completed download. Reading
+        // from disk avoids needing to update the sidecar mid-stream.
+        let download_path = download_artifact_path(&self.root, n);
         match self.read_state(n) {
             None => DownloadAction::Fresh,
             Some(PatchState::Downloading {
                 url: prior_url,
                 hash: prior_hash,
-                partial_size,
                 ..
-            }) if prior_url == url && prior_hash == hash => DownloadAction::Resume {
-                offset: partial_size,
-            },
+            }) if prior_url == url && prior_hash == hash => {
+                match std::fs::metadata(&download_path) {
+                    Ok(meta) => DownloadAction::Resume { offset: meta.len() },
+                    Err(_) => DownloadAction::Fresh,
+                }
+            }
             Some(PatchState::Downloading { .. }) => DownloadAction::Fresh,
             Some(PatchState::Downloaded {
                 url: prior_url,
                 hash: prior_hash,
                 ..
-            }) if prior_url == url && prior_hash == hash => DownloadAction::Complete,
+            }) if prior_url == url && prior_hash == hash => {
+                if download_path.exists() {
+                    DownloadAction::Complete
+                } else {
+                    DownloadAction::Fresh
+                }
+            }
             Some(PatchState::Downloaded { .. }) => DownloadAction::Fresh,
             Some(PatchState::Installed { .. }) => {
                 DownloadAction::Skip(SkipReason::AlreadyInstalled)
@@ -895,9 +909,32 @@ mod tests {
                 },
             )
             .unwrap();
+        std::fs::write(download_artifact_path(&lifecycle.root, 1), vec![0u8; 250]).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "https://example/p", "h"),
             DownloadAction::Resume { offset: 250 }
+        );
+    }
+
+    #[test]
+    fn decide_start_downloading_with_missing_file_starts_fresh() {
+        let (_tmp, lifecycle) = fixture();
+        // State says we were 250 bytes in, but the file is gone (e.g.
+        // OS evicted it from the code cache).
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Downloading {
+                    url: "https://example/p".into(),
+                    hash: "h".into(),
+                    signature: None,
+                    partial_size: 250,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            lifecycle.decide_start(1, "https://example/p", "h"),
+            DownloadAction::Fresh
         );
     }
 
@@ -952,10 +989,28 @@ mod tests {
                 },
             )
             .unwrap();
+        std::fs::write(download_artifact_path(&lifecycle.root, 1), vec![0u8; 1000]).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "u", "h"),
             DownloadAction::Complete
         );
+    }
+
+    #[test]
+    fn decide_start_downloaded_with_missing_file_starts_fresh() {
+        let (_tmp, lifecycle) = fixture();
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Downloaded {
+                    url: "u".into(),
+                    hash: "h".into(),
+                    signature: None,
+                    size: 1000,
+                },
+            )
+            .unwrap();
+        assert_eq!(lifecycle.decide_start(1, "u", "h"), DownloadAction::Fresh);
     }
 
     #[test]

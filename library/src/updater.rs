@@ -9,9 +9,9 @@ use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
+use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
-use crate::download_state::{self, DownloadState};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
 use crate::network::{
@@ -303,11 +303,15 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     }
 
     if let Some(patch) = response.patch {
-        match should_install_patch(patch.number)? {
-            ShouldInstallPatchCheckResult::PatchOkToInstall => Ok(true),
-            ShouldInstallPatchCheckResult::PatchKnownBad => Ok(false),
-            ShouldInstallPatchCheckResult::PatchAlreadyInstalled => Ok(false),
-        }
+        let action = with_state(|state| {
+            Ok(state
+                .lifecycle()
+                .decide_start(patch.number, &patch.download_url, &patch.hash))
+        })?;
+        Ok(matches!(
+            action,
+            DownloadAction::Fresh | DownloadAction::Resume { .. } | DownloadAction::Complete
+        ))
     } else {
         Ok(false)
     }
@@ -427,10 +431,21 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
 
-    match should_install_patch(patch.number)? {
-        ShouldInstallPatchCheckResult::PatchOkToInstall => {}
-        ShouldInstallPatchCheckResult::PatchKnownBad => return Ok(UpdateStatus::UpdateIsBadPatch),
-        ShouldInstallPatchCheckResult::PatchAlreadyInstalled => return Ok(UpdateStatus::NoUpdate),
+    let action = with_state(|state| {
+        Ok(state
+            .lifecycle()
+            .decide_start(patch.number, &patch.download_url, &patch.hash))
+    })?;
+    match action {
+        DownloadAction::Skip(SkipReason::KnownBad) => {
+            shorebird_info!("Patch {} is known bad, skipping.", patch.number);
+            return Ok(UpdateStatus::UpdateIsBadPatch);
+        }
+        DownloadAction::Skip(SkipReason::AlreadyInstalled) => {
+            shorebird_info!("Patch {} is already installed, skipping.", patch.number);
+            return Ok(UpdateStatus::NoUpdate);
+        }
+        _ => {}
     }
 
     shorebird_info!(
@@ -439,178 +454,157 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         config.app_id,
         config.release_version
     );
-    let download_dir = PathBuf::from(&config.download_dir);
-    let download_path = download_dir.join(patch.number.to_string());
 
-    let start_state = determine_download_start_state(
-        &download_path,
-        &patch.download_url,
-        patch.number,
-        &patch.hash,
-    );
+    let storage_dir = PathBuf::from(&config.storage_dir);
+    let download_path = lifecycle::download_artifact_path(&storage_dir, patch.number);
 
-    // Ensure the download directory exists.
-    std::fs::create_dir_all(&download_dir)
-        .with_file_context(FileOperation::CreateDir, &download_dir)?;
+    if !matches!(action, DownloadAction::Complete) {
+        let resume_from = match action {
+            DownloadAction::Resume { offset } => {
+                shorebird_info!("Resuming download from byte {}", offset);
+                offset
+            }
+            _ => 0,
+        };
 
-    // Clean up any orphaned files in the download directory. We own this
-    // directory entirely, so anything that isn't for the current patch is
-    // stale (e.g. from a prior patch number, a crashed inflate, or a
-    // partial download for a patch that's since been replaced).
-    clean_download_dir(&download_dir, patch.number);
+        // Record `Downloading` *before* the network call so we can detect
+        // partial files on the next attempt and resume.
+        with_mut_state(|state| {
+            state.lifecycle_mut().record_download_started(
+                patch.number,
+                &patch.download_url,
+                &patch.hash,
+                patch.hash_signature.as_deref(),
+                resume_from,
+            )
+        })?;
 
-    let dl_result = match start_state {
-        DownloadStartState::Complete(size) => {
-            // Bytes from a prior attempt are already on disk and the sidecar
-            // says they're the expected size. Skip the network request and
-            // let the install path validate them — re-downloading would just
-            // waste bandwidth in cases like the app being killed between the
-            // download finishing and install starting.
-            shorebird_info!(
-                "Prior download already complete ({} bytes); skipping fetch.",
-                size
-            );
-            DownloadResult {
-                total_bytes: size,
-                content_length: Some(size),
+        if let Some(parent) = download_path.parent() {
+            std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
+        }
+
+        // Consider supporting allowing the system to download for us (e.g. iOS).
+        let dl_result = download_to_path(
+            &config.network_hooks,
+            &patch.download_url,
+            &download_path,
+            resume_from,
+        )?;
+
+        // Server-side bug check: when the server told us Content-Length
+        // ahead of time but delivered a different number of bytes,
+        // surface the contract violation directly instead of letting it
+        // surface obliquely through inflate failure.
+        if let Some(expected) = dl_result.content_length {
+            if dl_result.total_bytes != expected {
+                let _ = with_mut_state(|state| state.uninstall_patch(patch.number));
+                bail!(
+                    "Download size mismatch: expected {} bytes, got {}",
+                    expected,
+                    dl_result.total_bytes
+                );
             }
         }
-        DownloadStartState::Fresh | DownloadStartState::Resume(_) => {
-            // Write sidecar *before* downloading so we can resume on crash.
-            let dl_state = DownloadState {
-                url: patch.download_url.clone(),
-                patch_number: patch.number,
-                expected_size: None,
-                expected_hash: patch.hash.clone(),
-            };
-            download_state::write_download_state(&download_path, &dl_state)?;
 
-            let resume_from = match start_state {
-                DownloadStartState::Resume(offset) => {
-                    shorebird_info!("Resuming download from byte {}", offset);
-                    offset
-                }
-                _ => 0,
-            };
+        // Transition to `Downloaded`. The recorded size is the actual
+        // on-disk byte count, not the server's Content-Length — chunked
+        // responses don't send the latter and the lifecycle relies on
+        // the state itself (not size comparisons) to distinguish
+        // complete from partial.
+        with_mut_state(|state| {
+            state
+                .lifecycle_mut()
+                .record_download_complete(patch.number, dl_result.total_bytes)
+        })?;
+    } else {
+        shorebird_info!("Prior download already complete; skipping fetch.");
+    }
 
-            // Consider supporting allowing the system to download for us (e.g. iOS).
-            let dl_result = download_to_path(
-                &config.network_hooks,
-                &patch.download_url,
-                &download_path,
-                resume_from,
-            )?;
-
-            // Record the actual on-disk size, not the server's Content-Length.
-            // For chunked transfer encoding the server doesn't send
-            // Content-Length, so dl_result.content_length would be None — and
-            // a subsequent crash-before-install attempt would then see
-            // expected_size: None plus a full-size file, fall through to
-            // Resume(file_size), and re-create the same HTTP 416 this PR
-            // fixes. Using total_bytes works for both chunked and
-            // Content-Length responses (they're equal in the latter case).
-            //
-            // KNOWN GAP: if the process dies between download_to_path
-            // returning above and this sidecar write succeeding, expected_size
-            // stays None from the pre-download write and we hit the 416 loop
-            // anyway. The window is microseconds; closing it requires
-            // restructuring (e.g. download_to_path writing the sidecar
-            // itself, or a single atomic per-patch state document) — tracked
-            // in shorebirdtech/shorebird#3737.
-            let dl_state = DownloadState {
-                expected_size: Some(dl_result.total_bytes),
-                ..dl_state
-            };
-            download_state::write_download_state(&download_path, &dl_state)?;
-
-            dl_result
-        }
-    };
-
-    let output_path = download_dir.join(format!("{}.full", patch.number));
-    // Once the download bytes are on disk, they will either be consumed
-    // (install success) or rejected (any failure). Either way the artifacts
-    // have served their purpose — clean them up unconditionally so a stuck
-    // partial file can't make a future Range request go past the end of the
-    // file and yield HTTP 416.
-    let result = install_downloaded_patch(&config, &patch, &dl_result, &download_path, output_path);
-    cleanup_download_artifacts(&download_path);
-    result
+    install_downloaded_patch(&config, &patch, &download_path)
 }
 
-/// Consumes the bytes at `download_path`: validates the size, inflates them,
-/// hash-checks the result, and installs the patch. Returns `UpdateInstalled`
-/// on success.
-///
-/// Caller is responsible for cleaning up `download_path` artifacts after this
-/// returns, regardless of outcome.
+/// Inflates the compressed bytes at `download_path` into the lifecycle's
+/// installed location, hash-checks the result, and transitions the patch
+/// from `Downloaded` to `Installed`. Marks the patch `Bad` (with the
+/// appropriate reason) on inflate or hash-check failure so the next
+/// update cycle short-circuits via `decide_start`.
 fn install_downloaded_patch(
     config: &UpdateConfig,
     patch: &crate::network::Patch,
-    dl_result: &DownloadResult,
     download_path: &Path,
-    output_path: PathBuf,
 ) -> anyhow::Result<UpdateStatus> {
-    // Validate download size if Content-Length was provided.
-    if let Some(expected) = dl_result.content_length {
-        if dl_result.total_bytes != expected {
-            bail!(
-                "Download size mismatch: expected {} bytes, got {}",
-                expected,
-                dl_result.total_bytes
-            );
-        }
-    }
+    let storage_dir = PathBuf::from(&config.storage_dir);
+    let installed_path = lifecycle::installed_artifact_path(&storage_dir, patch.number);
 
     let patch_base_rs = patch_base(config)?;
-    inflate(download_path, patch_base_rs, &output_path)?;
+    if let Err(e) = inflate(download_path, patch_base_rs, &installed_path) {
+        // Inflate failed — bytes won't decompress. Deterministically bad.
+        mark_patch_bad(patch.number, BadReason::InvalidPatchBytes);
+        return Err(e);
+    }
 
-    // Check the hash before moving into place.
-    check_hash(&output_path, &patch.hash).with_context(|| {
+    if let Err(e) = check_hash(&installed_path, &patch.hash).with_context(|| {
         format!(
             "This app reports version {}, but the binary is different from \
         the version {} that was submitted to Shorebird.",
             config.release_version, config.release_version
         )
-    })?;
+    }) {
+        // Hash mismatch — bytes decompressed but produced the wrong
+        // result. Most often a customer build/release mismatch on their
+        // side; deterministic on this device.
+        mark_patch_bad(patch.number, BadReason::InstallHashMismatch);
+        return Err(e);
+    }
 
-    // We're abusing the config lock as a UpdateState lock for now.
-    // This makes it so we never try to write to the UpdateState file from
-    // two threads at once. We could give UpdateState its own lock instead.
+    let installed_size = std::fs::metadata(&installed_path)?.len();
+
     with_mut_state(|state| {
-        let patch_info = PatchInfo {
-            path: output_path,
-            number: patch.number,
-        };
-        // Move/state update should be "atomic" (it isn't today).
-        state.install_patch(&patch_info, &patch.hash, patch.hash_signature.as_deref())?;
+        state
+            .lifecycle_mut()
+            .record_install_complete(patch.number, installed_size)?;
+        state.lifecycle_mut().promote_to_next_boot(patch.number)?;
         shorebird_info!(
             "Patch {} successfully downloaded. It will be launched when the app next restarts.",
             patch.number
         );
 
         let client_id = state.client_id();
-        let config = config.clone();
+        let config_clone = config.clone();
         let patch_number = patch.number;
         std::thread::spawn(move || {
             let event = PatchEvent::new(
-                &config,
+                &config_clone,
                 EventType::PatchDownload,
                 patch_number,
                 client_id,
                 None,
             );
-            let report_result = crate::network::send_patch_event(event, &config);
-            if let Err(err) = report_result {
+            if let Err(err) = crate::network::send_patch_event(event, &config_clone) {
                 shorebird_error!("Failed to report patch download: {:?}", err);
             }
         });
 
-        // Should set some state to say the status is "update required" and that
-        // we now have a different "next" version of the app from the current
-        // booted version (patched or not).
         Ok(UpdateStatus::UpdateInstalled)
     })
+}
+
+/// Marks `patch_number` Bad{reason} and recomputes `next_boot_patch`.
+/// Errors are logged but not propagated — the caller is already
+/// returning the underlying install error and the state-machine
+/// bookkeeping is best-effort relative to that.
+fn mark_patch_bad(patch_number: usize, reason: BadReason) {
+    let result = with_mut_state(|state| {
+        state.lifecycle_mut().mark_bad(patch_number, reason)?;
+        state.lifecycle_mut().recompute_next_boot()
+    });
+    if let Err(e) = result {
+        shorebird_error!(
+            "Failed to mark patch {} bad after install failure: {:?}",
+            patch_number,
+            e
+        );
+    }
 }
 
 fn roll_back_patches_if_needed(patch_numbers: Vec<usize>) -> anyhow::Result<()> {
@@ -620,141 +614,6 @@ fn roll_back_patches_if_needed(patch_numbers: Vec<usize>) -> anyhow::Result<()> 
         }
         Ok(())
     })
-}
-
-fn should_install_patch(patch_number: usize) -> Result<ShouldInstallPatchCheckResult> {
-    // Don't install a patch if it has previously failed to boot.
-    let is_known_bad_patch = with_state(|state| Ok(state.is_known_bad_patch(patch_number)))?;
-    if is_known_bad_patch {
-        shorebird_info!(
-            "Patch {} has previously failed to boot, skipping.",
-            patch_number
-        );
-        return Ok(ShouldInstallPatchCheckResult::PatchKnownBad);
-    }
-
-    // If we already have the latest available patch downloaded, we don't need to download it again.
-    let next_boot_patch = with_mut_state(|state| Ok(state.next_boot_patch()))?;
-    if let Some(next_boot_patch) = next_boot_patch {
-        if next_boot_patch.number == patch_number {
-            shorebird_info!("Patch {} is already installed, skipping.", patch_number);
-            return Ok(ShouldInstallPatchCheckResult::PatchAlreadyInstalled);
-        }
-    }
-
-    Ok(ShouldInstallPatchCheckResult::PatchOkToInstall)
-}
-
-/// What the prior attempt left on disk, and what to do about it.
-#[derive(Debug, PartialEq)]
-enum DownloadStartState {
-    /// No usable prior artifacts — request the full file.
-    Fresh,
-    /// Partial file from an interrupted prior attempt. Send a Range header
-    /// from this byte offset to ask the server for the remainder.
-    Resume(u64),
-    /// Prior attempt finished downloading but didn't finish installing
-    /// (e.g. the process was killed between download and inflate, or
-    /// inflate/install failed). Skip the network request and let the
-    /// install path validate the bytes already on disk.
-    Complete(u64),
-}
-
-/// Inspects the sidecar and partial file to decide how the next download
-/// attempt should begin. Read-only — does not modify on-disk state.
-fn determine_download_start_state(
-    download_path: &Path,
-    url: &str,
-    patch_number: usize,
-    expected_hash: &str,
-) -> DownloadStartState {
-    let prior_state = match download_state::read_download_state(download_path) {
-        Ok(Some(state)) => state,
-        _ => return DownloadStartState::Fresh,
-    };
-
-    // The hash check catches the case where a patch is deleted and re-added
-    // with the same number — the URL might stay the same but the content
-    // differs.
-    if prior_state.url != url
-        || prior_state.patch_number != patch_number
-        || prior_state.expected_hash != expected_hash
-    {
-        shorebird_info!("Download state mismatch, starting fresh.");
-        return DownloadStartState::Fresh;
-    }
-
-    let file_size = match std::fs::metadata(download_path) {
-        Ok(meta) if meta.len() > 0 => meta.len(),
-        _ => return DownloadStartState::Fresh,
-    };
-
-    // If the prior attempt's bytes look complete, skip the network request.
-    // The install path will validate them; if they're bad it will fail and
-    // the unconditional cleanup at the end of `update_internal` will wipe
-    // them so the next attempt re-downloads.
-    if let Some(expected) = prior_state.expected_size {
-        if file_size >= expected {
-            return DownloadStartState::Complete(file_size);
-        }
-    }
-
-    DownloadStartState::Resume(file_size)
-}
-
-/// Removes everything in `download_dir` except files belonging to
-/// `current_patch_number`. We own this directory entirely, so anything
-/// unrecognized or from a different patch number is safe to delete.
-fn clean_download_dir(download_dir: &Path, current_patch_number: usize) {
-    let entries = match fs::read_dir(download_dir) {
-        Ok(entries) => entries,
-        Err(_) => return, // Directory may not exist yet.
-    };
-
-    let current_prefix = current_patch_number.to_string();
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let name = file_name.to_string_lossy();
-
-        // Keep files that belong to the current patch:
-        //   "{number}", "{number}.full", "{number}.download.json"
-        if name == current_prefix
-            || name == format!("{current_prefix}.full")
-            || name == format!("{current_prefix}.download.json")
-        {
-            continue;
-        }
-
-        // Everything else is an orphan — delete it.
-        let path = entry.path();
-        if path.is_file() {
-            if let Err(e) = fs::remove_file(&path) {
-                shorebird_error!("Failed to clean up orphaned file {:?}: {:?}", path, e);
-            } else {
-                shorebird_info!("Cleaned up orphaned download file: {:?}", path);
-            }
-        }
-    }
-}
-
-/// Removes the compressed download file and its sidecar.
-///
-/// KNOWN GAP: delete errors are logged but not propagated. If a delete
-/// silently fails (e.g. transient filesystem error), the stale artifacts
-/// persist into the next cycle and could re-create the same 416 loop this
-/// PR fixes — `determine_download_start_state` would still see a sidecar
-/// with `expected_size` matching the file and try to resume against a
-/// resource that's no longer the right one. Disk delete failures are rare
-/// in practice; the proper fix lives in shorebirdtech/shorebird#3737.
-fn cleanup_download_artifacts(download_path: &Path) {
-    if let Err(e) = download_state::delete_download_state(download_path) {
-        shorebird_error!("Failed to delete download sidecar: {:?}", e);
-    }
-    if download_path.exists() {
-        if let Err(e) = std::fs::remove_file(download_path) {
-            shorebird_error!("Failed to delete download file: {:?}", e);
-        }
-    }
 }
 
 /// Synchronously checks for an update and downloads and installs it if available.
@@ -1830,285 +1689,6 @@ patch_verification: bogus_mode
         .unwrap();
     }
 
-    use super::DownloadStartState;
-
-    fn write_state(download_path: &Path, expected_size: Option<u64>) {
-        crate::download_state::write_download_state(
-            download_path,
-            &crate::download_state::DownloadState {
-                url: "http://example.com/patch".to_string(),
-                patch_number: 1,
-                expected_size,
-                expected_hash: "abc123".to_string(),
-            },
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn download_start_state_no_sidecar() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                1,
-                "abc123"
-            ),
-            DownloadStartState::Fresh
-        );
-    }
-
-    #[test]
-    fn download_start_state_matching_sidecar_resumes() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, vec![0u8; 500]).unwrap();
-        write_state(&download_path, Some(1000));
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                1,
-                "abc123"
-            ),
-            DownloadStartState::Resume(500)
-        );
-    }
-
-    #[test]
-    fn download_start_state_mismatched_url_starts_fresh() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, vec![0u8; 500]).unwrap();
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
-                url: "http://example.com/old-patch".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "abc123".to_string(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/new-patch",
-                1,
-                "abc123"
-            ),
-            DownloadStartState::Fresh
-        );
-    }
-
-    #[test]
-    fn download_start_state_mismatched_hash_starts_fresh() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, vec![0u8; 500]).unwrap();
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
-                url: "http://example.com/patch".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "hash_old".to_string(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                1,
-                "hash_new"
-            ),
-            DownloadStartState::Fresh
-        );
-    }
-
-    #[test]
-    fn download_start_state_mismatched_patch_number_starts_fresh() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, vec![0u8; 500]).unwrap();
-        write_state(&download_path, None);
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                2,
-                "abc123"
-            ),
-            DownloadStartState::Fresh
-        );
-    }
-
-    #[test]
-    fn download_start_state_corrupt_sidecar_starts_fresh() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, vec![0u8; 500]).unwrap();
-        let sidecar = crate::download_state::sidecar_path(&download_path);
-        fs::write(&sidecar, "not valid json").unwrap();
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                1,
-                "abc123"
-            ),
-            DownloadStartState::Fresh
-        );
-    }
-
-    #[test]
-    fn download_start_state_empty_file_starts_fresh() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, []).unwrap();
-        write_state(&download_path, None);
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                1,
-                "abc123"
-            ),
-            DownloadStartState::Fresh
-        );
-    }
-
-    #[test]
-    fn download_start_state_full_file_reports_complete() {
-        // Reproduces the customer's stuck state: a prior attempt finished
-        // downloading (file size == expected_size) but install failed (or the
-        // app was killed before install). The function should report Complete
-        // so the caller skips the network request and validates the bytes.
-        // It must NOT delete anything — that's the caller's job after install.
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, vec![0u8; 1000]).unwrap();
-        write_state(&download_path, Some(1000));
-
-        assert_eq!(
-            super::determine_download_start_state(
-                &download_path,
-                "http://example.com/patch",
-                1,
-                "abc123"
-            ),
-            DownloadStartState::Complete(1000)
-        );
-
-        // determine_download_start_state must be read-only.
-        assert!(download_path.exists());
-        assert!(crate::download_state::sidecar_path(&download_path).exists());
-    }
-
-    #[test]
-    fn cleanup_download_artifacts_removes_file_and_sidecar() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        fs::create_dir_all(download_path.parent().unwrap()).unwrap();
-
-        fs::write(&download_path, b"partial data").unwrap();
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
-                url: "http://example.com/patch".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "abc123".to_string(),
-            },
-        )
-        .unwrap();
-
-        let sidecar = crate::download_state::sidecar_path(&download_path);
-        assert!(download_path.exists());
-        assert!(sidecar.exists());
-
-        super::cleanup_download_artifacts(&download_path);
-
-        assert!(!download_path.exists());
-        assert!(!sidecar.exists());
-    }
-
-    #[test]
-    fn cleanup_download_artifacts_noop_when_missing() {
-        let tmp = TempDir::new().unwrap();
-        let download_path = tmp.path().join("downloads/1");
-        // Should not panic when files don't exist.
-        super::cleanup_download_artifacts(&download_path);
-    }
-
-    #[test]
-    fn clean_download_dir_removes_orphans_keeps_current() {
-        let tmp = TempDir::new().unwrap();
-        let download_dir = tmp.path().join("downloads");
-        fs::create_dir_all(&download_dir).unwrap();
-
-        // Files for current patch (number 3) — should be kept.
-        fs::write(download_dir.join("3"), b"compressed").unwrap();
-        fs::write(download_dir.join("3.full"), b"inflated").unwrap();
-        fs::write(download_dir.join("3.download.json"), b"{}").unwrap();
-
-        // Files for old patches — should be deleted.
-        fs::write(download_dir.join("1"), b"old compressed").unwrap();
-        fs::write(download_dir.join("1.full"), b"old inflated").unwrap();
-        fs::write(download_dir.join("1.download.json"), b"{}").unwrap();
-        fs::write(download_dir.join("2"), b"old compressed").unwrap();
-
-        // Unrecognized file — should be deleted.
-        fs::write(download_dir.join("garbage.tmp"), b"junk").unwrap();
-
-        super::clean_download_dir(&download_dir, 3);
-
-        // Current patch files preserved.
-        assert!(download_dir.join("3").exists());
-        assert!(download_dir.join("3.full").exists());
-        assert!(download_dir.join("3.download.json").exists());
-
-        // Old and unrecognized files removed.
-        assert!(!download_dir.join("1").exists());
-        assert!(!download_dir.join("1.full").exists());
-        assert!(!download_dir.join("1.download.json").exists());
-        assert!(!download_dir.join("2").exists());
-        assert!(!download_dir.join("garbage.tmp").exists());
-    }
-
-    #[test]
-    fn clean_download_dir_noop_when_dir_missing() {
-        let tmp = TempDir::new().unwrap();
-        let download_dir = tmp.path().join("nonexistent");
-        // Should not panic.
-        super::clean_download_dir(&download_dir, 1);
-    }
-
     #[serial]
     #[test]
     fn successful_update_cleans_up_download_artifacts() -> anyhow::Result<()> {
@@ -2156,14 +1736,18 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // After successful install, compressed download and sidecar should be cleaned up.
-        let download_path = tmp_dir.path().join("downloads/1");
-        let sidecar_path = crate::download_state::sidecar_path(&download_path);
-        assert!(
-            !download_path.exists(),
-            "compressed download should be deleted"
-        );
-        assert!(!sidecar_path.exists(), "sidecar should be deleted");
+        // After successful install, the compressed download bytes are
+        // gone (record_install_complete deletes them) and the patch's
+        // state.json reads `Installed`.
+        let patch_dir = tmp_dir.path().join("patches/1");
+        assert!(!patch_dir.join("download").exists());
+        assert!(patch_dir.join("dlc.vmcode").exists());
+        let state: crate::cache::lifecycle::PatchState =
+            crate::cache::disk_io::read(&patch_dir.join("state.json")).unwrap();
+        assert!(matches!(
+            state,
+            crate::cache::lifecycle::PatchState::Installed { .. }
+        ));
 
         Ok(())
     }
@@ -2211,11 +1795,10 @@ patch_verification: bogus_mode
             "Expected size mismatch error, got: {err}"
         );
 
-        // Verify artifacts were cleaned up after the mismatch.
-        let download_path = tmp_dir.path().join("downloads/1");
-        let sidecar_path = crate::download_state::sidecar_path(&download_path);
-        assert!(!download_path.exists(), "download should be cleaned up");
-        assert!(!sidecar_path.exists(), "sidecar should be cleaned up");
+        // Server contract violation: the in-progress download was
+        // forgotten entirely (uninstall_patch). The next attempt starts
+        // fresh.
+        assert!(!tmp_dir.path().join("patches/1").exists());
 
         Ok(())
     }
@@ -2334,20 +1917,20 @@ patch_verification: bogus_mode
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        // Simulate a prior partial download: write the first 10 bytes + sidecar.
-        let download_dir = tmp_dir.path().join("downloads");
-        fs::create_dir_all(&download_dir).unwrap();
-        let download_path = download_dir.join("1");
-        fs::write(&download_path, first_part).unwrap();
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
+        // Simulate a prior partial download: write the first 10 bytes
+        // and a Downloading state.json that points at the same URL/hash.
+        let patch_dir = tmp_dir.path().join("patches/1");
+        fs::create_dir_all(&patch_dir).unwrap();
+        fs::write(patch_dir.join("download"), first_part).unwrap();
+        crate::cache::disk_io::write(
+            &crate::cache::lifecycle::PatchState::Downloading {
                 url: download_url.to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
+                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
                     .to_string(),
+                signature: None,
+                partial_size: first_part.len() as u64,
             },
+            &patch_dir.join("state.json"),
         )
         .unwrap();
 
@@ -2410,18 +1993,17 @@ patch_verification: bogus_mode
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
         // Simulate prior partial download with a DIFFERENT URL.
-        let download_dir = tmp_dir.path().join("downloads");
-        fs::create_dir_all(&download_dir).unwrap();
-        let download_path = download_dir.join("1");
-        fs::write(&download_path, b"stale data from old url").unwrap();
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
+        let patch_dir = tmp_dir.path().join("patches/1");
+        fs::create_dir_all(&patch_dir).unwrap();
+        fs::write(patch_dir.join("download"), b"stale data from old url").unwrap();
+        crate::cache::disk_io::write(
+            &crate::cache::lifecycle::PatchState::Downloading {
                 url: "http://old-cdn.example.com/patch/1".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: "hash_old".to_string(),
+                hash: "hash_old".to_string(),
+                signature: None,
+                partial_size: 10,
             },
+            &patch_dir.join("state.json"),
         )
         .unwrap();
 
@@ -3592,20 +3174,20 @@ mod resume_edge_case_tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        // Create sidecar without corresponding partial file.
-        let download_dir = tmp_dir.path().join("downloads");
-        fs::create_dir_all(&download_dir)?;
-        let download_path = download_dir.join("1");
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
+        // Create the lifecycle state.json without a corresponding
+        // partial file (the bytes were deleted out from under us).
+        let patch_dir = tmp_dir.path().join("patches/1");
+        fs::create_dir_all(&patch_dir)?;
+        crate::cache::disk_io::write(
+            &crate::cache::lifecycle::PatchState::Downloaded {
                 url: "http://example.com/patch/1".to_string(),
-                patch_number: 1,
-                expected_size: Some(31),
-                expected_hash: PATCH_HASH.to_string(),
+                hash: PATCH_HASH.to_string(),
+                signature: None,
+                size: 31,
             },
+            &patch_dir.join("state.json"),
         )?;
-        // Note: download_path itself does NOT exist — file was deleted.
+        // Note: patches/1/download itself does NOT exist — file was deleted.
 
         setup_hooks_with_download(|_url, dest: &Path, resume_from: u64| {
             // Should start fresh since partial file is missing.
@@ -3640,19 +3222,18 @@ mod resume_edge_case_tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        // Pre-create a partial download and sidecar.
-        let download_dir = tmp_dir.path().join("downloads");
-        fs::create_dir_all(&download_dir)?;
-        let download_path = download_dir.join("1");
-        fs::write(&download_path, &PATCH_BYTES[..10])?;
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
+        // Pre-create a partial download and Downloading state.json.
+        let patch_dir = tmp_dir.path().join("patches/1");
+        fs::create_dir_all(&patch_dir)?;
+        fs::write(patch_dir.join("download"), &PATCH_BYTES[..10])?;
+        crate::cache::disk_io::write(
+            &crate::cache::lifecycle::PatchState::Downloading {
                 url: "http://example.com/patch/1".to_string(),
-                patch_number: 1,
-                expected_size: None,
-                expected_hash: PATCH_HASH.to_string(),
+                hash: PATCH_HASH.to_string(),
+                signature: None,
+                partial_size: 10,
             },
+            &patch_dir.join("state.json"),
         )?;
 
         setup_hooks_with_download(|_url, dest: &Path, _resume_from: u64| {
@@ -3697,17 +3278,16 @@ mod resume_edge_case_tests {
         let result = crate::update(None);
         assert!(result.is_err());
 
-        // The sidecar should have been written before the download started.
-        let download_path = tmp_dir.path().join("downloads/1");
-        let sidecar_path = crate::download_state::sidecar_path(&download_path);
+        // The lifecycle state.json was written before the download
+        // started; both it and the partial file survive the network
+        // error so the next attempt can resume.
+        let patch_dir = tmp_dir.path().join("patches/1");
         assert!(
-            sidecar_path.exists(),
-            "Sidecar should survive a download failure for retry"
+            patch_dir.join("state.json").exists(),
+            "state.json should survive a download failure for retry"
         );
-
-        // The partial file should still exist.
         assert!(
-            download_path.exists(),
+            patch_dir.join("download").exists(),
             "Partial download should survive for resume"
         );
 
@@ -3785,16 +3365,25 @@ mod resume_edge_case_tests {
         let result = crate::update(None);
         assert!(result.is_err());
 
-        let download_path = tmp_dir.path().join("downloads/1");
-        let sidecar_path = crate::download_state::sidecar_path(&download_path);
+        // Inflate failure marks the patch Bad{InvalidPatchBytes}: the
+        // tombstone state.json survives, but artifact files are gone so
+        // the next attempt either short-circuits (Skip(KnownBad)) or
+        // can re-download from a clean slate.
+        let patch_dir = tmp_dir.path().join("patches/1");
+        assert!(patch_dir.join("state.json").exists(), "tombstone preserved");
         assert!(
-            !download_path.exists(),
-            "download file should be cleaned up after inflate failure"
+            !patch_dir.join("download").exists(),
+            "download artifact removed on inflate failure"
         );
-        assert!(
-            !sidecar_path.exists(),
-            "sidecar should be cleaned up after inflate failure"
-        );
+        let state: crate::cache::lifecycle::PatchState =
+            crate::cache::disk_io::read(&patch_dir.join("state.json")).unwrap();
+        assert!(matches!(
+            state,
+            crate::cache::lifecycle::PatchState::Bad {
+                reason: crate::cache::lifecycle::BadReason::InvalidPatchBytes,
+                ..
+            }
+        ));
 
         Ok(())
     }
@@ -3820,19 +3409,19 @@ mod resume_edge_case_tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        // Simulate the stuck state: full-size partial file plus matching sidecar.
-        let download_dir = tmp_dir.path().join("downloads");
-        fs::create_dir_all(&download_dir)?;
-        let download_path = download_dir.join("1");
-        fs::write(&download_path, PATCH_BYTES)?;
-        crate::download_state::write_download_state(
-            &download_path,
-            &crate::download_state::DownloadState {
+        // Simulate the post-download / pre-install state: full-size
+        // download file plus a `Downloaded` state.json.
+        let patch_dir = tmp_dir.path().join("patches/1");
+        fs::create_dir_all(&patch_dir)?;
+        fs::write(patch_dir.join("download"), PATCH_BYTES)?;
+        crate::cache::disk_io::write(
+            &crate::cache::lifecycle::PatchState::Downloaded {
                 url: "http://example.com/patch/1".to_string(),
-                patch_number: 1,
-                expected_size: Some(PATCH_BYTES.len() as u64),
-                expected_hash: PATCH_HASH.to_string(),
+                hash: PATCH_HASH.to_string(),
+                signature: None,
+                size: PATCH_BYTES.len() as u64,
             },
+            &patch_dir.join("state.json"),
         )?;
 
         // The download hook must NOT be called — bytes are already on disk.

@@ -1,4 +1,4 @@
-mod disk_io;
+pub(crate) mod disk_io;
 pub mod lifecycle;
 mod patch_manager;
 mod signing;
