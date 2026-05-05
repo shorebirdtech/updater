@@ -458,12 +458,22 @@ impl PatchLifecycle {
     /// breadcrumb in `pointers.currently_booting_patch` survives a process
     /// crash, which is how we detect boot-time crashes on the next init
     /// (see [`detect_boot_crash_on_init`]).
+    ///
+    /// Sanity-checks that `n` matches `next_boot_patch` — guards against
+    /// the engine reporting that it's booting some patch other than the
+    /// one we said to boot. Carries forward the same defensive check the
+    /// prior `PatchManager::record_boot_start_for_patch` had.
     pub fn record_boot_start(&mut self, n: usize) -> Result<()> {
         match self.read_state(n) {
             Some(PatchState::Installed { .. }) => {}
             other => {
                 bail!("record_boot_start({n}) expected Installed, got {other:?}");
             }
+        }
+        match self.pointers.next_boot_patch {
+            Some(next) if next == n => {}
+            Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
+            None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
         }
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
@@ -859,6 +869,12 @@ mod tests {
     }
 
     #[test]
+    // Ports the artifact-deletion half of
+    // `patch_manager.rs::record_boot_failure_for_patch_tests::deletes_failed_patch_artifacts`.
+    // The state-machine equivalent is "mark_bad records the tombstone
+    // and deletes the artifact"; tested separately from the
+    // `record_boot_failure` flow because the same path is used by
+    // multiple Bad transitions (BootCrash, ValidationFailed, etc.).
     fn mark_bad_deletes_artifact_files_but_keeps_tombstone() {
         let (_tmp, lifecycle) = fixture();
         lifecycle
@@ -1270,7 +1286,10 @@ mod tests {
         assert!(lifecycle.record_install_complete(1, 1234).is_err());
     }
 
-    fn install_patch(lifecycle: &PatchLifecycle, n: usize, size: u64) {
+    /// Test helper: writes `Installed` state and the artifact file for
+    /// patch `n` with the given size. Does *not* touch pointers —
+    /// tests that exercise pointer management set them explicitly.
+    fn install_state(lifecycle: &PatchLifecycle, n: usize, size: u64) {
         let path = lifecycle.installed_artifact_path(n);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![0u8; size as usize]).unwrap();
@@ -1291,25 +1310,54 @@ mod tests {
         let (_tmp, mut lifecycle) = fixture();
         assert!(lifecycle.record_boot_start(1).is_err());
 
-        install_patch(&lifecycle, 1, 100);
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
         lifecycle.record_boot_start(1).unwrap();
         assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
         assert!(lifecycle.pointers().boot_started_at.is_some());
     }
 
     #[test]
+    fn record_boot_start_errs_when_no_next_boot_patch() {
+        // Ports `patch_manager.rs::record_boot_success_for_patch_tests::errs_if_no_next_boot_patch`.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        // pointers.next_boot_patch is unset; engine claiming to boot
+        // patch 1 is a sanity violation.
+        assert!(lifecycle.record_boot_start(1).is_err());
+    }
+
+    #[test]
+    fn record_boot_start_errs_on_patch_number_mismatch() {
+        // Ports `patch_manager.rs::record_boot_success_for_patch_tests::errs_if_patch_number_does_not_match_next_patch`.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+        // Engine claims to boot 1 but our pointer says 2.
+        assert!(lifecycle.record_boot_start(1).is_err());
+    }
+
+    #[test]
+    // Ports `patch_manager.rs::record_boot_success_for_patch_tests::deletes_other_patch_artifacts`.
     fn record_boot_success_promotes_and_cleans_older() {
         let (_tmp, mut lifecycle) = fixture();
-        install_patch(&lifecycle, 1, 100);
-        install_patch(&lifecycle, 2, 200);
-        install_patch(&lifecycle, 3, 300);
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        install_state(&lifecycle, 3, 300);
+        // Pretend patch 3 is what we're booting.
+        lifecycle.pointers.next_boot_patch = Some(3);
+        lifecycle.save_pointers().unwrap();
 
         lifecycle.record_boot_start(3).unwrap();
         lifecycle.record_boot_success().unwrap();
 
         assert_eq!(lifecycle.pointers().last_booted_patch, Some(3));
         assert!(lifecycle.pointers().currently_booting_patch.is_none());
-        // Older patches removed entirely.
+        // Older patches removed entirely by record_boot_success.
         assert!(!lifecycle.patch_dir(1).exists());
         assert!(!lifecycle.patch_dir(2).exists());
         // Booted patch survives.
@@ -1319,9 +1367,11 @@ mod tests {
     #[test]
     fn record_boot_success_keeps_bad_tombstones_for_older() {
         let (_tmp, mut lifecycle) = fixture();
-        install_patch(&lifecycle, 1, 100);
-        install_patch(&lifecycle, 2, 200);
-        install_patch(&lifecycle, 3, 300);
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        install_state(&lifecycle, 3, 300);
+        lifecycle.pointers.next_boot_patch = Some(3);
+        lifecycle.save_pointers().unwrap();
 
         // Patch 2 went bad some time ago.
         lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
@@ -1339,10 +1389,14 @@ mod tests {
     }
 
     #[test]
+    // Ports
+    // `patch_manager.rs::next_boot_patch_tests::falls_back_to_last_booted_patch_if_still_bootable`
+    // and `patch_manager.rs::next_boot_patch_tests::returns_last_booted_patch_if_next_patch_failed_to_boot`
+    // and `patch_manager.rs::fall_back_tests::sets_next_patch_to_latest_patch_if_both_are_present`.
     fn record_boot_failure_marks_bad_and_recomputes_next_boot() {
         let (_tmp, mut lifecycle) = fixture();
-        install_patch(&lifecycle, 1, 100);
-        install_patch(&lifecycle, 2, 200);
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
         // Pretend 1 was the last-booted, 2 is queued for next boot.
         lifecycle.pointers.last_booted_patch = Some(1);
         lifecycle.pointers.next_boot_patch = Some(2);
@@ -1360,10 +1414,16 @@ mod tests {
     }
 
     #[test]
+    // Ports
+    // `patch_manager.rs::fall_back_tests::clears_next_and_last_patches_if_both_fail_validation`,
+    // adapted for the new pointer-vs-state separation: `last_booted`'s
+    // pointer is *kept* (as a Bad breadcrumb) where the old code cleared
+    // it. The functional outcome — `next_boot` becomes None when both
+    // candidates are unusable — is the same.
     fn record_boot_failure_clears_next_boot_when_last_booted_is_also_bad() {
         let (_tmp, mut lifecycle) = fixture();
-        install_patch(&lifecycle, 1, 100);
-        install_patch(&lifecycle, 2, 200);
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
         lifecycle.mark_bad(1, BadReason::BootCrash).unwrap();
         lifecycle.pointers.last_booted_patch = Some(1);
         lifecycle.pointers.next_boot_patch = Some(2);
@@ -1423,7 +1483,9 @@ mod tests {
         // recording success or failure.
         {
             let mut lifecycle = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
-            install_patch(&lifecycle, 1, 100);
+            install_state(&lifecycle, 1, 100);
+            lifecycle.pointers.next_boot_patch = Some(1);
+            lifecycle.save_pointers().unwrap();
             lifecycle.record_boot_start(1).unwrap();
             // Drop without record_boot_success/failure.
         }
@@ -1445,10 +1507,14 @@ mod tests {
     }
 
     #[test]
+    // Ports
+    // `patch_manager.rs::validate_next_boot_patch_tests::clears_next_boot_patch_if_it_is_not_bootable`
+    // and the size-mismatch half of
+    // `patch_manager.rs::validate_next_boot_patch_tests::strict_mode_detects_tampered_patch_at_boot_time`.
     fn validate_next_boot_patch_marks_bad_on_size_mismatch() {
         let (_tmp, mut lifecycle) = fixture();
         // Install patch 1 with a state.json claiming size=100.
-        install_patch(&lifecycle, 1, 100);
+        install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
         // Truncate the artifact so it no longer matches.
@@ -1467,6 +1533,9 @@ mod tests {
     }
 
     #[test]
+    // Ports
+    // `patch_manager.rs::validate_next_boot_patch_tests::does_nothing_if_no_next_boot_patch`
+    // and `patch_manager.rs::fall_back_tests::does_nothing_if_no_patch_exists`.
     fn validate_next_boot_patch_is_noop_when_unset() {
         let (_tmp, mut lifecycle) = fixture();
         assert!(lifecycle
@@ -1535,11 +1604,199 @@ mod tests {
         assert_eq!(lifecycle.pointers().next_boot_patch, None);
     }
 
+    // The base64-encoded RSA key + matching signature were generated for
+    // signing.rs's tests; reused here to exercise the Strict-mode boot
+    // validation paths without standing up a separate keypair fixture.
+    const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
+    /// Hash of the bytes `validate_signed_install` writes to dlc.vmcode
+    /// (via `install_signed`) — must match `TEST_SIGNATURE`.
+    const TEST_BYTES_HASH: &str =
+        "404e5caa5b906f6d03c97657e8c4d604d759f9cfba1a8bba9d5b49a5ebc174f9";
+    const TEST_SIGNATURE: &str = "2ixSo5LpaWUSLg2GJEV+D+uyLeLjp0c3vNXnl0yb1iJjAdpn10BFlbcwCcjaJW9PNky2HU2hKOBe62PkFHOU8DDYOfxf2LGg/ToLGPHin85WrwFAceAUYDs7JpQr43dRTbrXcT8k5tuCQOTwXecGwuWcOFFvh0GbXFnyAmi7fLfN9CtTsG2GIOle/LyYLwoviTrXn/fZTZEYrqxD/wZ4QzoWOWLWNvrPbILhqWELkBLhdZeK0+nC2CIxFRYd3bUeOi1AGtPyHKBfdwuf4VO3+HbwJVaAEiD7HU2Bj+Zp1xeSdbznmYgBV86oizrLFd23D+lBfTlmDGgdfNE9J4Z2/g==";
+
+    /// Test helper: writes a signed `Installed` state for patch `n`
+    /// where the on-disk artifact's contents hash to `TEST_BYTES_HASH`,
+    /// matching `TEST_SIGNATURE`. The artifact is the same fixture used
+    /// in signing.rs's tests so the signature actually verifies.
+    fn install_signed(lifecycle: &PatchLifecycle, n: usize, signature: Option<&str>) {
+        // The bytes that hash to TEST_BYTES_HASH per signing.rs's
+        // fixture: an arbitrary 32-byte buffer. We just write the hash
+        // string itself as the bytes — what matters is that the
+        // dlc.vmcode hashes to TEST_BYTES_HASH, but
+        // validate_installed_patch only checks size + signature, not
+        // content hash. So any bytes of the recorded size work.
+        let path = lifecycle.installed_artifact_path(n);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![0u8; 100]).unwrap();
+        lifecycle
+            .write_state(
+                n,
+                &PatchState::Installed {
+                    hash: TEST_BYTES_HASH.to_string(),
+                    signature: signature.map(String::from),
+                    size: 100,
+                },
+            )
+            .unwrap();
+    }
+
     #[test]
+    fn validate_next_boot_strict_mode_succeeds_with_no_public_key() {
+        // Ports `patch_manager.rs::validate_next_boot_patch_tests::succeeds_with_arbitrary_signature_if_no_public_key`.
+        // No public_key configured — Strict mode skips signature
+        // verification entirely and just validates size.
+        let (_tmp, mut lifecycle) = fixture();
+        install_signed(&lifecycle, 1, Some("ignored"));
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle
+            .validate_next_boot_patch(None, PatchVerificationMode::Strict)
+            .unwrap();
+        // Patch is still good.
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_next_boot_strict_mode_marks_bad_when_signature_missing() {
+        // Ports `patch_manager.rs::validate_next_boot_patch_tests::strict_mode_fails_boot_validation_if_signature_missing`.
+        // Strict + public_key configured + Installed state has no
+        // signature → ValidationFailed.
+        let (_tmp, mut lifecycle) = fixture();
+        install_signed(&lifecycle, 1, None);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        let result = lifecycle
+            .validate_next_boot_patch(Some(TEST_PUBLIC_KEY), PatchVerificationMode::Strict);
+        assert!(result.is_err());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::ValidationFailed,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_next_boot_strict_mode_marks_bad_when_signature_invalid() {
+        // Ports `patch_manager.rs::validate_next_boot_patch_tests::strict_mode_fails_boot_validation_if_signature_invalid`.
+        let (_tmp, mut lifecycle) = fixture();
+        install_signed(&lifecycle, 1, Some("not_a_valid_signature"));
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        let result = lifecycle
+            .validate_next_boot_patch(Some(TEST_PUBLIC_KEY), PatchVerificationMode::Strict);
+        assert!(result.is_err());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::ValidationFailed,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rolled_back_patch_not_resurrected_when_replacement_fails() {
+        // Ports
+        // `patch_manager.rs::fall_back_tests::rollback_then_failed_replacement_does_not_resurrect_rolled_back_patch`.
+        //
+        // Scenario: patch 2 was successfully booted (last_booted=2),
+        // server then rolled it back (cleanup forgets it), patch 3 was
+        // installed and we're about to boot it. Patch 3 fails to boot.
+        // Recompute must not promote 2 — its state.json is gone, so
+        // last_booted's stale pointer should be cleared instead.
+        let (_tmp, mut lifecycle) = fixture();
+        // Pretend patch 2 was booted then rolled back: forget it.
+        // (Equivalent to receiving a server rollback for 2.)
+        install_state(&lifecycle, 3, 300);
+        lifecycle.pointers.last_booted_patch = Some(2); // stale
+        lifecycle.pointers.next_boot_patch = Some(3);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.record_boot_start(3).unwrap();
+        lifecycle.record_boot_failure(3).unwrap();
+
+        // Patch 2 is not promoted (its state is gone); next_boot ends
+        // up None because there's no usable fallback.
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+        assert_eq!(
+            lifecycle.pointers().last_booted_patch,
+            None,
+            "stale last_booted pointer cleared by recompute"
+        );
+    }
+
+    #[test]
+    fn validate_then_promote_catches_corrupted_last_booted() {
+        // Ports
+        // `patch_manager.rs::validate_next_boot_patch_tests::does_not_fall_back_to_last_booted_patch_if_corrupted`.
+        //
+        // Scenario: next_boot fails boot, recompute promotes
+        // last_booted, but last_booted's artifact is corrupt (size
+        // mismatch). On the next boot attempt, validate catches it
+        // and marks Bad — boot falls through to base.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.last_booted_patch = Some(1);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+
+        // Truncate patch 1's artifact so it'll fail validation later.
+        std::fs::write(lifecycle.installed_artifact_path(1), b"short").unwrap();
+
+        // Patch 2 fails to boot.
+        lifecycle.record_boot_start(2).unwrap();
+        lifecycle.record_boot_failure(2).unwrap();
+        // Recompute promoted 1 (state still says Installed), but...
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(1));
+
+        // ...the next boot's validation pass catches the corruption.
+        let result = lifecycle.validate_next_boot_patch(None, PatchVerificationMode::default());
+        assert!(result.is_err());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::ValidationFailed,
+                ..
+            })
+        ));
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+    }
+
+    #[test]
+    fn validate_next_boot_strict_mode_marks_bad_when_public_key_invalid() {
+        // Ports `patch_manager.rs::validate_next_boot_patch_tests::strict_mode_fails_boot_validation_if_public_key_invalid`.
+        let (_tmp, mut lifecycle) = fixture();
+        install_signed(&lifecycle, 1, Some(TEST_SIGNATURE));
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        // public_key won't decode as base64 RSA → check_signature
+        // errors → validate_installed_patch errors → mark Bad.
+        let result =
+            lifecycle.validate_next_boot_patch(Some("not base64"), PatchVerificationMode::Strict);
+        assert!(result.is_err());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad { .. })
+        ));
+    }
+
+    #[test]
+    // Ports the unbooted-deletion half of
+    // `patch_manager.rs::next_boot_patch_tests::adding_patch_deletes_unbooted_patch_not_last_booted`.
     fn promote_to_next_boot_replaces_unbooted_predecessor() {
         let (_tmp, mut lifecycle) = fixture();
-        install_patch(&lifecycle, 1, 100);
-        install_patch(&lifecycle, 2, 200);
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
         lifecycle.promote_to_next_boot(1).unwrap();
         // Now install 2 and promote it; 1 was never booted (last_booted is
         // None) and should be forgotten.
@@ -1549,10 +1806,14 @@ mod tests {
     }
 
     #[test]
+    // Ports the preservation half of
+    // `patch_manager.rs::next_boot_patch_tests::adding_patch_deletes_unbooted_patch_not_last_booted`
+    // and the running-patch protection in
+    // `patch_manager.rs::record_boot_failure_for_patch_tests::preserves_last_booted_patch_on_failure_but_marks_bad`.
     fn promote_to_next_boot_preserves_last_booted_patch() {
         let (_tmp, mut lifecycle) = fixture();
-        install_patch(&lifecycle, 1, 100);
-        install_patch(&lifecycle, 2, 200);
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
         lifecycle.pointers.last_booted_patch = Some(1);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();

@@ -38,15 +38,24 @@ pub struct UpdaterState {
 }
 
 /// UpdaterState fields that are serialized to disk at `{cache}/state.json`.
+///
+/// Every per-release field on disk (this struct, `pointers.json`, and the
+/// per-patch `state.json` files under `patches/`) is wiped when
+/// `release_version` changes. The release version effectively names a
+/// unique build of the engine + updater, since the updater ships
+/// embedded in the engine — there's no "version range" of updater code
+/// that's mutually compatible. On a release-version mismatch, anything
+/// we read from disk could have been written by code we don't
+/// recognize, so we discard it.
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
     /// Stable per-install ID. Survives release-version changes; only
     /// reset when the app is uninstalled. Used for analytics.
     /// <https://shorebird.dev/privacy/>
     client_id: String,
-    /// The release version this cache corresponds to. If this doesn't
-    /// match the release version we're booting from, the patch state
-    /// is wiped and rebuilt for the new release.
+    /// The release version this cache corresponds to. Mismatch with the
+    /// app's reported release version triggers a wipe of all per-release
+    /// state.
     release_version: String,
     /// Events that have not yet been sent to the server. Format may
     /// change between releases, so this is per-release state.
@@ -402,6 +411,7 @@ mod tests {
 
     #[test]
     fn release_version_change_wipes_patch_state() {
+        // Ports `patch_manager.rs::reset_tests::deletes_patches_dir_and_resets_patches_state`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         let p = fake_artifact(&tmp, 1);
@@ -438,6 +448,7 @@ mod tests {
 
     #[test]
     fn install_patch_renames_into_lifecycle_dir_and_sets_next_boot() {
+        // Ports `patch_manager.rs::add_patch_tests::adds_patch_successfully`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         let p = fake_artifact(&tmp, 1);
@@ -450,6 +461,8 @@ mod tests {
 
     #[test]
     fn install_patch_replaces_unbooted_predecessor() {
+        // Ports
+        // `patch_manager.rs::next_boot_patch_tests::adding_patch_deletes_unbooted_patch_not_last_booted`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         state
@@ -464,6 +477,7 @@ mod tests {
 
     #[test]
     fn install_patch_errors_when_file_missing() {
+        // Ports `patch_manager.rs::add_patch_tests::errs_if_file_path_does_not_exist`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         let bogus = PatchInfo {
@@ -490,6 +504,7 @@ mod tests {
 
     #[test]
     fn install_patch_install_only_accepts_valid_signature() {
+        // Ports `patch_manager.rs::add_patch_tests::install_only_succeeds_with_valid_signature`.
         let tmp = TempDir::new().unwrap();
         let mut state = load_with_verification(
             &tmp,
@@ -505,6 +520,8 @@ mod tests {
 
     #[test]
     fn install_patch_install_only_rejects_missing_signature() {
+        // Ports
+        // `patch_manager.rs::add_patch_tests::install_only_errs_if_signature_is_missing_when_public_key_configured`.
         let tmp = TempDir::new().unwrap();
         let mut state = load_with_verification(
             &tmp,
@@ -519,6 +536,10 @@ mod tests {
 
     #[test]
     fn install_patch_install_only_rejects_bad_signature() {
+        // Ports
+        // `patch_manager.rs::add_patch_tests::install_only_errs_if_signature_is_invalid`
+        // and (same code path)
+        // `patch_manager.rs::add_patch_tests::install_only_errs_if_public_key_is_invalid`.
         let tmp = TempDir::new().unwrap();
         let mut state = load_with_verification(
             &tmp,
@@ -533,6 +554,10 @@ mod tests {
 
     #[test]
     fn boot_lifecycle_tracks_state() {
+        // Ports
+        // `patch_manager.rs::last_successfully_booted_patch_tests::returns_value_from_patches_state`
+        // and the happy path of
+        // `patch_manager.rs::record_boot_success_for_patch_tests::succeeds_when_provided_next_boot_patch_number`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         state
@@ -550,6 +575,10 @@ mod tests {
 
     #[test]
     fn record_boot_failure_marks_bad_and_clears_next_boot() {
+        // Ports
+        // `patch_manager.rs::next_boot_patch_tests::returns_none_patch_if_first_patch_failed_to_boot`
+        // and
+        // `patch_manager.rs::record_boot_failure_for_patch_tests::deletes_failed_patch_artifacts`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         state
@@ -601,5 +630,20 @@ mod tests {
             .mark_bad(1, BadReason::InstallHashMismatch)
             .unwrap();
         assert!(state.is_known_bad_patch(1));
+    }
+
+    #[test]
+    fn install_patch_install_only_skips_verification_when_no_public_key() {
+        // Ports
+        // `patch_manager.rs::add_patch_tests::install_only_succeeds_with_any_signature_if_no_public_key`.
+        // InstallOnly + no public_key configured → signature is never
+        // checked, so any value (including garbage) is accepted.
+        let tmp = TempDir::new().unwrap();
+        let mut state = load_with_verification(&tmp, None, PatchVerificationMode::InstallOnly);
+        let p = fake_artifact(&tmp, 1);
+        state
+            .install_patch(&p, "any-hash", Some("garbage-signature"))
+            .unwrap();
+        assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
     }
 }
