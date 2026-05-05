@@ -30,8 +30,13 @@ import 'generated/test_hooks_bindings.g.dart';
 import 'helpers/build.dart';
 
 void main() {
+  // Set in setUpAll exactly when the cdylib build/load failed. The
+  // pair (`skipReason`, `testHooks`) is contractually mutually
+  // exclusive: a null `skipReason` means `testHooks` is initialized,
+  // and tests early-return on a non-null `skipReason` before touching
+  // `testHooks`.
   String? skipReason;
-  TestHooksBindings? testHooks;
+  late final TestHooksBindings testHooks;
 
   setUpAll(() async {
     try {
@@ -51,19 +56,20 @@ void main() {
   group('library_test_hooks', () {
     test('exposes both production and test-hook symbols', () {
       // `markTestSkipped` only flags the test as skipped — it does not
-      // abort execution. We have to early-return ourselves, otherwise
-      // the body below would crash on the unset `testHooks` when the
+      // abort execution. Early-return after marking, otherwise the body
+      // below would touch the uninitialized `testHooks` when the
       // setUpAll build couldn't run (e.g., no Rust toolchain on the
       // host).
-      if (skipReason != null) {
-        markTestSkipped(skipReason!);
+      final reason = skipReason;
+      if (reason != null) {
+        markTestSkipped(reason);
         return;
       }
 
       // Test-only symbol layered on top of the production C API.
       // Calling on a process with no prior init clears already-empty
       // globals — should be a no-op, not a crash.
-      expect(testHooks!.shorebird_test_reset, returnsNormally);
+      expect(testHooks.shorebird_test_reset, returnsNormally);
 
       // Production symbols flow through the same library. With no
       // init, `shorebird_current_boot_patch_number` returns the
@@ -73,7 +79,7 @@ void main() {
       expect(updater.nextPatchNumber(), 0);
 
       // Reset is still callable after exercising production symbols.
-      expect(testHooks!.shorebird_test_reset, returnsNormally);
+      expect(testHooks.shorebird_test_reset, returnsNormally);
     });
   });
 }
