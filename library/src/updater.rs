@@ -4,6 +4,10 @@ use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
+// PathBuf is only used by `libapp_path_from_settings`, which is itself
+// gated to non-android, non-test builds.
+#[cfg(not(any(target_os = "android", test)))]
+use std::path::PathBuf;
 
 use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{bail, Context, Result};
