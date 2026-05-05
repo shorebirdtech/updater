@@ -1683,27 +1683,30 @@ mod tests {
         assert_eq!(lifecycle.pointers().next_boot_patch, None);
     }
 
-    // The base64-encoded RSA key + matching signature were generated for
-    // signing.rs's tests; reused here to exercise the Strict-mode boot
-    // validation paths without standing up a separate keypair fixture.
+    // base64-encoded RSA public key from the prior `signing.rs` /
+    // `patch_manager.rs` test fixtures. Reused here so the Strict-mode
+    // happy path can verify a real signature without committing a
+    // private key to the repo.
     const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
-    /// Hash of the bytes `validate_signed_install` writes to dlc.vmcode
-    /// (via `install_signed`) — must match `TEST_SIGNATURE`.
-    const TEST_BYTES_HASH: &str =
-        "404e5caa5b906f6d03c97657e8c4d604d759f9cfba1a8bba9d5b49a5ebc174f9";
-    const TEST_SIGNATURE: &str = "2ixSo5LpaWUSLg2GJEV+D+uyLeLjp0c3vNXnl0yb1iJjAdpn10BFlbcwCcjaJW9PNky2HU2hKOBe62PkFHOU8DDYOfxf2LGg/ToLGPHin85WrwFAceAUYDs7JpQr43dRTbrXcT8k5tuCQOTwXecGwuWcOFFvh0GbXFnyAmi7fLfN9CtTsG2GIOle/LyYLwoviTrXn/fZTZEYrqxD/wZ4QzoWOWLWNvrPbILhqWELkBLhdZeK0+nC2CIxFRYd3bUeOi1AGtPyHKBfdwuf4VO3+HbwJVaAEiD7HU2Bj+Zp1xeSdbznmYgBV86oizrLFd23D+lBfTlmDGgdfNE9J4Z2/g==";
 
-    /// Test helper: writes a signed `Installed` state for patch `n`
-    /// where the on-disk artifact's contents hash to `TEST_BYTES_HASH`,
-    /// matching `TEST_SIGNATURE`. The artifact is the same fixture used
-    /// in signing.rs's tests so the signature actually verifies.
+    /// SHA256 of the single-byte file content `b"1"`. Matches the
+    /// `INFLATED_PATCH_HASH` constant from the prior `patch_manager`
+    /// tests — the same trick they used: write a 1-byte file `"1"`,
+    /// declare its hash as Installed.hash, sign with the matching
+    /// private key.
+    const INFLATED_PATCH_HASH: &str =
+        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
+    /// Real signature of `INFLATED_PATCH_HASH` produced with the
+    /// private key matching `TEST_PUBLIC_KEY`. Carried over verbatim
+    /// from the prior `patch_manager.rs::SIGNATURE` constant.
+    const INFLATED_PATCH_SIGNATURE: &str = "ZGccldv01XqHQ76bXuKV/9EQnNK0Q+reQ9bJHVnGfLldF+BLRx0divgPfKP5Df9BJPA3dw1Z1VortfepmMGebP3kS593l5zoktu9MIepxvRAFWNKE5PDTIIvCL/ddTPEHt6NNCeD6HLOMLzbEX3cFZa+lq3UymGi0aqA5DlXirJBGtopojc9nOXZ22n/qHNZIHEkGcqKbSMSK9oC55whKHnlJTbCXdmSyDc65B4PcgseqJom1riVK3XGW1YMrSpuMAU+CDT7HhdESmI1UtH1bYeBITfRhQztdDTfti2vJTf2Y+lYC99CFiISgD7f1m0KUcC+VnEAMZSYtgxSk6AX2A==";
+
+    /// Test helper: writes an Installed state with a 100-byte artifact
+    /// whose hash *won't* match the recorded hash. Suitable for the
+    /// failure-path Strict-mode tests — those only need the
+    /// signature-verification call to fail somehow (missing /
+    /// invalid / bad pub key) and don't exercise the file-hash leg.
     fn install_signed(lifecycle: &PatchLifecycle, n: usize, signature: Option<&str>) {
-        // The bytes that hash to TEST_BYTES_HASH per signing.rs's
-        // fixture: an arbitrary 32-byte buffer. We just write the hash
-        // string itself as the bytes — what matters is that the
-        // dlc.vmcode hashes to TEST_BYTES_HASH, but
-        // validate_installed_patch only checks size + signature, not
-        // content hash. So any bytes of the recorded size work.
         let path = lifecycle.installed_artifact_path(n);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![0u8; 100]).unwrap();
@@ -1711,12 +1714,53 @@ mod tests {
             .write_state(
                 n,
                 &PatchState::Installed {
-                    hash: TEST_BYTES_HASH.to_string(),
+                    hash: "irrelevant-for-failure-paths".to_string(),
                     signature: signature.map(String::from),
                     size: 100,
                 },
             )
             .unwrap();
+    }
+
+    /// Test helper for the Strict-mode happy path. Writes the
+    /// 1-byte artifact `b"1"` (whose SHA256 is `INFLATED_PATCH_HASH`)
+    /// and an `Installed` state whose hash + signature match. Strict
+    /// validation hashes the file, then verifies the signature
+    /// against that hash + the public key — all three line up here.
+    fn install_with_valid_signature(lifecycle: &PatchLifecycle, n: usize) {
+        let path = lifecycle.installed_artifact_path(n);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"1").unwrap();
+        lifecycle
+            .write_state(
+                n,
+                &PatchState::Installed {
+                    hash: INFLATED_PATCH_HASH.to_string(),
+                    signature: Some(INFLATED_PATCH_SIGNATURE.to_string()),
+                    size: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    // Ports
+    // `patch_manager.rs::validate_next_boot_patch_tests::strict_mode_succeeds_with_valid_signature_at_boot_time`.
+    fn validate_next_boot_strict_mode_succeeds_with_valid_signature() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_with_valid_signature(&lifecycle, 1);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle
+            .validate_next_boot_patch(Some(TEST_PUBLIC_KEY), PatchVerificationMode::Strict)
+            .unwrap();
+        // Patch survived — still Installed, still next_boot.
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(1));
     }
 
     #[test]
@@ -1779,6 +1823,42 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    // Ports
+    // `patch_manager.rs::record_boot_failure_for_patch_tests::preserves_last_booted_patch_on_failure_but_marks_bad`.
+    //
+    // Scenario: patch 1 was successfully booted (last_booted=1,
+    // next_boot=1). Then patch 1 fails to boot. The new behavior
+    // *keeps* the last_booted pointer pointing at 1 — the patch is
+    // now Bad{BootCrash} but the historical "this is what last
+    // booted" remains as a useful breadcrumb. is_known_bad_patch
+    // returns true. next_boot is None (recompute can't promote a
+    // Bad patch).
+    fn record_boot_failure_keeps_last_booted_pointer_when_failed_patch_was_last_booted() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.last_booted_patch = Some(1);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_failure(1).unwrap();
+
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::BootCrash,
+                ..
+            })
+        ));
+        assert_eq!(
+            lifecycle.pointers().last_booted_patch,
+            Some(1),
+            "last_booted breadcrumb preserved even though the patch is now Bad"
+        );
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
     }
 
     #[test]
@@ -1854,7 +1934,7 @@ mod tests {
     fn validate_next_boot_strict_mode_marks_bad_when_public_key_invalid() {
         // Ports `patch_manager.rs::validate_next_boot_patch_tests::strict_mode_fails_boot_validation_if_public_key_invalid`.
         let (_tmp, mut lifecycle) = fixture();
-        install_signed(&lifecycle, 1, Some(TEST_SIGNATURE));
+        install_signed(&lifecycle, 1, Some(INFLATED_PATCH_SIGNATURE));
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
 
