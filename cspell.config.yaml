@@ -39,8 +39,9 @@ words:
   - dllexport
   - dlopen
   - downloadables
-  - EDQUOT
   - EACCES
+  - EDQUOT
+  - embedder
   - embedders
   - EOCD
   - endtemplate
