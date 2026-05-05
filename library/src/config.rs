@@ -56,7 +56,10 @@ pub fn set_running_patch_number(patch_number: Option<usize>) {
 }
 
 /// Unit tests should call this to reset the config between tests.
-#[cfg(test)]
+/// Also exposed (via the `test-hooks` Cargo feature) to the
+/// `library_test_hooks` cdylib so Dart-side integration tests can reset
+/// state between scenarios without spawning a subprocess.
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn testing_reset_config() {
     with_config_mut(|config| {
         *config = None;

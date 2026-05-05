@@ -11,6 +11,13 @@ edition = "2021"
 # "staticlib" is used by the engine build for linking into libflutter.so
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[features]
+# Exposes a small set of internal Rust items (e.g. `testing_reset_config`)
+# to sibling crates that need to drive the updater from a test harness.
+# Production builds (the cdylib/staticlib that ships in the engine) do not
+# enable this feature; only `library_test_hooks` does.
+test-hooks = []
+
 [dependencies]
 # Used for error handling for now.
 anyhow = "1.0.69"

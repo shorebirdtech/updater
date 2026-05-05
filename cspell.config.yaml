@@ -39,6 +39,7 @@ words:
   - dllexport
   - dlopen
   - EDQUOT
+  - EACCES
   - embedders
   - EOCD
   - endtemplate
@@ -62,8 +63,10 @@ words:
   - pubspec
   - repr
   - reqwest
+  - rlib
   - rsplit
   - rollouts
+  - RTLD
   - rustflags
   - rustls
   - rustup
@@ -77,6 +80,8 @@ words:
   - ureq
   - unbootable
   - unbooted
+  - unreviewable
+  - unwritable
   - usize
   - Swatinem
   - taiki

@@ -43,6 +43,13 @@ jobs:
               - ./.github/workflows/main.yaml
               - ./.github/actions/flutter_package/action.yaml
               - shorebird_code_push/**
+              # Integration tests under shorebird_code_push/test/integration
+              # build and load the library_test_hooks cdylib, which
+              # re-exports the production updater C API. A change to
+              # either crate can break the suite, so trigger the
+              # flutter package job on those paths too.
+              - library/**
+              - library_test_hooks/**
 
       - uses: dorny/paths-filter@v4
         name: Build Detection
@@ -55,6 +62,10 @@ jobs:
             patch:
               - ./.github/actions/rust_crate/action.yaml
               - patch/**
+            library_test_hooks:
+              - ./.github/actions/rust_crate/action.yaml
+              - library/**
+              - library_test_hooks/**
 
   build_rust_crates:
     needs: changes

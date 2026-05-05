@@ -1,5 +1,11 @@
 [workspace]
-members = ["library", "patch"]
+members = ["library", "patch", "library_test_hooks"]
+# `library_test_hooks` is excluded from default-members so plain
+# `cargo build` / `cargo test` invocations don't enable the
+# `test-hooks` feature on `updater` (Cargo unifies features within a
+# single build). The integration test suite explicitly builds it with
+# `cargo build -p library_test_hooks`.
+default-members = ["library", "patch"]
 resolver = "2"
 
 [profile.release]
