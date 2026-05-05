@@ -13,6 +13,13 @@
 // The unit tests under `test/src/` are unaffected: they only use
 // `_MockUpdaterBindings` and never load the real cdylib.
 
+// `setUpAll` shells out to `cargo build -p library_test_hooks`. On a
+// cold checkout that compiles `updater` and its dependencies and can
+// take a couple of minutes — well past `package:test`'s default 30s
+// per-test timeout, which also covers `setUpAll`.
+@Timeout(Duration(minutes: 10))
+library;
+
 import 'dart:ffi';
 
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
@@ -24,7 +31,7 @@ import 'helpers/build.dart';
 
 void main() {
   String? skipReason;
-  late TestHooksBindings testHooks;
+  TestHooksBindings? testHooks;
 
   setUpAll(() async {
     try {
@@ -41,16 +48,22 @@ void main() {
     }
   });
 
-  setUp(() {
-    if (skipReason != null) markTestSkipped(skipReason!);
-  });
-
   group('library_test_hooks', () {
     test('exposes both production and test-hook symbols', () {
+      // `markTestSkipped` only flags the test as skipped — it does not
+      // abort execution. We have to early-return ourselves, otherwise
+      // the body below would crash on the unset `testHooks` when the
+      // setUpAll build couldn't run (e.g., no Rust toolchain on the
+      // host).
+      if (skipReason != null) {
+        markTestSkipped(skipReason!);
+        return;
+      }
+
       // Test-only symbol layered on top of the production C API.
       // Calling on a process with no prior init clears already-empty
       // globals — should be a no-op, not a crash.
-      expect(testHooks.shorebird_test_reset, returnsNormally);
+      expect(testHooks!.shorebird_test_reset, returnsNormally);
 
       // Production symbols flow through the same library. With no
       // init, `shorebird_current_boot_patch_number` returns the
@@ -60,7 +73,7 @@ void main() {
       expect(updater.nextPatchNumber(), 0);
 
       // Reset is still callable after exercising production symbols.
-      expect(testHooks.shorebird_test_reset, returnsNormally);
+      expect(testHooks!.shorebird_test_reset, returnsNormally);
     });
   });
 }
