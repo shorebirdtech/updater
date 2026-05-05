@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 use crate::events::PatchEvent;
 use crate::yaml::PatchVerificationMode;
 
-use super::lifecycle::{installed_artifact_path, PatchLifecycle, PatchState};
-use super::{disk_io, signing, PatchInfo};
+use super::lifecycle::{PatchLifecycle, PatchState};
+#[cfg(test)]
+use super::signing;
+use super::{disk_io, PatchInfo};
 
 const STATE_FILE_NAME: &str = "state.json";
 
@@ -191,10 +193,19 @@ impl UpdaterState {
 
 /// Patch lifecycle accessors — UpdaterState delegates to [`PatchLifecycle`].
 impl UpdaterState {
+    /// Direct access to the lifecycle. Wrapping every transition in a
+    /// forwarding method on UpdaterState would be churn for no reader
+    /// benefit, so callers are expected to reach in for transitions
+    /// (`decide_start`, `record_download_*`, `mark_bad`, etc). The
+    /// boot-lifecycle / install / boot-failure helpers below are kept
+    /// as wrappers because they have invariants (e.g. patch number
+    /// argument validation, breadcrumb clearing) that a direct caller
+    /// would have to know about.
     pub fn lifecycle(&self) -> &PatchLifecycle {
         &self.lifecycle
     }
 
+    /// See [`lifecycle`].
     pub fn lifecycle_mut(&mut self) -> &mut PatchLifecycle {
         &mut self.lifecycle
     }
@@ -264,6 +275,16 @@ impl UpdaterState {
     /// installed location, validates the signature in `InstallOnly`
     /// mode, transitions the patch to `Installed`, and promotes it to
     /// `next_boot_patch`.
+    ///
+    /// Test-only entry point. The production update flow inflates
+    /// directly into the lifecycle's installed location and transitions
+    /// `Downloaded → Installed` via `lifecycle::record_install_complete`,
+    /// so no production caller goes through this function. Gated to
+    /// `#[cfg(test)]` so a future refactor can't accidentally
+    /// reintroduce the divergence — direct lifecycle calls are the
+    /// canonical path. Used by `test_utils::install_fake_patch` and
+    /// the tests below.
+    #[cfg(test)]
     pub fn install_patch(
         &mut self,
         patch: &PatchInfo,
@@ -281,11 +302,29 @@ impl UpdaterState {
                 signing::check_signature(hash, sig, public_key)?;
             }
         }
-        let installed_path = installed_artifact_path(&self.cache_dir, patch.number);
+        let installed_path = self.lifecycle.installed_artifact_path(patch.number);
         if let Some(parent) = installed_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Defensive: if a prior partial install left a `dlc.vmcode`
+        // behind, remove it before renaming so behavior is OS-agnostic
+        // (POSIX `rename` overwrites silently; Windows fails).
+        if installed_path.exists() {
+            std::fs::remove_file(&installed_path)?;
+        }
         std::fs::rename(&patch.path, &installed_path)?;
+        // Mirror `record_install_complete`'s cleanup of the now-stale
+        // compressed download bytes if any are sitting in the patch dir.
+        let download = self.lifecycle.download_artifact_path(patch.number);
+        if download.exists() {
+            if let Err(e) = std::fs::remove_file(&download) {
+                shorebird_error!(
+                    "Failed to remove stale download for patch {}: {:?}",
+                    patch.number,
+                    e
+                );
+            }
+        }
         let installed_size = std::fs::metadata(&installed_path)?.len();
         self.lifecycle.write_state(
             patch.number,
@@ -316,7 +355,7 @@ impl UpdaterState {
 
     fn patch_info(&self, n: usize) -> PatchInfo {
         PatchInfo {
-            path: installed_artifact_path(&self.cache_dir, n),
+            path: self.lifecycle.installed_artifact_path(n),
             number: n,
         }
     }
@@ -424,7 +463,7 @@ mod tests {
             .install_patch(&fake_artifact(&tmp, 2), "h2", None)
             .unwrap();
         assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
-        assert!(!installed_artifact_path(tmp.path(), 1).exists());
+        assert!(!state.lifecycle.installed_artifact_path(1).exists());
     }
 
     #[test]
@@ -493,7 +532,7 @@ mod tests {
         assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
         state.uninstall_patch(1).unwrap();
         assert!(state.next_boot_patch().is_none());
-        assert!(!installed_artifact_path(tmp.path(), 1).exists());
+        assert!(!state.lifecycle.installed_artifact_path(1).exists());
     }
 
     #[test]

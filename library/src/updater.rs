@@ -453,8 +453,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         config.release_version
     );
 
-    let storage_dir = PathBuf::from(&config.storage_dir);
-    let download_path = lifecycle::download_artifact_path(&storage_dir, patch.number);
+    let download_path =
+        with_state(|state| Ok(state.lifecycle().download_artifact_path(patch.number)))?;
 
     if !matches!(action, DownloadAction::Complete) {
         let resume_from = match action {
@@ -473,7 +473,6 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
                 &patch.download_url,
                 &patch.hash,
                 patch.hash_signature.as_deref(),
-                resume_from,
             )
         })?;
 
@@ -531,8 +530,8 @@ fn install_downloaded_patch(
     patch: &crate::network::Patch,
     download_path: &Path,
 ) -> anyhow::Result<UpdateStatus> {
-    let storage_dir = PathBuf::from(&config.storage_dir);
-    let installed_path = lifecycle::installed_artifact_path(&storage_dir, patch.number);
+    let installed_path =
+        with_state(|state| Ok(state.lifecycle().installed_artifact_path(patch.number)))?;
 
     let patch_base_rs = patch_base(config)?;
     if let Err(e) = inflate(download_path, patch_base_rs, &installed_path) {
@@ -1926,7 +1925,6 @@ patch_verification: bogus_mode
                 hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
                     .to_string(),
                 signature: None,
-                partial_size: first_part.len() as u64,
             },
             &patch_dir.join("state.json"),
         )
@@ -1999,7 +1997,6 @@ patch_verification: bogus_mode
                 url: "http://old-cdn.example.com/patch/1".to_string(),
                 hash: "hash_old".to_string(),
                 signature: None,
-                partial_size: 10,
             },
             &patch_dir.join("state.json"),
         )
@@ -3229,7 +3226,6 @@ mod resume_edge_case_tests {
                 url: "http://example.com/patch/1".to_string(),
                 hash: PATCH_HASH.to_string(),
                 signature: None,
-                partial_size: 10,
             },
             &patch_dir.join("state.json"),
         )?;

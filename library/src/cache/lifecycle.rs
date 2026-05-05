@@ -44,13 +44,13 @@ const POINTERS_FILE: &str = "pointers.json";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum PatchState {
-    /// Compressed bytes are partially on disk. Resume sends
-    /// `Range: bytes={partial_size}-`.
+    /// Compressed bytes are partially on disk. The current bytes-on-disk
+    /// count is read from the `download` file at resume time — the state
+    /// itself just records "we're mid-download for this url+hash."
     Downloading {
         url: String,
         hash: String,
         signature: Option<String>,
-        partial_size: u64,
     },
     /// Compressed bytes are fully on disk and the size matches what we
     /// recorded after the download completed. Bytes are untrusted until
@@ -183,14 +183,23 @@ impl PatchLifecycle {
     /// Write-then-cleanup ordering means a crash between the two leaves a
     /// tombstone with stale-but-unused artifact bytes — sweeping picks
     /// them up on the next `cleanup` call.
+    ///
+    /// Marking an already-Bad patch overwrites the `reason` field with
+    /// the new one (the old hash/signature/size are preserved). In
+    /// practice we don't double-fail patches — this just makes the
+    /// behavior obvious if it ever happens.
     pub fn mark_bad(&self, n: usize, reason: BadReason) -> Result<()> {
         let (hash, signature, size) = match self.read_state(n) {
             Some(PatchState::Downloading {
-                hash,
-                signature,
-                partial_size,
-                ..
-            }) => (Some(hash), signature, Some(partial_size)),
+                hash, signature, ..
+            }) => {
+                let size = self
+                    .download_artifact_path(n)
+                    .metadata()
+                    .ok()
+                    .map(|m| m.len());
+                (Some(hash), signature, size)
+            }
             Some(PatchState::Downloaded {
                 hash,
                 signature,
@@ -265,6 +274,18 @@ impl PatchLifecycle {
         Ok(())
     }
 
+    /// Path the caller streams compressed download bytes to. Lives at
+    /// `{root}/patches/{N}/download`.
+    pub fn download_artifact_path(&self, n: usize) -> PathBuf {
+        self.patch_dir(n).join("download")
+    }
+
+    /// Path of the installed (inflated) artifact. Lives at
+    /// `{root}/patches/{N}/dlc.vmcode`.
+    pub fn installed_artifact_path(&self, n: usize) -> PathBuf {
+        self.patch_dir(n).join("dlc.vmcode")
+    }
+
     fn patches_root(&self) -> PathBuf {
         self.root.join(PATCHES_DIR)
     }
@@ -282,20 +303,6 @@ impl PatchLifecycle {
     }
 }
 
-/// Convenience accessor; returns the path a caller would write the
-/// compressed download bytes to. Public so the network layer can stream
-/// directly into it without knowing the on-disk layout details.
-pub fn download_artifact_path(root: &Path, n: usize) -> PathBuf {
-    root.join(PATCHES_DIR).join(n.to_string()).join("download")
-}
-
-/// Path to the installed (inflated) artifact for patch `n`.
-pub fn installed_artifact_path(root: &Path, n: usize) -> PathBuf {
-    root.join(PATCHES_DIR)
-        .join(n.to_string())
-        .join("dlc.vmcode")
-}
-
 /// What `update_internal` should do when starting work on a patch.
 ///
 /// Returned by [`PatchLifecycle::decide_start`] after inspecting the
@@ -304,8 +311,8 @@ pub fn installed_artifact_path(root: &Path, n: usize) -> PathBuf {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DownloadAction {
     /// No usable prior bytes — start a fresh download. The caller should
-    /// `record_download_started(... partial_size: 0)` and issue a GET
-    /// without a Range header.
+    /// `record_download_started(...)` and issue a GET without a Range
+    /// header.
     Fresh,
     /// Partial bytes from a matching prior attempt are on disk. The
     /// caller resumes from `offset` (the existing partial file size)
@@ -336,11 +343,10 @@ impl PatchLifecycle {
     /// trusted.
     pub fn decide_start(&self, n: usize, url: &str, hash: &str) -> DownloadAction {
         // For Downloading/Downloaded, the on-disk file is the source
-        // of truth for "how many bytes do we have." `partial_size` in
-        // the state is denormalized info from when the state was last
-        // written and may lag a partially-completed download. Reading
-        // from disk avoids needing to update the sidecar mid-stream.
-        let download_path = download_artifact_path(&self.root, n);
+        // of truth for "how many bytes do we have." The state itself
+        // just records the url/hash/signature so we can detect a
+        // server change since the prior attempt.
+        let download_path = self.download_artifact_path(n);
         match self.read_state(n) {
             None => DownloadAction::Fresh,
             Some(PatchState::Downloading {
@@ -373,16 +379,16 @@ impl PatchLifecycle {
         }
     }
 
-    /// Records that a download is starting (or restarting). `partial_size`
-    /// is what the caller will tell the server via Range — typically `0`
-    /// for a fresh download, or the existing file size for a resume.
+    /// Records that a download is starting (or restarting). The actual
+    /// bytes-on-disk count comes from the `download` file at resume
+    /// time; this just persists the url/hash/signature so a subsequent
+    /// `decide_start` can match against the server's current offer.
     pub fn record_download_started(
         &self,
         n: usize,
         url: &str,
         hash: &str,
         signature: Option<&str>,
-        partial_size: u64,
     ) -> Result<()> {
         self.write_state(
             n,
@@ -390,7 +396,6 @@ impl PatchLifecycle {
                 url: url.to_string(),
                 hash: hash.to_string(),
                 signature: signature.map(String::from),
-                partial_size,
             },
         )
     }
@@ -523,22 +528,39 @@ impl PatchLifecycle {
     /// a freshly installed newer patch by promoting the older
     /// `last_booted_patch` back into `next_boot_patch`.
     ///
+    /// Also clears `last_booted_patch` if its on-disk record is gone
+    /// (Unknown), so `pointers.json` doesn't accumulate references to
+    /// nothing. A `last_booted_patch` whose state is `Bad` is left
+    /// alone — that's a useful historical breadcrumb and recompute
+    /// will simply not promote it.
+    ///
     /// We deliberately don't scan `patches/` for arbitrary Installed
     /// patches — within a release there are at most a couple of patches
     /// active at once, and the last successfully booted patch is the
     /// only one we have evidence works on this device.
     pub fn recompute_next_boot(&mut self) -> Result<()> {
-        if let Some(n) = self.pointers.next_boot_patch {
-            if matches!(self.read_state(n), Some(PatchState::Installed { .. })) {
-                return Ok(());
+        let mut dirty = false;
+        if let Some(lb) = self.pointers.last_booted_patch {
+            if self.read_state(lb).is_none() {
+                self.pointers.last_booted_patch = None;
+                dirty = true;
             }
         }
-        let new_target = self
+        let already_valid = self
             .pointers
-            .last_booted_patch
-            .filter(|&lb| matches!(self.read_state(lb), Some(PatchState::Installed { .. })));
-        if self.pointers.next_boot_patch != new_target {
-            self.pointers.next_boot_patch = new_target;
+            .next_boot_patch
+            .is_some_and(|n| matches!(self.read_state(n), Some(PatchState::Installed { .. })));
+        if !already_valid {
+            let new_target = self
+                .pointers
+                .last_booted_patch
+                .filter(|&lb| matches!(self.read_state(lb), Some(PatchState::Installed { .. })));
+            if self.pointers.next_boot_patch != new_target {
+                self.pointers.next_boot_patch = new_target;
+                dirty = true;
+            }
+        }
+        if dirty {
             self.save_pointers()?;
         }
         Ok(())
@@ -577,7 +599,7 @@ impl PatchLifecycle {
             }) => (size, signature),
             other => bail!("Patch {n} is not Installed: {other:?}"),
         };
-        let path = installed_artifact_path(&self.root, n);
+        let path = self.installed_artifact_path(n);
         if !path.exists() {
             bail!("Patch {n} artifact missing at {}", path.display());
         }
@@ -879,9 +901,9 @@ mod tests {
 
     #[test]
     fn artifact_path_helpers_match_state_directory() {
-        let (tmp, lifecycle) = fixture();
-        let download = download_artifact_path(tmp.path(), 7);
-        let installed = installed_artifact_path(tmp.path(), 7);
+        let (_tmp, lifecycle) = fixture();
+        let download = lifecycle.download_artifact_path(7);
+        let installed = lifecycle.installed_artifact_path(7);
         assert_eq!(download.parent().unwrap(), lifecycle.patch_dir(7));
         assert_eq!(installed.parent().unwrap(), lifecycle.patch_dir(7));
     }
@@ -905,11 +927,10 @@ mod tests {
                     url: "https://example/p".into(),
                     hash: "h".into(),
                     signature: None,
-                    partial_size: 250,
                 },
             )
             .unwrap();
-        std::fs::write(download_artifact_path(&lifecycle.root, 1), vec![0u8; 250]).unwrap();
+        std::fs::write(lifecycle.download_artifact_path(1), vec![0u8; 250]).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "https://example/p", "h"),
             DownloadAction::Resume { offset: 250 }
@@ -928,7 +949,6 @@ mod tests {
                     url: "https://example/p".into(),
                     hash: "h".into(),
                     signature: None,
-                    partial_size: 250,
                 },
             )
             .unwrap();
@@ -948,7 +968,6 @@ mod tests {
                     url: "https://old.example/p".into(),
                     hash: "h".into(),
                     signature: None,
-                    partial_size: 100,
                 },
             )
             .unwrap();
@@ -989,7 +1008,7 @@ mod tests {
                 },
             )
             .unwrap();
-        std::fs::write(download_artifact_path(&lifecycle.root, 1), vec![0u8; 1000]).unwrap();
+        std::fs::write(lifecycle.download_artifact_path(1), vec![0u8; 1000]).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "u", "h"),
             DownloadAction::Complete
@@ -1056,7 +1075,7 @@ mod tests {
     fn record_download_started_writes_downloading_state() {
         let (_tmp, lifecycle) = fixture();
         lifecycle
-            .record_download_started(1, "u", "h", Some("s"), 0)
+            .record_download_started(1, "u", "h", Some("s"))
             .unwrap();
         assert_eq!(
             lifecycle.read_state(1).unwrap(),
@@ -1064,7 +1083,6 @@ mod tests {
                 url: "u".into(),
                 hash: "h".into(),
                 signature: Some("s".into()),
-                partial_size: 0,
             }
         );
     }
@@ -1073,7 +1091,7 @@ mod tests {
     fn record_download_complete_transitions_downloading_to_downloaded() {
         let (_tmp, lifecycle) = fixture();
         lifecycle
-            .record_download_started(1, "u", "h", None, 0)
+            .record_download_started(1, "u", "h", None)
             .unwrap();
         lifecycle.record_download_complete(1, 1234).unwrap();
         assert_eq!(
@@ -1167,7 +1185,7 @@ mod tests {
     }
 
     fn install_patch(lifecycle: &PatchLifecycle, n: usize, size: u64) {
-        let path = installed_artifact_path(&lifecycle.root, n);
+        let path = lifecycle.installed_artifact_path(n);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![0u8; size as usize]).unwrap();
         lifecycle
@@ -1273,6 +1291,46 @@ mod tests {
     }
 
     #[test]
+    fn recompute_next_boot_clears_stale_last_booted() {
+        let (_tmp, mut lifecycle) = fixture();
+        // last_booted points at a patch we've forgotten — e.g. an older
+        // release version was wiped and we're carrying a stale pointer.
+        lifecycle.pointers.last_booted_patch = Some(7);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.recompute_next_boot().unwrap();
+
+        assert_eq!(lifecycle.pointers().last_booted_patch, None);
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+    }
+
+    #[test]
+    fn recompute_next_boot_keeps_bad_last_booted_pointer() {
+        // A `Bad` patch in last_booted is a useful breadcrumb — recompute
+        // shouldn't promote it (next_boot stays None) but shouldn't clear
+        // the historical pointer either.
+        let (_tmp, mut lifecycle) = fixture();
+        lifecycle
+            .write_state(
+                3,
+                &PatchState::Bad {
+                    reason: BadReason::BootCrash,
+                    hash: None,
+                    signature: None,
+                    size: None,
+                },
+            )
+            .unwrap();
+        lifecycle.pointers.last_booted_patch = Some(3);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.recompute_next_boot().unwrap();
+
+        assert_eq!(lifecycle.pointers().last_booted_patch, Some(3));
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+    }
+
+    #[test]
     fn detect_boot_crash_on_init_recovers_when_breadcrumb_set() {
         let tmp = TempDir::new().unwrap();
         // First "process": records boot start, then "crashes" without
@@ -1308,7 +1366,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
         // Truncate the artifact so it no longer matches.
-        std::fs::write(installed_artifact_path(&lifecycle.root, 1), b"short").unwrap();
+        std::fs::write(lifecycle.installed_artifact_path(1), b"short").unwrap();
 
         let result = lifecycle.validate_next_boot_patch(None, PatchVerificationMode::default());
         assert!(result.is_err());
