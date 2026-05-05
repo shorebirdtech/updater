@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::events::PatchEvent;

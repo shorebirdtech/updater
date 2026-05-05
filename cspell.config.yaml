@@ -68,6 +68,7 @@ words:
   - repr
   - reqwest
   - rlib
+  - roundtrips
   - rsplit
   - rollouts
   - RTLD
@@ -82,9 +83,11 @@ words:
   - subosito
   - swiftpm
   - symbolication
+  - tombstoned
   - ureq
   - unbootable
   - unbooted
+  - unparseable
   - unreviewable
   - unwritable
   - usize

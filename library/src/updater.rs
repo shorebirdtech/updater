@@ -3,7 +3,7 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{bail, Context, Result};
