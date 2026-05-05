@@ -1,10 +1,13 @@
 // cspell:ignore rpkDZSLBRv2jWcc1gQpwdg
 use anyhow::Context;
+use memmap2::{Mmap, MmapOptions};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
-use crate::InitError;
+use crate::{InitError, ReadSeek};
+
+impl ReadSeek for Cursor<Mmap> {}
 
 /// This function is a hack for Android.  Android passes an array of paths, the
 /// first of which is `libapp.so` the second of which is a long (virtual) path
@@ -84,10 +87,14 @@ pub(crate) fn get_relative_lib_path(lib_name: &str) -> PathBuf {
 // Ideally we'd just return the ZipFile itself, but I don't know how to set
 // up the references correctly, ZipFile contains a borrow into the ZipArchive.
 // And I'm not the right Rust to keep a reference to both with proper lifetimes.
+//
+// We also keep the path to the APK on disk so we can re-open it for mmap
+// in `open_base_lib` without re-walking the apks_dir.
 #[derive(Debug)]
 struct ZipLocation {
     archive: zip::ZipArchive<fs::File>,
     internal_path: String,
+    zip_path: PathBuf,
 }
 
 /// Given a zip file, check if it contains the library we want.
@@ -97,6 +104,7 @@ fn check_for_lib_path(zip_path: &Path, lib_path: &str) -> anyhow::Result<ZipLoca
         return Ok(ZipLocation {
             archive: apk,
             internal_path: lib_path.to_owned(),
+            zip_path: zip_path.to_path_buf(),
         });
     }
     Err(anyhow::anyhow!("Library not found in APK"))
@@ -153,7 +161,7 @@ fn find_and_open_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<ZipLocat
 /// Given a directory of APKs, find the one that contains the library we want.
 /// This has to be done due to split APKs.
 /// This is public so c_api can use this for testing.
-pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<Cursor<Vec<u8>>> {
+pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<Box<dyn ReadSeek>> {
     // As far as I can tell, Android provides no apis for reading per-platform
     // assets (e.g. libapp.so) from an APK.  Both Facebook and Chromium
     // seem to have written their own code to do this:
@@ -172,13 +180,64 @@ pub(crate) fn open_base_lib(apks_dir: &Path, lib_name: &str) -> anyhow::Result<C
         .by_name(&zip_location.internal_path)
         .context("Failed to find libapp.so in APK")?;
 
-    // Cursor (rather than ZipFile) is only necessary because bipatch expects
-    // Seek + Read for the input file.  I don't think it actually needs to
-    // seek backwards, so Read is probably sufficient.  If we made bipatch
-    // only depend on Read we could avoid loading the library fully into memory.
+    // Modern AGP (3.6+) defaults to `extractNativeLibs=false`, which keeps
+    // libapp.so STORED (uncompressed) inside the APK so the dynamic linker
+    // can mmap it directly. When that's the case, we can do the same: map
+    // the APK at the entry's data offset and avoid loading the entire
+    // library into RAM. For large apps libapp.so can be tens of megabytes,
+    // and a single Vec<u8> allocation right after a patch download is a
+    // plausible OOM trigger on memory-constrained devices.
+    if zip_file.compression() == zip::CompressionMethod::Stored {
+        if let Some(data_start) = zip_file.data_start() {
+            let len = zip_file.size();
+            // Drop the ZipFile reader so we release the borrow on the
+            // archive and on its underlying File handle before we re-open
+            // the APK for mapping.
+            drop(zip_file);
+            return mmap_zip_entry(&zip_location.zip_path, data_start, len);
+        }
+    }
+
+    // Fallback: the entry is compressed (or the zip crate didn't surface a
+    // data offset for some reason). Decompress fully into RAM.
+    shorebird_debug!("libapp.so is not stored uncompressed; falling back to buffered read");
     let mut buffer = Vec::new();
     zip_file.read_to_end(&mut buffer)?;
-    Ok(Cursor::new(buffer))
+    Ok(Box::new(Cursor::new(buffer)))
+}
+
+/// Open `zip_path` and mmap a `len`-byte region starting at `data_start`.
+///
+/// Safety: the mapping aliases the file's contents; concurrent writes by
+/// another process would produce torn reads or SIGBUS. APKs on Android are
+/// installed read-only and not modified at runtime, so this is sound for
+/// our use. We also drop the File handle after mapping — the kernel keeps
+/// the mapping alive independently.
+fn mmap_zip_entry(zip_path: &Path, data_start: u64, len: u64) -> anyhow::Result<Box<dyn ReadSeek>> {
+    let len_usize = usize::try_from(len)
+        .with_context(|| format!("entry size {} does not fit in usize", len))?;
+    let file = fs::File::open(zip_path)
+        .with_context(|| format!("Failed to reopen APK for mmap: {:?}", zip_path))?;
+    // SAFETY: see function-level comment.
+    let mmap = unsafe {
+        MmapOptions::new()
+            .offset(data_start)
+            .len(len_usize)
+            .map(&file)
+            .with_context(|| {
+                format!(
+                    "Failed to mmap {:?} at offset {} for {} bytes",
+                    zip_path, data_start, len
+                )
+            })?
+    };
+    shorebird_debug!(
+        "Mapped libapp.so via mmap: {} bytes at offset {} of {:?}",
+        len,
+        data_start,
+        zip_path
+    );
+    Ok(Box::new(Cursor::new(mmap)))
 }
 
 pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf, InitError> {
@@ -210,9 +269,11 @@ pub fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<Pat
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
     use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
     use zip::ZipWriter;
 
     fn assert_error_is_file_not_found(error: &anyhow::Error) {
@@ -324,7 +385,77 @@ mod tests {
     #[test]
     fn open_base_lib_test() {
         let tmp_dir = TempDir::new().unwrap();
-        let error = super::open_base_lib(tmp_dir.path(), "libapp.so").unwrap_err();
+        // Box<dyn ReadSeek> isn't Debug, so unwrap_err() doesn't apply.
+        let error = super::open_base_lib(tmp_dir.path(), "libapp.so")
+            .err()
+            .expect("expected open_base_lib to fail with no APKs present");
         assert_error_is_file_not_found(&error);
+    }
+
+    /// Build an APK in `apk_path` containing a single entry whose path is
+    /// `lib/<arch>/<lib_name>` and whose contents are `data`, written with
+    /// the given compression method.
+    fn write_apk_with_lib(
+        apk_path: &Path,
+        lib_name: &str,
+        data: &[u8],
+        compression: CompressionMethod,
+    ) {
+        let arch = super::android_arch_names();
+        let internal_path = Path::new("lib").join(arch.lib_dir).join(lib_name);
+        let file = File::create(apk_path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        zip.start_file(
+            internal_path.to_string_lossy(),
+            SimpleFileOptions::default().compression_method(compression),
+        )
+        .unwrap();
+        zip.write_all(data).unwrap();
+        zip.finish().unwrap();
+    }
+
+    /// When the entry is STORED uncompressed (the modern AGP default), we
+    /// should mmap it and the returned reader should yield the original
+    /// bytes via Read + Seek.
+    #[test]
+    fn open_base_lib_stored_uses_mmap_and_reads_bytes() {
+        let tmp_dir = TempDir::new().unwrap();
+        let apk_path = tmp_dir.path().join("base.apk");
+        let payload: Vec<u8> = (0..2048u32).map(|i| (i % 251) as u8).collect();
+        write_apk_with_lib(&apk_path, "libapp.so", &payload, CompressionMethod::Stored);
+
+        let mut reader = super::open_base_lib(tmp_dir.path(), "libapp.so").unwrap();
+
+        // Full read.
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, payload);
+
+        // Seek + partial read — proves the returned reader satisfies
+        // Read + Seek (which is what bipatch needs).
+        reader.seek(SeekFrom::Start(100)).unwrap();
+        let mut chunk = vec![0u8; 16];
+        reader.read_exact(&mut chunk).unwrap();
+        assert_eq!(chunk, payload[100..116]);
+    }
+
+    /// When the entry is DEFLATEd, we fall back to a buffered read. The
+    /// returned reader should still produce the uncompressed bytes.
+    #[test]
+    fn open_base_lib_deflated_falls_back_to_buffered_read() {
+        let tmp_dir = TempDir::new().unwrap();
+        let apk_path = tmp_dir.path().join("base.apk");
+        let payload: Vec<u8> = (0..1024u32).map(|i| (i % 17) as u8).collect();
+        write_apk_with_lib(
+            &apk_path,
+            "libapp.so",
+            &payload,
+            CompressionMethod::Deflated,
+        );
+
+        let mut reader = super::open_base_lib(tmp_dir.path(), "libapp.so").unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, payload);
     }
 }

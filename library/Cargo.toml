@@ -29,6 +29,10 @@ hex = "0.4.3"
 libc = "0.2.98"
 # For error!(), info!(), etc macros. `print` will not show up on Android.
 log = "0.4.14"
+# For mmap'ing libapp.so out of the APK without buffering it in RAM. This
+# matters on memory-constrained devices: reading the whole library into a
+# Vec<u8> can cost tens of MB and trigger OOM kills mid-patch.
+memmap2 = "0.9.10"
 # For implementing thread-local-storage of ResolvedConfig object.
 once_cell = "1.17.1"
 # Json serialization/de-serialization.
