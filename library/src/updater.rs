@@ -20,8 +20,9 @@ use crate::network::{
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
-#[cfg(test)]
-// Expose testing_reset_config for integration tests.
+// Expose testing_reset_config for in-crate unit tests (under #[cfg(test)])
+// and for the `library_test_hooks` sibling crate (under feature = "test-hooks").
+#[cfg(any(test, feature = "test-hooks"))]
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
 pub use crate::network::{DownloadToPathFn, Patch, PatchCheckRequestFn};
