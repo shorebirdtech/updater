@@ -159,6 +159,7 @@ where
     with_config(|config| {
         let state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
+            &config.download_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
@@ -174,6 +175,7 @@ where
     with_config(|config| {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
+            &config.download_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
@@ -224,6 +226,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
+            &config.download_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
@@ -458,7 +461,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     );
 
     let download_path =
-        lifecycle::download_artifact_path(Path::new(&config.storage_dir), patch.number);
+        lifecycle::download_artifact_path(Path::new(&config.download_dir), patch.number);
 
     if !matches!(action, DownloadAction::Complete) {
         let resume_from = match action {
@@ -796,6 +799,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     with_config(|config| {
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
+            &config.download_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
@@ -833,6 +837,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         // and make that the "current" patch.
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
+            &config.download_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
@@ -1046,6 +1051,7 @@ mod tests {
         with_config(|config| {
             let mut state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
+                &config.download_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
@@ -1343,6 +1349,7 @@ patch_verification: bogus_mode
         with_config(|config| {
             let state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
+                &config.download_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
@@ -1374,6 +1381,7 @@ patch_verification: bogus_mode
         with_config(|config| {
             let mut state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
+                &config.download_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
@@ -1562,6 +1570,7 @@ patch_verification: bogus_mode
         let mut updater_state = with_config(|config| {
             let mut state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
+                &config.download_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
@@ -1647,6 +1656,7 @@ patch_verification: bogus_mode
         with_config(|config| {
             let mut state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
+                &config.download_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
@@ -1679,6 +1689,7 @@ patch_verification: bogus_mode
         with_config(|config| {
             let state = UpdaterState::load_or_new_on_error(
                 &config.storage_dir,
+                &config.download_dir,
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
@@ -1741,7 +1752,7 @@ patch_verification: bogus_mode
         // gone (record_install_complete deletes them) and the patch's
         // state.json reads `Installed`.
         let patch_dir = tmp_dir.path().join("patches/1");
-        assert!(!patch_dir.join("download").exists());
+        assert!(!tmp_dir.path().join("downloads/1").exists());
         assert!(patch_dir.join("dlc.vmcode").exists());
         let state: crate::cache::lifecycle::PatchState =
             crate::cache::disk_io::read(&patch_dir.join("state.json")).unwrap();
@@ -1919,10 +1930,14 @@ patch_verification: bogus_mode
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
         // Simulate a prior partial download: write the first 10 bytes
-        // and a Downloading state.json that points at the same URL/hash.
+        // (in the cache-rooted download dir) and a Downloading
+        // state.json (in the persistent state-rooted patch dir) that
+        // points at the same URL/hash.
         let patch_dir = tmp_dir.path().join("patches/1");
         fs::create_dir_all(&patch_dir).unwrap();
-        fs::write(patch_dir.join("download"), first_part).unwrap();
+        let downloads_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&downloads_dir).unwrap();
+        fs::write(downloads_dir.join("1"), first_part).unwrap();
         crate::cache::disk_io::write(
             &crate::cache::lifecycle::PatchState::Downloading {
                 url: download_url.to_string(),
@@ -1995,7 +2010,9 @@ patch_verification: bogus_mode
         // Simulate prior partial download with a DIFFERENT URL.
         let patch_dir = tmp_dir.path().join("patches/1");
         fs::create_dir_all(&patch_dir).unwrap();
-        fs::write(patch_dir.join("download"), b"stale data from old url").unwrap();
+        let downloads_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&downloads_dir).unwrap();
+        fs::write(downloads_dir.join("1"), b"stale data from old url").unwrap();
         crate::cache::disk_io::write(
             &crate::cache::lifecycle::PatchState::Downloading {
                 url: "http://old-cdn.example.com/patch/1".to_string(),
@@ -3221,10 +3238,13 @@ mod resume_edge_case_tests {
         let apk_path = tmp_dir.path().join("base.apk");
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
-        // Pre-create a partial download and Downloading state.json.
+        // Pre-create a partial download (in cache-rooted downloads/)
+        // and Downloading state.json (in state-rooted patches/).
         let patch_dir = tmp_dir.path().join("patches/1");
         fs::create_dir_all(&patch_dir)?;
-        fs::write(patch_dir.join("download"), &PATCH_BYTES[..10])?;
+        let downloads_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&downloads_dir)?;
+        fs::write(downloads_dir.join("1"), &PATCH_BYTES[..10])?;
         crate::cache::disk_io::write(
             &crate::cache::lifecycle::PatchState::Downloading {
                 url: "http://example.com/patch/1".to_string(),
@@ -3277,15 +3297,16 @@ mod resume_edge_case_tests {
         assert!(result.is_err());
 
         // The lifecycle state.json was written before the download
-        // started; both it and the partial file survive the network
-        // error so the next attempt can resume.
+        // started; both it (state-rooted) and the partial file
+        // (cache-rooted) survive the network error so the next attempt
+        // can resume.
         let patch_dir = tmp_dir.path().join("patches/1");
         assert!(
             patch_dir.join("state.json").exists(),
             "state.json should survive a download failure for retry"
         );
         assert!(
-            patch_dir.join("download").exists(),
+            tmp_dir.path().join("downloads/1").exists(),
             "Partial download should survive for resume"
         );
 
@@ -3370,7 +3391,7 @@ mod resume_edge_case_tests {
         let patch_dir = tmp_dir.path().join("patches/1");
         assert!(patch_dir.join("state.json").exists(), "tombstone preserved");
         assert!(
-            !patch_dir.join("download").exists(),
+            !tmp_dir.path().join("downloads/1").exists(),
             "download artifact removed on inflate failure"
         );
         let state: crate::cache::lifecycle::PatchState =
@@ -3408,10 +3429,13 @@ mod resume_edge_case_tests {
         write_fake_apk(apk_path.to_str().unwrap(), base.as_bytes());
 
         // Simulate the post-download / pre-install state: full-size
-        // download file plus a `Downloaded` state.json.
+        // download file (cache-rooted) plus a `Downloaded` state.json
+        // (state-rooted).
         let patch_dir = tmp_dir.path().join("patches/1");
         fs::create_dir_all(&patch_dir)?;
-        fs::write(patch_dir.join("download"), PATCH_BYTES)?;
+        let downloads_dir = tmp_dir.path().join("downloads");
+        fs::create_dir_all(&downloads_dir)?;
+        fs::write(downloads_dir.join("1"), PATCH_BYTES)?;
         crate::cache::disk_io::write(
             &crate::cache::lifecycle::PatchState::Downloaded {
                 url: "http://example.com/patch/1".to_string(),

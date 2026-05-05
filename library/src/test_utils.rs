@@ -16,6 +16,7 @@ pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
 
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
+            &config.download_dir,
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,

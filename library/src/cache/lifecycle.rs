@@ -5,18 +5,26 @@
 //! `last_booted_patch` / `known_bad_patches` fields of `PatchesState`.
 //!
 //! On-disk layout (per release):
-//!   {root}/
+//!   {state_root}/
 //!     pointers.json                  # ReleasePointers
 //!     patches/
 //!       {N}/
 //!         state.json                 # PatchState
-//!         download                   # compressed bytes (Downloading/Downloaded only)
 //!         dlc.vmcode                 # installed artifact (Installed only)
+//!   {download_root}/
+//!     {N}                            # compressed bytes (Downloading/Downloaded)
+//!
+//! `state_root` is the persistent app-storage directory; `download_root`
+//! is the OS-managed cache directory (e.g. iOS `NSCachesDirectory`).
+//! Putting the compressed download bytes in cache lets the OS evict
+//! them under storage pressure — `decide_start` falls back to `Fresh`
+//! when the file is gone, costing a redownload but no data loss.
 //!
 //! state.json is the source of truth for "what state is patch N in?" and
 //! survives within a release as a tombstone for `Bad` patches even after
 //! their artifact files are removed. Everything under `patches/` is wiped
-//! on release-version change.
+//! on release-version change; `download_root` is also wiped at that
+//! point (see `UpdaterState::create_new_and_save`).
 //!
 //! Mutations are exposed as two operations on top of the raw read/write:
 //!   - `mark_bad(n, reason)` writes a Bad tombstone and deletes artifact
@@ -113,20 +121,30 @@ pub struct ReleasePointers {
     pub boot_started_at: Option<u64>,
 }
 
-/// Per-release patch lifecycle and storage. Owns `{root}/patches/` and
-/// `{root}/pointers.json`.
+/// Per-release patch lifecycle and storage. Owns
+/// `{state_root}/patches/`, `{state_root}/pointers.json`, and
+/// `{download_root}/{N}` files for in-flight compressed downloads.
 #[derive(Debug)]
 pub struct PatchLifecycle {
-    root: PathBuf,
+    /// Persistent app-storage root. Holds `pointers.json` and
+    /// `patches/{N}/{state.json,dlc.vmcode}`.
+    state_root: PathBuf,
+    /// OS-managed cache root. Holds `{N}` files for in-flight or
+    /// completed compressed download bytes. The OS may evict these
+    /// under storage pressure; `decide_start` recovers by falling
+    /// back to `Fresh`.
+    download_root: PathBuf,
     pointers: ReleasePointers,
 }
 
 impl PatchLifecycle {
-    /// Loads the lifecycle from `root`. Missing or unparseable
-    /// `pointers.json` falls back to defaults; per-patch state files are
-    /// read lazily.
-    pub fn load_or_default(root: PathBuf) -> Self {
-        let pointers_path = root.join(POINTERS_FILE);
+    /// Loads the lifecycle from disk. `state_root` is the persistent
+    /// app-storage dir; `download_root` is the OS-managed cache dir
+    /// (typically `{code_cache_dir}/downloads`). Missing or
+    /// unparseable `pointers.json` falls back to defaults; per-patch
+    /// state files are read lazily.
+    pub fn load_or_default(state_root: PathBuf, download_root: PathBuf) -> Self {
+        let pointers_path = state_root.join(POINTERS_FILE);
         let pointers = if pointers_path.exists() {
             match disk_io::read(&pointers_path) {
                 Ok(p) => p,
@@ -142,7 +160,11 @@ impl PatchLifecycle {
         } else {
             ReleasePointers::default()
         };
-        Self { root, pointers }
+        Self {
+            state_root,
+            download_root,
+            pointers,
+        }
     }
 
     pub fn pointers(&self) -> &ReleasePointers {
@@ -242,53 +264,71 @@ impl PatchLifecycle {
         }
     }
 
-    /// Removes everything under `{root}/patches/{N}/` except `state.json`.
+    /// Removes the artifact files for patch `n` while preserving its
+    /// `state.json` tombstone: everything under
+    /// `{state_root}/patches/{N}/` except `state.json`, plus the
+    /// compressed download at `{download_root}/{N}` if any.
     fn delete_artifact_files(&self, n: usize) -> Result<()> {
         let dir = self.patch_dir(n);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(()), // Directory doesn't exist; nothing to do.
-        };
-        for entry in entries.flatten() {
-            if entry.file_name() == PATCH_STATE_FILE {
-                continue;
-            }
-            let path = entry.path();
-            if path.is_dir() {
-                if let Err(e) = std::fs::remove_dir_all(&path) {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if entry.file_name() == PATCH_STATE_FILE {
+                    continue;
+                }
+                let path = entry.path();
+                let result = if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+                if let Err(e) = result {
                     shorebird_error!("Failed to remove {:?}: {:?}", path, e);
                 }
-            } else if let Err(e) = std::fs::remove_file(&path) {
-                shorebird_error!("Failed to remove {:?}: {:?}", path, e);
+            }
+        }
+        // Compressed download lives in the cache root, not the patch dir.
+        let download = self.download_artifact_path(n);
+        if download.exists() {
+            if let Err(e) = std::fs::remove_file(&download) {
+                shorebird_error!("Failed to remove {:?}: {:?}", download, e);
             }
         }
         Ok(())
     }
 
-    /// Removes `{root}/patches/{N}/` entirely, including `state.json`.
+    /// Removes everything for patch `n`: `{state_root}/patches/{N}/`
+    /// (including `state.json`) and `{download_root}/{N}`.
     fn forget_dir(&self, n: usize) -> Result<()> {
         let dir = self.patch_dir(n);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)?;
         }
+        let download = self.download_artifact_path(n);
+        if download.exists() {
+            if let Err(e) = std::fs::remove_file(&download) {
+                shorebird_error!("Failed to remove {:?}: {:?}", download, e);
+            }
+        }
         Ok(())
     }
 
-    /// Path the caller streams compressed download bytes to. Convenience
-    /// wrapper around the free [`download_artifact_path`] for callers
-    /// that already hold a lifecycle handle.
+    /// Path the caller streams compressed download bytes to. Lives at
+    /// `{download_root}/{N}` — flat layout under the OS-managed cache
+    /// dir. Convenience wrapper around the free
+    /// [`download_artifact_path`].
     pub fn download_artifact_path(&self, n: usize) -> PathBuf {
-        download_artifact_path(&self.root, n)
+        download_artifact_path(&self.download_root, n)
     }
 
-    /// Path of the installed (inflated) artifact. Convenience wrapper
+    /// Path of the installed (inflated) artifact. Lives at
+    /// `{state_root}/patches/{N}/dlc.vmcode`. Convenience wrapper
     /// around the free [`installed_artifact_path`].
     pub fn installed_artifact_path(&self, n: usize) -> PathBuf {
-        installed_artifact_path(&self.root, n)
+        installed_artifact_path(&self.state_root, n)
     }
 
     fn patches_root(&self) -> PathBuf {
-        self.root.join(PATCHES_DIR)
+        self.state_root.join(PATCHES_DIR)
     }
 
     fn patch_dir(&self, n: usize) -> PathBuf {
@@ -300,23 +340,24 @@ impl PatchLifecycle {
     }
 
     fn pointers_path(&self) -> PathBuf {
-        self.root.join(POINTERS_FILE)
+        self.state_root.join(POINTERS_FILE)
     }
 }
 
 /// Path the caller streams compressed download bytes to. Lives at
-/// `{root}/patches/{N}/download`. Free function so callers in
-/// `update_internal` (which only has the cache root in hand) don't have
-/// to reach through `with_state` to compute a pure-function path.
-pub fn download_artifact_path(root: &Path, n: usize) -> PathBuf {
-    root.join(PATCHES_DIR).join(n.to_string()).join("download")
+/// `{download_root}/{N}` (flat under the OS-managed cache dir). Free
+/// function so callers in `update_internal` can compute it without
+/// holding a lifecycle handle.
+pub fn download_artifact_path(download_root: &Path, n: usize) -> PathBuf {
+    download_root.join(n.to_string())
 }
 
 /// Path of the installed (inflated) artifact. Lives at
-/// `{root}/patches/{N}/dlc.vmcode`. See [`download_artifact_path`] for
-/// why this is a free function rather than only a method.
-pub fn installed_artifact_path(root: &Path, n: usize) -> PathBuf {
-    root.join(PATCHES_DIR)
+/// `{state_root}/patches/{N}/dlc.vmcode`. See [`download_artifact_path`]
+/// for why this is a free function rather than only a method.
+pub fn installed_artifact_path(state_root: &Path, n: usize) -> PathBuf {
+    state_root
+        .join(PATCHES_DIR)
         .join(n.to_string())
         .join("dlc.vmcode")
 }
@@ -713,9 +754,9 @@ impl PatchLifecycle {
                 size: installed_size,
             },
         )?;
-        // The compressed bytes are no longer needed; the dlc.vmcode is
-        // the canonical artifact going forward.
-        let download = self.patch_dir(n).join("download");
+        // The compressed bytes in the cache dir are no longer needed;
+        // the dlc.vmcode is the canonical artifact going forward.
+        let download = self.download_artifact_path(n);
         if download.exists() {
             if let Err(e) = std::fs::remove_file(&download) {
                 shorebird_error!("Failed to remove download file for patch {}: {:?}", n, e);
@@ -732,8 +773,16 @@ mod tests {
 
     fn fixture() -> (TempDir, PatchLifecycle) {
         let tmp = TempDir::new().unwrap();
-        let lifecycle = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
+        let state_root = tmp.path().to_path_buf();
+        let download_root = tmp.path().join("downloads");
+        let lifecycle = PatchLifecycle::load_or_default(state_root, download_root);
         (tmp, lifecycle)
+    }
+
+    /// Two-process lifecycle helper: rebuilds a `PatchLifecycle`
+    /// against the same on-disk roots a prior `fixture()` set up.
+    fn reload_at(tmp_path: &Path) -> PatchLifecycle {
+        PatchLifecycle::load_or_default(tmp_path.to_path_buf(), tmp_path.join("downloads"))
     }
 
     #[test]
@@ -831,6 +880,7 @@ mod tests {
         // File size on disk is what gets recorded as the patch's "size"
         // — there's no recorded count in Downloading anymore.
         let path = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![0u8; 250]).unwrap();
 
         lifecycle.mark_bad(1, BadReason::InvalidPatchBytes).unwrap();
@@ -994,7 +1044,7 @@ mod tests {
     fn pointers_save_and_reload_roundtrip() {
         let tmp = TempDir::new().unwrap();
         {
-            let mut lifecycle = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
+            let mut lifecycle = reload_at(tmp.path());
             lifecycle.pointers = ReleasePointers {
                 next_boot_patch: Some(3),
                 last_booted_patch: Some(2),
@@ -1003,7 +1053,7 @@ mod tests {
             };
             lifecycle.save_pointers().unwrap();
         }
-        let reloaded = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
+        let reloaded = reload_at(tmp.path());
         assert_eq!(reloaded.pointers().next_boot_patch, Some(3));
         assert_eq!(reloaded.pointers().last_booted_patch, Some(2));
     }
@@ -1012,17 +1062,24 @@ mod tests {
     fn pointers_load_default_on_corrupt_file() {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join(POINTERS_FILE), "not json").unwrap();
-        let lifecycle = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
+        let lifecycle = reload_at(tmp.path());
         assert_eq!(lifecycle.pointers(), &ReleasePointers::default());
     }
 
     #[test]
-    fn artifact_path_helpers_match_state_directory() {
+    fn artifact_path_helpers_live_in_their_respective_roots() {
+        // The installed artifact lives under state_root/patches/{N}/.
+        // The compressed download lives under download_root/{N} (flat).
+        // They're in DIFFERENT roots so the OS can evict downloads
+        // independently of installed patches.
         let (_tmp, lifecycle) = fixture();
         let download = lifecycle.download_artifact_path(7);
         let installed = lifecycle.installed_artifact_path(7);
-        assert_eq!(download.parent().unwrap(), lifecycle.patch_dir(7));
         assert_eq!(installed.parent().unwrap(), lifecycle.patch_dir(7));
+        // Download path is `{download_root}/{N}` — its parent is the
+        // download root, distinct from patch_dir.
+        assert_ne!(download.parent().unwrap(), lifecycle.patch_dir(7));
+        assert_eq!(download.file_name().unwrap(), "7");
     }
 
     #[test]
@@ -1047,7 +1104,9 @@ mod tests {
                 },
             )
             .unwrap();
-        std::fs::write(lifecycle.download_artifact_path(1), vec![0u8; 250]).unwrap();
+        let dl = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(dl.parent().unwrap()).unwrap();
+        std::fs::write(&dl, vec![0u8; 250]).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "https://example/p", "h"),
             DownloadAction::Resume { offset: 250 }
@@ -1125,7 +1184,9 @@ mod tests {
                 },
             )
             .unwrap();
-        std::fs::write(lifecycle.download_artifact_path(1), vec![0u8; 1000]).unwrap();
+        let dl = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(dl.parent().unwrap()).unwrap();
+        std::fs::write(&dl, vec![0u8; 1000]).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "u", "h"),
             DownloadAction::Complete
@@ -1275,7 +1336,8 @@ mod tests {
                 },
             )
             .unwrap();
-        let download_path = lifecycle.patch_dir(1).join("download");
+        let download_path = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(download_path.parent().unwrap()).unwrap();
         std::fs::write(&download_path, b"compressed").unwrap();
 
         lifecycle.record_install_complete(1, 9999).unwrap();
@@ -1561,7 +1623,7 @@ mod tests {
         // First "process": records boot start, then "crashes" without
         // recording success or failure.
         {
-            let mut lifecycle = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
+            let mut lifecycle = reload_at(tmp.path());
             install_state(&lifecycle, 1, 100);
             lifecycle.pointers.next_boot_patch = Some(1);
             lifecycle.save_pointers().unwrap();
@@ -1569,7 +1631,7 @@ mod tests {
             // Drop without record_boot_success/failure.
         }
         // Second "process": init detects the breadcrumb and marks Bad.
-        let mut lifecycle = PatchLifecycle::load_or_default(tmp.path().to_path_buf());
+        let mut lifecycle = reload_at(tmp.path());
         let recovered = lifecycle.detect_boot_crash_on_init().unwrap();
         assert_eq!(recovered, Some(1));
         assert!(matches!(

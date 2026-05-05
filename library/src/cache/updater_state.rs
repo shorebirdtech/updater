@@ -30,6 +30,11 @@ const STATE_FILE_NAME: &str = "state.json";
 // so per-device state isn't reset on release-version change.
 #[derive(Debug)]
 pub struct UpdaterState {
+    /// Persistent app-storage root. Holds `state.json`, `pointers.json`,
+    /// and `patches/{N}/` (state.json + dlc.vmcode). The compressed
+    /// download bytes live separately under the OS-managed cache dir
+    /// (passed to `load_or_new_on_error`); the lifecycle owns both
+    /// roots and we don't store the download dir here directly.
     cache_dir: PathBuf,
     lifecycle: PatchLifecycle,
     patch_public_key: Option<String>,
@@ -84,13 +89,14 @@ impl UpdaterState {
 impl UpdaterState {
     fn new(
         cache_dir: PathBuf,
+        download_dir: PathBuf,
         release_version: String,
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
         client_id: String,
     ) -> Self {
         Self {
-            lifecycle: PatchLifecycle::load_or_default(cache_dir.clone()),
+            lifecycle: PatchLifecycle::load_or_default(cache_dir.clone(), download_dir),
             cache_dir,
             patch_public_key: patch_public_key.map(|s| s.to_owned()),
             verification_mode,
@@ -104,6 +110,7 @@ impl UpdaterState {
 
     fn load(
         cache_dir: &Path,
+        download_dir: &Path,
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
     ) -> Result<Self> {
@@ -111,7 +118,10 @@ impl UpdaterState {
         let serialized_state = disk_io::read(&path)?;
         Ok(Self {
             cache_dir: cache_dir.to_path_buf(),
-            lifecycle: PatchLifecycle::load_or_default(cache_dir.to_path_buf()),
+            lifecycle: PatchLifecycle::load_or_default(
+                cache_dir.to_path_buf(),
+                download_dir.to_path_buf(),
+            ),
             patch_public_key: patch_public_key.map(|s| s.to_owned()),
             verification_mode,
             serialized_state,
@@ -123,6 +133,7 @@ impl UpdaterState {
     /// changes or when the on-disk state was unparseable.
     fn create_new_and_save(
         cache_dir: &Path,
+        download_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
@@ -130,6 +141,7 @@ impl UpdaterState {
     ) -> Self {
         let mut state = Self::new(
             cache_dir.to_owned(),
+            download_dir.to_owned(),
             release_version.to_owned(),
             patch_public_key,
             verification_mode,
@@ -149,18 +161,26 @@ impl UpdaterState {
         if pointers_path.exists() {
             let _ = std::fs::remove_file(&pointers_path);
         }
+        // Also wipe stale compressed downloads from the prior release.
+        if download_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(download_dir) {
+                shorebird_error!("Failed to wipe download dir on reset: {:?}", e);
+            }
+        }
         // Reload lifecycle from a clean slate.
-        state.lifecycle = PatchLifecycle::load_or_default(cache_dir.to_path_buf());
+        state.lifecycle =
+            PatchLifecycle::load_or_default(cache_dir.to_path_buf(), download_dir.to_path_buf());
         state
     }
 
     pub fn load_or_new_on_error(
         cache_dir: &Path,
+        download_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
     ) -> Self {
-        match Self::load(cache_dir, patch_public_key, verification_mode) {
+        match Self::load(cache_dir, download_dir, patch_public_key, verification_mode) {
             Ok(loaded) => {
                 if loaded.serialized_state.release_version != release_version {
                     shorebird_info!(
@@ -170,6 +190,7 @@ impl UpdaterState {
                     );
                     return Self::create_new_and_save(
                         cache_dir,
+                        download_dir,
                         release_version,
                         patch_public_key,
                         verification_mode,
@@ -184,6 +205,7 @@ impl UpdaterState {
                 }
                 Self::create_new_and_save(
                     cache_dir,
+                    download_dir,
                     release_version,
                     patch_public_key,
                     verification_mode,
@@ -403,6 +425,7 @@ mod tests {
     fn load(tmp: &TempDir, release_version: &str) -> UpdaterState {
         UpdaterState::load_or_new_on_error(
             tmp.path(),
+            &tmp.path().join("downloads"),
             release_version,
             None,
             PatchVerificationMode::default(),
@@ -499,7 +522,13 @@ mod tests {
         public_key: Option<&str>,
         mode: PatchVerificationMode,
     ) -> UpdaterState {
-        UpdaterState::load_or_new_on_error(tmp.path(), "1.0.0+1", public_key, mode)
+        UpdaterState::load_or_new_on_error(
+            tmp.path(),
+            &tmp.path().join("downloads"),
+            "1.0.0+1",
+            public_key,
+            mode,
+        )
     }
 
     #[test]
