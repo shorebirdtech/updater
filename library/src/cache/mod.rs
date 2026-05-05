@@ -1,6 +1,5 @@
 pub(crate) mod disk_io;
 pub mod lifecycle;
-mod patch_manager;
 mod signing;
 pub mod updater_state;
 

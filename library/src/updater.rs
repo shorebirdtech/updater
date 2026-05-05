@@ -14,9 +14,7 @@ use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
-use crate::network::{
-    download_to_path, patches_check_url, DownloadResult, NetworkHooks, PatchCheckRequest,
-};
+use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
