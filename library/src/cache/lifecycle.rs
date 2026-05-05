@@ -699,6 +699,14 @@ impl PatchLifecycle {
     /// directory) and gets removed wholesale. Best-effort — errors
     /// are logged so a single bad entry can't block the cleanup of
     /// others.
+    ///
+    /// Note: only walks the persistent `state_root/patches/` tree.
+    /// Compressed download files in `download_root/` are removed via
+    /// each patch's `cleanup` call (which deletes both roots), so any
+    /// download whose state.json still exists gets swept here. A
+    /// download file in `download_root/` whose state.json no longer
+    /// exists (out-of-band corruption, never seen in practice) would
+    /// persist until the OS evicts it from cache.
     fn cleanup_older_than(&self, n: usize) {
         let entries = match std::fs::read_dir(self.patches_root()) {
             Ok(e) => e,
@@ -1425,6 +1433,12 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         install_state(&lifecycle, 2, 200);
         install_state(&lifecycle, 3, 300);
+        // Drop a stale compressed download alongside an older patch's
+        // state to verify cleanup walks both roots through the cleanup()
+        // → forget_dir() chain.
+        let dl1 = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(dl1.parent().unwrap()).unwrap();
+        std::fs::write(&dl1, b"stale older download").unwrap();
         // Pretend patch 3 is what we're booting.
         lifecycle.pointers.next_boot_patch = Some(3);
         lifecycle.save_pointers().unwrap();
@@ -1434,9 +1448,11 @@ mod tests {
 
         assert_eq!(lifecycle.pointers().last_booted_patch, Some(3));
         assert!(lifecycle.pointers().currently_booting_patch.is_none());
-        // Older patches removed entirely by record_boot_success.
+        // Older patches removed entirely by record_boot_success — both
+        // the persistent patch dir and the cache-rooted download file.
         assert!(!lifecycle.patch_dir(1).exists());
         assert!(!lifecycle.patch_dir(2).exists());
+        assert!(!dl1.exists(), "stale download for older patch removed");
         // Booted patch survives.
         assert!(lifecycle.patch_dir(3).exists());
     }

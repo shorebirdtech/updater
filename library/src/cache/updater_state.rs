@@ -447,6 +447,30 @@ mod tests {
     }
 
     #[test]
+    fn release_version_change_wipes_download_dir() {
+        // The cache-rooted download dir is per-release just like the
+        // persistent patches/ tree. A release-version mismatch must
+        // wipe both — otherwise an in-flight partial download from
+        // the prior release could be confused for a current one.
+        let tmp = TempDir::new().unwrap();
+        let downloads_dir = tmp.path().join("downloads");
+        std::fs::create_dir_all(&downloads_dir).unwrap();
+        std::fs::write(downloads_dir.join("1"), b"stale prior-release bytes").unwrap();
+        std::fs::write(downloads_dir.join("orphan"), b"junk").unwrap();
+
+        // Release-version change triggers a full wipe.
+        let _next = load(&tmp, "1.0.0+2");
+        assert!(
+            !downloads_dir.join("1").exists(),
+            "stale prior-release download should be wiped"
+        );
+        assert!(
+            !downloads_dir.join("orphan").exists(),
+            "junk in downloads/ should be wiped"
+        );
+    }
+
+    #[test]
     fn client_id_persists_across_release_changes() {
         let tmp = TempDir::new().unwrap();
         let original = load(&tmp, "1.0.0+1");
