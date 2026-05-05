@@ -306,12 +306,6 @@ impl UpdaterState {
         if let Some(parent) = installed_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        // Defensive: if a prior partial install left a `dlc.vmcode`
-        // behind, remove it before renaming so behavior is OS-agnostic
-        // (POSIX `rename` overwrites silently; Windows fails).
-        if installed_path.exists() {
-            std::fs::remove_file(&installed_path)?;
-        }
         std::fs::rename(&patch.path, &installed_path)?;
         // Mirror `record_install_complete`'s cleanup of the now-stale
         // compressed download bytes if any are sitting in the patch dir.

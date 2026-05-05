@@ -274,16 +274,17 @@ impl PatchLifecycle {
         Ok(())
     }
 
-    /// Path the caller streams compressed download bytes to. Lives at
-    /// `{root}/patches/{N}/download`.
+    /// Path the caller streams compressed download bytes to. Convenience
+    /// wrapper around the free [`download_artifact_path`] for callers
+    /// that already hold a lifecycle handle.
     pub fn download_artifact_path(&self, n: usize) -> PathBuf {
-        self.patch_dir(n).join("download")
+        download_artifact_path(&self.root, n)
     }
 
-    /// Path of the installed (inflated) artifact. Lives at
-    /// `{root}/patches/{N}/dlc.vmcode`.
+    /// Path of the installed (inflated) artifact. Convenience wrapper
+    /// around the free [`installed_artifact_path`].
     pub fn installed_artifact_path(&self, n: usize) -> PathBuf {
-        self.patch_dir(n).join("dlc.vmcode")
+        installed_artifact_path(&self.root, n)
     }
 
     fn patches_root(&self) -> PathBuf {
@@ -301,6 +302,23 @@ impl PatchLifecycle {
     fn pointers_path(&self) -> PathBuf {
         self.root.join(POINTERS_FILE)
     }
+}
+
+/// Path the caller streams compressed download bytes to. Lives at
+/// `{root}/patches/{N}/download`. Free function so callers in
+/// `update_internal` (which only has the cache root in hand) don't have
+/// to reach through `with_state` to compute a pure-function path.
+pub fn download_artifact_path(root: &Path, n: usize) -> PathBuf {
+    root.join(PATCHES_DIR).join(n.to_string()).join("download")
+}
+
+/// Path of the installed (inflated) artifact. Lives at
+/// `{root}/patches/{N}/dlc.vmcode`. See [`download_artifact_path`] for
+/// why this is a free function rather than only a method.
+pub fn installed_artifact_path(root: &Path, n: usize) -> PathBuf {
+    root.join(PATCHES_DIR)
+        .join(n.to_string())
+        .join("dlc.vmcode")
 }
 
 /// What `update_internal` should do when starting work on a patch.

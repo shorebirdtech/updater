@@ -454,7 +454,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     );
 
     let download_path =
-        with_state(|state| Ok(state.lifecycle().download_artifact_path(patch.number)))?;
+        lifecycle::download_artifact_path(Path::new(&config.storage_dir), patch.number);
 
     if !matches!(action, DownloadAction::Complete) {
         let resume_from = match action {
@@ -531,7 +531,7 @@ fn install_downloaded_patch(
     download_path: &Path,
 ) -> anyhow::Result<UpdateStatus> {
     let installed_path =
-        with_state(|state| Ok(state.lifecycle().installed_artifact_path(patch.number)))?;
+        lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch.number);
 
     let patch_base_rs = patch_base(config)?;
     if let Err(e) = inflate(download_path, patch_base_rs, &installed_path) {
