@@ -51,6 +51,7 @@ words:
   - gclient
   - hdpi
   - ifdef
+  - keypair
   - libapp
   - libc
   - libflutter
