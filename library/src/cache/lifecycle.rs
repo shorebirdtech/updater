@@ -791,6 +791,74 @@ mod tests {
     }
 
     #[test]
+    fn mark_bad_from_downloading_records_partial_file_size() {
+        let (_tmp, lifecycle) = fixture();
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Downloading {
+                    url: "u".into(),
+                    hash: "h".into(),
+                    signature: Some("s".into()),
+                },
+            )
+            .unwrap();
+        // File size on disk is what gets recorded as the patch's "size"
+        // — there's no recorded count in Downloading anymore.
+        let path = lifecycle.download_artifact_path(1);
+        std::fs::write(&path, vec![0u8; 250]).unwrap();
+
+        lifecycle.mark_bad(1, BadReason::InvalidPatchBytes).unwrap();
+
+        match lifecycle.read_state(1).unwrap() {
+            PatchState::Bad {
+                reason,
+                hash,
+                signature,
+                size,
+            } => {
+                assert_eq!(reason, BadReason::InvalidPatchBytes);
+                assert_eq!(hash, Some("h".into()));
+                assert_eq!(signature, Some("s".into()));
+                assert_eq!(size, Some(250));
+            }
+            other => panic!("expected Bad, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mark_bad_overwrites_reason_when_already_bad() {
+        let (_tmp, lifecycle) = fixture();
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Bad {
+                    reason: BadReason::BootCrash,
+                    hash: Some("h".into()),
+                    signature: Some("s".into()),
+                    size: Some(99),
+                },
+            )
+            .unwrap();
+        lifecycle.mark_bad(1, BadReason::ValidationFailed).unwrap();
+        // Reason changed, other fields preserved.
+        match lifecycle.read_state(1).unwrap() {
+            PatchState::Bad {
+                reason,
+                hash,
+                signature,
+                size,
+            } => {
+                assert_eq!(reason, BadReason::ValidationFailed);
+                assert_eq!(hash, Some("h".into()));
+                assert_eq!(signature, Some("s".into()));
+                assert_eq!(size, Some(99));
+            }
+            other => panic!("expected Bad, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn mark_bad_deletes_artifact_files_but_keeps_tombstone() {
         let (_tmp, lifecycle) = fixture();
         lifecycle
@@ -1404,6 +1472,67 @@ mod tests {
         assert!(lifecycle
             .validate_next_boot_patch(None, PatchVerificationMode::default())
             .is_ok());
+    }
+
+    #[test]
+    fn validate_next_boot_patch_marks_bad_when_artifact_missing() {
+        let (_tmp, mut lifecycle) = fixture();
+        // State says Installed but the dlc.vmcode file is gone (e.g.
+        // the user cleared app data). Validation should mark Bad.
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Installed {
+                    hash: "h".into(),
+                    signature: None,
+                    size: 100,
+                },
+            )
+            .unwrap();
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        let result = lifecycle.validate_next_boot_patch(None, PatchVerificationMode::default());
+        assert!(result.is_err());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::ValidationFailed,
+                ..
+            })
+        ));
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+    }
+
+    #[test]
+    fn validate_next_boot_patch_marks_bad_when_pointer_targets_non_installed() {
+        let (_tmp, mut lifecycle) = fixture();
+        // Pointer says boot patch 1, but patch 1 is in Downloading
+        // (shouldn't happen in normal flow, but pointers and state can
+        // diverge through corruption). Validation should mark Bad.
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Downloading {
+                    url: "u".into(),
+                    hash: "h".into(),
+                    signature: None,
+                },
+            )
+            .unwrap();
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+
+        let result = lifecycle.validate_next_boot_patch(None, PatchVerificationMode::default());
+        assert!(result.is_err());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::ValidationFailed,
+                ..
+            })
+        ));
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
     }
 
     #[test]

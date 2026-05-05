@@ -473,6 +473,64 @@ mod tests {
         assert!(state.install_patch(&bogus, "h", None).is_err());
     }
 
+    // The base64-encoded RSA key + matching signature were generated for
+    // signing.rs's tests; reused here to exercise the InstallOnly path
+    // without standing up our own keypair fixture.
+    const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
+    const TEST_HASH: &str = "404e5caa5b906f6d03c97657e8c4d604d759f9cfba1a8bba9d5b49a5ebc174f9";
+    const TEST_SIGNATURE: &str = "2ixSo5LpaWUSLg2GJEV+D+uyLeLjp0c3vNXnl0yb1iJjAdpn10BFlbcwCcjaJW9PNky2HU2hKOBe62PkFHOU8DDYOfxf2LGg/ToLGPHin85WrwFAceAUYDs7JpQr43dRTbrXcT8k5tuCQOTwXecGwuWcOFFvh0GbXFnyAmi7fLfN9CtTsG2GIOle/LyYLwoviTrXn/fZTZEYrqxD/wZ4QzoWOWLWNvrPbILhqWELkBLhdZeK0+nC2CIxFRYd3bUeOi1AGtPyHKBfdwuf4VO3+HbwJVaAEiD7HU2Bj+Zp1xeSdbznmYgBV86oizrLFd23D+lBfTlmDGgdfNE9J4Z2/g==";
+
+    fn load_with_verification(
+        tmp: &TempDir,
+        public_key: Option<&str>,
+        mode: PatchVerificationMode,
+    ) -> UpdaterState {
+        UpdaterState::load_or_new_on_error(tmp.path(), "1.0.0+1", public_key, mode)
+    }
+
+    #[test]
+    fn install_patch_install_only_accepts_valid_signature() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load_with_verification(
+            &tmp,
+            Some(TEST_PUBLIC_KEY),
+            PatchVerificationMode::InstallOnly,
+        );
+        let p = fake_artifact(&tmp, 1);
+        state
+            .install_patch(&p, TEST_HASH, Some(TEST_SIGNATURE))
+            .unwrap();
+        assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+    }
+
+    #[test]
+    fn install_patch_install_only_rejects_missing_signature() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load_with_verification(
+            &tmp,
+            Some(TEST_PUBLIC_KEY),
+            PatchVerificationMode::InstallOnly,
+        );
+        let p = fake_artifact(&tmp, 1);
+        assert!(state.install_patch(&p, TEST_HASH, None).is_err());
+        // Failure leaves no Installed state.
+        assert!(state.next_boot_patch().is_none());
+    }
+
+    #[test]
+    fn install_patch_install_only_rejects_bad_signature() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load_with_verification(
+            &tmp,
+            Some(TEST_PUBLIC_KEY),
+            PatchVerificationMode::InstallOnly,
+        );
+        let p = fake_artifact(&tmp, 1);
+        assert!(state
+            .install_patch(&p, TEST_HASH, Some("not_a_real_signature"))
+            .is_err());
+    }
+
     #[test]
     fn boot_lifecycle_tracks_state() {
         let tmp = TempDir::new().unwrap();
