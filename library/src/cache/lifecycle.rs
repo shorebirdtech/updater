@@ -1520,6 +1520,65 @@ mod tests {
     }
 
     #[test]
+    // Cleanup-on-boot-success runs `cleanup_orphan_downloads`, which
+    // walks `download_root/` and removes anything that doesn't
+    // correspond to a `Downloading`/`Downloaded` patch. This test
+    // exercises every "remove" branch in one shot: an orphan (no
+    // state.json), a stale download (state is `Installed`), and a
+    // non-numeric file. Live downloads (`Downloading` /
+    // `Downloaded`) are kept.
+    fn record_boot_success_sweeps_orphan_and_stale_downloads() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 5, 500);
+        lifecycle.pointers.next_boot_patch = Some(5);
+        lifecycle.save_pointers().unwrap();
+
+        // Drop four files into download_root with varying states:
+        std::fs::create_dir_all(&lifecycle.download_root).unwrap();
+        // 1) Orphan: numeric name with no state.json on disk.
+        std::fs::write(lifecycle.download_artifact_path(2), b"orphan bytes").unwrap();
+        // 2) Stale: numeric name with state.json saying Installed
+        //    (record_install_complete should have removed this; this
+        //    is the safety net).
+        install_state(&lifecycle, 3, 300);
+        std::fs::write(lifecycle.download_artifact_path(3), b"stale bytes").unwrap();
+        // 3) Non-numeric: garbage in our directory.
+        std::fs::write(lifecycle.download_root.join("not_a_number"), b"junk").unwrap();
+        // 4) Live: a Downloading patch that should survive.
+        lifecycle
+            .write_state(
+                7,
+                &PatchState::Downloading {
+                    url: "u".into(),
+                    hash: "h".into(),
+                    signature: None,
+                },
+            )
+            .unwrap();
+        std::fs::write(lifecycle.download_artifact_path(7), b"in flight").unwrap();
+
+        lifecycle.record_boot_start(5).unwrap();
+        lifecycle.record_boot_success().unwrap();
+
+        assert!(
+            !lifecycle.download_artifact_path(2).exists(),
+            "orphan removed"
+        );
+        assert!(
+            !lifecycle.download_artifact_path(3).exists(),
+            "stale Installed download removed"
+        );
+        assert!(
+            !lifecycle.download_root.join("not_a_number").exists(),
+            "non-numeric garbage removed"
+        );
+        assert!(
+            lifecycle.download_artifact_path(7).exists(),
+            "live Downloading patch's bytes preserved"
+        );
+    }
+
+    #[test]
     // Ports
     // `patch_manager.rs::record_boot_success_for_patch_tests::deletes_unrecognized_directories_in_patches_dir`.
     // We own `patches/` — anything in it whose name isn't a patch
