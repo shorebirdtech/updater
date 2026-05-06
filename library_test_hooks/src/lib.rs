@@ -21,6 +21,8 @@
 //! Production updater builds (the cdylib/staticlib that ships in the
 //! engine) do not enable `test-hooks` and never link this crate.
 
+use std::os::raw::c_char;
+
 // Re-export the production C API. This makes the symbols part of this
 // crate's public API surface, which prevents the linker from stripping
 // them when producing the cdylib (an rlib's `#[no_mangle]` items are
@@ -38,4 +40,59 @@ pub use updater::c_api::engine::*;
 #[no_mangle]
 pub extern "C" fn shorebird_test_reset() {
     updater::testing_reset_config();
+}
+
+// Stub `FileCallbacks` mirroring the `#[cfg(test)]` `FileCallbacks::new`
+// in `library/src/c_api/c_file.rs`. The test patch fixtures are
+// self-contained zstd payloads that bipatch can apply against an empty
+// source, so the read/seek callbacks never need to deliver real bytes.
+extern "C" fn stub_open() -> *mut libc::c_void {
+    1 as *mut libc::c_void
+}
+extern "C" fn stub_read(_handle: *mut libc::c_void, _buffer: *mut u8, _count: usize) -> usize {
+    0
+}
+extern "C" fn stub_seek(_handle: *mut libc::c_void, _offset: i64, _whence: i32) -> i64 {
+    0
+}
+extern "C" fn stub_close(_handle: *mut libc::c_void) {}
+
+/// Test-only convenience wrapper around `shorebird_init` that builds
+/// `AppParameters` and stub `FileCallbacks` internally. Dart tests
+/// pass plain C strings instead of needing bindings for those
+/// engine-API structs.
+#[no_mangle]
+pub extern "C" fn shorebird_test_init(
+    app_storage_dir: *const c_char,
+    code_cache_dir: *const c_char,
+    release_version: *const c_char,
+    libapp_path: *const c_char,
+    yaml: *const c_char,
+) -> bool {
+    let libapp_paths = [libapp_path];
+    let params = updater::c_api::engine::AppParameters {
+        release_version,
+        original_libapp_paths: libapp_paths.as_ptr(),
+        original_libapp_paths_size: 1,
+        app_storage_dir,
+        code_cache_dir,
+    };
+    let callbacks = updater::c_api::engine::FileCallbacks {
+        open: stub_open,
+        read: stub_read,
+        seek: stub_seek,
+        close: stub_close,
+    };
+    updater::c_api::engine::shorebird_init(&params, callbacks, yaml)
+}
+
+/// Simulates the engine's successful boot of `next_boot_patch`.
+/// In production this is two engine actions (launch-start, then
+/// launch-success after Dart VM startup completes); the Dart layer
+/// has no concept of either, so we expose the combined outcome as a
+/// single semantic action: "the next patch booted cleanly."
+#[no_mangle]
+pub extern "C" fn shorebird_test_simulate_successful_launch() {
+    updater::c_api::engine::shorebird_report_launch_start();
+    updater::c_api::engine::shorebird_report_launch_success();
 }
