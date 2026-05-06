@@ -1,0 +1,23 @@
+[package]
+name = "library_test_hooks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Test-only cdylib that wraps the production updater with extra C symbols
+# (`shorebird_test_*`) used by Dart integration tests. Never linked into a
+# production engine build. The library name is `updater_test_hooks` so the
+# artifact ends up as `libupdater_test_hooks.{dylib,so}` / `updater_test_hooks.dll`.
+[lib]
+name = "updater_test_hooks"
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "0.2.98"
+# `test-hooks` widens the visibility of internal items the C symbols below
+# call into (e.g. `testing_reset_config`). Production builds of `updater`
+# do not enable this feature.
+updater = { path = "../library", features = ["test-hooks"] }
+
+[build-dependencies]
+cbindgen = "0.29.2"
