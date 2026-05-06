@@ -38,6 +38,7 @@ words:
   - Decompressor
   - dllexport
   - dlopen
+  - downloadables
   - EDQUOT
   - EACCES
   - embedders
@@ -55,6 +56,7 @@ words:
   - libflutter
   - libupdater
   - logcat
+  - malloc
   - memmap
   - mmap
   - mockall

@@ -26,6 +26,28 @@ extern "C" {
  */
 SHOREBIRD_EXPORT void shorebird_test_reset(void);
 
+/**
+ * Test-only convenience wrapper around `shorebird_init` that builds
+ * `AppParameters` and stub `FileCallbacks` internally. Dart tests
+ * pass plain C strings instead of needing bindings for those
+ * engine-API structs.
+ */
+SHOREBIRD_EXPORT
+bool shorebird_test_init(const char *app_storage_dir,
+                         const char *code_cache_dir,
+                         const char *release_version,
+                         const char *libapp_path,
+                         const char *yaml);
+
+/**
+ * Simulates the engine's successful boot of `next_boot_patch`.
+ * In production this is two engine actions (launch-start, then
+ * launch-success after Dart VM startup completes); the Dart layer
+ * has no concept of either, so we expose the combined outcome as a
+ * single semantic action: "the next patch booted cleanly."
+ */
+SHOREBIRD_EXPORT void shorebird_test_simulate_successful_launch(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
