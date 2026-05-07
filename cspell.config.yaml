@@ -67,8 +67,10 @@ words:
   - pubspec
   - repr
   - reqwest
+  - resends
   - rlib
   - rsplit
+  - rollforward
   - rollouts
   - RTLD
   - rustflags
