@@ -593,11 +593,30 @@ impl ManagePatches for PatchManager {
     }
 
     fn remove_patch(&mut self, patch_number: usize) -> Result<()> {
-        // Server-driven rollback: mark known-bad so a later fallback path
-        // (e.g. record_boot_failure_for_patch on a *different* patch) can't
-        // promote `last_booted_patch` back to `next_boot_patch` if its
-        // artifact deletion in try_fall_back_from_patch silently fails.
-        self.patches_state.known_bad_patches.insert(patch_number);
+        // Server-driven rollback: drop the patch as a fallback target so a
+        // later boot failure on a different patch can't promote it back via
+        // `try_fall_back_from_patch`'s else-if branch (e.g. if
+        // `delete_patch_artifacts` silently fails and the artifact still
+        // passes `validate_patch_is_bootable`).
+        //
+        // Do *not* add `patch_number` to `known_bad_patches`: that set is a
+        // permanent ban for the current `release_version`, so it would
+        // poison the number for any later rollforward of the same patch
+        // (the dashboard's rollforward flips `is_rolled_back` on the same
+        // row — same number, same hash) or for a numerically-equal patch
+        // in a freshly-recreated release at the same version. FFI's
+        // "what's running" signal is the session-scoped `running_patch`,
+        // so dropping `last_booted_patch` here doesn't regress the
+        // patch-to-release rollback fix from #348.
+        if self
+            .patches_state
+            .last_booted_patch
+            .as_ref()
+            .map(|p| p.number)
+            == Some(patch_number)
+        {
+            self.patches_state.last_booted_patch = None;
+        }
         self.try_fall_back_from_patch(patch_number)
     }
 
@@ -1342,9 +1361,12 @@ mod fall_back_tests {
 
     /// Server rolls back patch 1, then patch 2 arrives and fails to boot.
     /// The else-if fallback path must not promote patch 1 back into
-    /// `next_boot_patch` even though `last_booted_patch` still points at
-    /// patch 1 — the server told us not to use it. `remove_patch` records
-    /// patch 1 as known-bad so this can't happen.
+    /// `next_boot_patch`: the server told us not to use it, even if a
+    /// silent `delete_patch_artifacts` failure leaves the artifact
+    /// intact and `validate_patch_is_bootable` would accept it.
+    /// `remove_patch` defends against this by clearing
+    /// `last_booted_patch` when its number matches the rolled-back
+    /// patch, so there's no fallback target to promote.
     #[test]
     fn rollback_then_failed_replacement_does_not_resurrect_rolled_back_patch() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -1355,21 +1377,14 @@ mod fall_back_tests {
         manager.record_boot_start_for_patch(1)?;
         manager.record_boot_success()?;
 
-        // Server rolls back patch 1.
+        // Server rolls back patch 1. last_booted_patch is dropped because
+        // it points at the rolled-back patch.
         manager.remove_patch(1)?;
-        assert!(manager.is_known_bad_patch(1));
         assert!(manager.patches_state.next_boot_patch.is_none());
-        // last_booted_patch is intentionally preserved; the running
-        // process is still using patch 1 until it restarts.
-        assert_eq!(
-            manager
-                .patches_state
-                .last_booted_patch
-                .as_ref()
-                .unwrap()
-                .number,
-            1
-        );
+        assert!(manager.patches_state.last_booted_patch.is_none());
+        // The number is *not* added to `known_bad_patches`, so a
+        // subsequent rollforward of the same patch can install it.
+        assert!(!manager.is_known_bad_patch(1));
 
         // Re-create patch 1's artifact to simulate a silent
         // delete_patch_artifacts failure (e.g. transient FS issue).
@@ -1382,9 +1397,10 @@ mod fall_back_tests {
         manager.record_boot_start_for_patch(2)?;
         manager.record_boot_failure_for_patch(2)?;
 
-        // Patch 1 must NOT be promoted back to next_boot_patch.
+        // Patch 1 must NOT be promoted back to next_boot_patch — the
+        // property the test guards. With `last_booted_patch` cleared in
+        // `remove_patch`, the else-if branch has no fallback target.
         assert!(manager.patches_state.next_boot_patch.is_none());
-        assert!(manager.is_known_bad_patch(1));
         assert!(manager.is_known_bad_patch(2));
 
         Ok(())
