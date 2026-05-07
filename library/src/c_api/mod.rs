@@ -876,6 +876,105 @@ mod test {
         assert_eq!(shorebird_current_boot_patch_number(), 0);
     }
 
+    /// Server rolls back patch 1, then later rolls it forward again with
+    /// the same number and same hash. The pre-lifecycle code added the
+    /// rolled-back number to `known_bad_patches` permanently for the
+    /// release, so the rollforward was silently dropped on the device.
+    /// The lifecycle's `cleanup` is state-aware: a server-driven
+    /// rollback on a non-`Bad` patch forgets the patch entirely (no
+    /// tombstone), leaving the number free to be reinstalled.
+    /// shorebirdtech/shorebird#3728.
+    #[serial]
+    #[test]
+    fn rollforward_after_server_rollback_reinstalls_patch() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+
+        let apk_path = tmp_dir.path().join("base.apk");
+        write_fake_apk(
+            apk_path.to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
+        let c_params = parameters(&tmp_dir, fake_libapp_path.to_str().unwrap());
+        let c_yaml = c_string("app_id: foo");
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+
+        // Phase 1: install patch 1 and report a successful launch.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
+                        download_url: "ignored".to_owned(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
+            |_url, _event| Ok(()),
+        );
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+
+        // Phase 2: server rolls patch 1 back with no replacement.
+        // Phase-1 spawned threads (PatchDownload, PatchInstallSuccess)
+        // hold a clone of the config from when they were spawned, so they
+        // hit the old report hook above. Nothing in phase 2 should report
+        // or download — only a patch-check happens.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: Some(vec![1]),
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
+        );
+        assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
+        assert_eq!(shorebird_next_boot_patch_number(), 0);
+
+        // Phase 3: server rolls patch 1 forward — same number, same hash,
+        // empty rolled_back list (the row's `is_rolled_back` flipped back
+        // to false on the server). The device must accept this as a normal
+        // "patch available" response and reinstall.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(crate::Patch {
+                        number: 1,
+                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
+                        download_url: "ignored".to_owned(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: Some(vec![]),
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
+            |_url, _event| Ok(()),
+        );
+
+        // Pre-lifecycle: returns false because patch 1 sat in
+        // `known_bad_patches` from phase 2's `remove_patch` call.
+        // Post-lifecycle: phase 2's cleanup forgot patch 1 entirely
+        // (no Bad tombstone for server-driven rollbacks), so this
+        // installs cleanly.
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+    }
+
     /// Patch-to-patch rollback: device on patch 2, server rolls back to
     /// patch 1 (sends rollback signal AND a downloadable replacement).
     /// `check_for_downloadable_update` returns true (replacement available),

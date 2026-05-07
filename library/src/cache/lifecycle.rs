@@ -35,6 +35,12 @@
 //! Callers never pick between "delete tombstone" and "preserve tombstone";
 //! the state on disk decides. See the design notes that led here in
 //! shorebirdtech/shorebird#3737.
+//!
+//! The session-scoped "what patch is the engine currently executing"
+//! signal lives in `config.rs` as `running_patch`, not here — it's not
+//! persisted across launches and is set from `report_launch_start`
+//! before any lifecycle transitions happen. `shorebird_current_boot_patch_number`
+//! reads that, not anything in this module.
 
 use std::path::{Path, PathBuf};
 
@@ -55,6 +61,12 @@ pub enum PatchState {
     /// Compressed bytes are partially on disk. The current bytes-on-disk
     /// count is read from the `download` file at resume time — the state
     /// itself just records "we're mid-download for this url+hash."
+    ///
+    /// `hash`/`signature` here are *comparators*, not trusted values.
+    /// `decide_start` checks them against the server's freshly-delivered
+    /// hash for this number; a mismatch (e.g. a server-side reupload
+    /// under the same patch number) discards the prior bytes and
+    /// restarts. A tampered on-disk hash just causes a redownload.
     Downloading {
         url: String,
         hash: String,
@@ -63,6 +75,11 @@ pub enum PatchState {
     /// Compressed bytes are fully on disk and the size matches what we
     /// recorded after the download completed. Bytes are untrusted until
     /// install validates them (inflate + check_hash).
+    ///
+    /// As with `Downloading`, `hash`/`signature` are comparators only.
+    /// `record_install_complete` carries `signature` forward into
+    /// `Installed`, where Strict-mode boot validation re-verifies it
+    /// against the on-disk artifact's freshly-recomputed hash.
     Downloaded {
         url: String,
         hash: String,
@@ -70,8 +87,14 @@ pub enum PatchState {
         size: u64,
     },
     /// `dlc.vmcode` is present; the patch is bootable.
+    ///
+    /// `hash` is intentionally absent. Install-time validation
+    /// (`check_hash` against the server-fresh hash held in memory)
+    /// has already happened, and we don't trust a hash we'd have to
+    /// re-read from disk to redo that check. Strict-mode boot
+    /// validation recomputes the artifact's hash from bytes and feeds
+    /// it to `check_signature` — `signature` is enough.
     Installed {
-        hash: String,
         signature: Option<String>,
         size: u64,
     },
@@ -228,11 +251,7 @@ impl PatchLifecycle {
                 size,
                 ..
             }) => (Some(hash), signature, Some(size)),
-            Some(PatchState::Installed {
-                hash,
-                signature,
-                size,
-            }) => (Some(hash), signature, Some(size)),
+            Some(PatchState::Installed { signature, size }) => (None, signature, Some(size)),
             Some(PatchState::Bad {
                 hash,
                 signature,
@@ -537,19 +556,27 @@ impl PatchLifecycle {
         Ok(())
     }
 
-    /// Records that patch `n` failed to boot. Clears the boot
-    /// breadcrumb, marks the patch `Bad{BootCrash}`, and recomputes
+    /// Records that patch `n` failed to boot. Marks the patch
+    /// `Bad{BootCrash}`, clears the boot breadcrumb, and recomputes
     /// `next_boot_patch`.
     ///
     /// The patch number is passed in (rather than read from
     /// `currently_booting_patch`) to match the prior PatchManager API
     /// shape — most call sites already have the number in hand. The
     /// breadcrumb is cleared regardless of whether it matched.
+    ///
+    /// `mark_bad` runs *before* clearing the breadcrumb so a crash
+    /// between the two leaves a still-set `currently_booting_patch`
+    /// pointing at an already-Bad patch. Next init's
+    /// `detect_boot_crash_on_init` re-runs this path; `mark_bad` is
+    /// idempotent on Bad → Bad. Reverse the order and a crash strands
+    /// an `Installed` patch with no breadcrumb — the next boot retries
+    /// it silently.
     pub fn record_boot_failure(&mut self, n: usize) -> Result<()> {
+        self.mark_bad(n, BadReason::BootCrash)?;
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
         self.save_pointers()?;
-        self.mark_bad(n, BadReason::BootCrash)?;
         self.recompute_next_boot()
     }
 
@@ -607,6 +634,13 @@ impl PatchLifecycle {
     /// patches — within a release there are at most a couple of patches
     /// active at once, and the last successfully booted patch is the
     /// only one we have evidence works on this device.
+    ///
+    /// Concretely: this is a fall-back-to-`last_booted_patch`-only
+    /// policy, not a fall-back-to-anything-bootable scan. If
+    /// `last_booted_patch` is `None` (e.g. fresh install of a release
+    /// where the freshly Installed `next_boot_patch` then fails
+    /// validation), we go to base release even when an older Installed
+    /// patch may be sitting in `patches/`.
     pub fn recompute_next_boot(&mut self) -> Result<()> {
         let mut dirty = false;
         if let Some(lb) = self.pointers.last_booted_patch {
@@ -663,9 +697,7 @@ impl PatchLifecycle {
         mode: PatchVerificationMode,
     ) -> Result<()> {
         let (expected_size, signature) = match self.read_state(n) {
-            Some(PatchState::Installed {
-                size, signature, ..
-            }) => (size, signature),
+            Some(PatchState::Installed { size, signature }) => (size, signature),
             other => bail!("Patch {n} is not Installed: {other:?}"),
         };
         let path = self.installed_artifact_path(n);
@@ -782,10 +814,8 @@ impl PatchLifecycle {
     /// `validate_installed_patch` will check against on next boot).
     /// Also removes the now-unneeded compressed `download` file.
     pub fn record_install_complete(&self, n: usize, installed_size: u64) -> Result<()> {
-        let (hash, signature) = match self.read_state(n) {
-            Some(PatchState::Downloaded {
-                hash, signature, ..
-            }) => (hash, signature),
+        let signature = match self.read_state(n) {
+            Some(PatchState::Downloaded { signature, .. }) => signature,
             other => {
                 anyhow::bail!(
                     "record_install_complete called on patch {n} in unexpected state: {other:?}"
@@ -795,7 +825,6 @@ impl PatchLifecycle {
         self.write_state(
             n,
             &PatchState::Installed {
-                hash,
                 signature,
                 size: installed_size,
             },
@@ -867,7 +896,6 @@ mod tests {
             .write_state(
                 1,
                 &PatchState::Installed {
-                    hash: "h".into(),
                     signature: Some("s".into()),
                     size: 999,
                 },
@@ -882,7 +910,9 @@ mod tests {
                 size,
             } => {
                 assert_eq!(reason, BadReason::BootCrash);
-                assert_eq!(hash, Some("h".into()));
+                // Installed has no hash field; Bad.hash is None for
+                // Installed→Bad transitions.
+                assert_eq!(hash, None);
                 assert_eq!(signature, Some("s".into()));
                 assert_eq!(size, Some(999));
             }
@@ -1043,7 +1073,6 @@ mod tests {
             .write_state(
                 1,
                 &PatchState::Installed {
-                    hash: "h".into(),
                     signature: None,
                     size: 100,
                 },
@@ -1070,7 +1099,6 @@ mod tests {
             .write_state(
                 1,
                 &PatchState::Installed {
-                    hash: "h".into(),
                     signature: None,
                     size: 1,
                 },
@@ -1263,7 +1291,6 @@ mod tests {
             .write_state(
                 1,
                 &PatchState::Installed {
-                    hash: "h".into(),
                     signature: None,
                     size: 1000,
                 },
@@ -1359,7 +1386,6 @@ mod tests {
             .write_state(
                 1,
                 &PatchState::Installed {
-                    hash: "h".into(),
                     signature: None,
                     size: 100,
                 },
@@ -1391,7 +1417,6 @@ mod tests {
         assert_eq!(
             lifecycle.read_state(1).unwrap(),
             PatchState::Installed {
-                hash: "h".into(),
                 signature: Some("s".into()),
                 size: 9999,
             }
@@ -1420,7 +1445,6 @@ mod tests {
             .write_state(
                 n,
                 &PatchState::Installed {
-                    hash: format!("hash{n}"),
                     signature: None,
                     size,
                 },
@@ -1806,7 +1830,6 @@ mod tests {
             .write_state(
                 1,
                 &PatchState::Installed {
-                    hash: "h".into(),
                     signature: None,
                     size: 100,
                 },
@@ -1864,16 +1887,9 @@ mod tests {
     // private key to the repo.
     const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
 
-    /// SHA256 of the single-byte file content `b"1"`. Matches the
-    /// `INFLATED_PATCH_HASH` constant from the prior `patch_manager`
-    /// tests — the same trick they used: write a 1-byte file `"1"`,
-    /// declare its hash as Installed.hash, sign with the matching
-    /// private key.
-    const INFLATED_PATCH_HASH: &str =
-        "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
-    /// Real signature of `INFLATED_PATCH_HASH` produced with the
-    /// private key matching `TEST_PUBLIC_KEY`. Carried over verbatim
-    /// from the prior `patch_manager.rs::SIGNATURE` constant.
+    /// Real signature of SHA256(`b"1"`) produced with the private key
+    /// matching `TEST_PUBLIC_KEY`. Carried over verbatim from the prior
+    /// `patch_manager.rs::SIGNATURE` constant.
     const INFLATED_PATCH_SIGNATURE: &str = "ZGccldv01XqHQ76bXuKV/9EQnNK0Q+reQ9bJHVnGfLldF+BLRx0divgPfKP5Df9BJPA3dw1Z1VortfepmMGebP3kS593l5zoktu9MIepxvRAFWNKE5PDTIIvCL/ddTPEHt6NNCeD6HLOMLzbEX3cFZa+lq3UymGi0aqA5DlXirJBGtopojc9nOXZ22n/qHNZIHEkGcqKbSMSK9oC55whKHnlJTbCXdmSyDc65B4PcgseqJom1riVK3XGW1YMrSpuMAU+CDT7HhdESmI1UtH1bYeBITfRhQztdDTfti2vJTf2Y+lYC99CFiISgD7f1m0KUcC+VnEAMZSYtgxSk6AX2A==";
 
     /// Test helper: writes an Installed state with a 100-byte artifact
@@ -1889,7 +1905,6 @@ mod tests {
             .write_state(
                 n,
                 &PatchState::Installed {
-                    hash: "irrelevant-for-failure-paths".to_string(),
                     signature: signature.map(String::from),
                     size: 100,
                 },
@@ -1897,11 +1912,10 @@ mod tests {
             .unwrap();
     }
 
-    /// Test helper for the Strict-mode happy path. Writes the
-    /// 1-byte artifact `b"1"` (whose SHA256 is `INFLATED_PATCH_HASH`)
-    /// and an `Installed` state whose hash + signature match. Strict
-    /// validation hashes the file, then verifies the signature
-    /// against that hash + the public key — all three line up here.
+    /// Test helper for the Strict-mode happy path. Writes the 1-byte
+    /// artifact `b"1"` and an `Installed` state whose signature matches
+    /// SHA256(`b"1"`). Strict validation rehashes the file then verifies
+    /// the signature against that hash + the public key.
     fn install_with_valid_signature(lifecycle: &PatchLifecycle, n: usize) {
         let path = lifecycle.installed_artifact_path(n);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1910,7 +1924,6 @@ mod tests {
             .write_state(
                 n,
                 &PatchState::Installed {
-                    hash: INFLATED_PATCH_HASH.to_string(),
                     signature: Some(INFLATED_PATCH_SIGNATURE.to_string()),
                     size: 1,
                 },

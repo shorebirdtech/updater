@@ -26,6 +26,11 @@ const STATE_FILE_NAME: &str = "state.json";
 /// `patches_state.json` is the legacy file from the prior `PatchManager`
 /// implementation; carrying it forward would orphan ~few-KB of stale
 /// state on every device upgrading through this PR.
+// TODO(eseidel): Drop `patches_state.json` from this list two minor
+// versions after the release that ships this PR. By that point the
+// in-flight devices upgrading from a pre-PR build have all wiped it
+// once on their first release-version change, and nothing on disk
+// references it anymore.
 const SHOREBIRD_OWNED_PATHS: &[&str] = &["patches", "pointers.json", "patches_state.json"];
 
 /// Records the updater's "state of the world": which patches we have
@@ -379,7 +384,6 @@ impl UpdaterState {
         self.lifecycle.write_state(
             patch.number,
             &PatchState::Installed {
-                hash: hash.to_string(),
                 signature: signature.map(String::from),
                 size: installed_size,
             },
