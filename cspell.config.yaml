@@ -39,8 +39,9 @@ words:
   - dllexport
   - dlopen
   - downloadables
-  - EDQUOT
   - EACCES
+  - EDQUOT
+  - embedder
   - embedders
   - EOCD
   - endtemplate
@@ -51,6 +52,7 @@ words:
   - gclient
   - hdpi
   - ifdef
+  - keypair
   - libapp
   - libc
   - libflutter
@@ -68,7 +70,9 @@ words:
   - repr
   - reqwest
   - rlib
+  - roundtrips
   - rsplit
+  - rollforward
   - rollouts
   - RTLD
   - rustflags
@@ -82,9 +86,11 @@ words:
   - subosito
   - swiftpm
   - symbolication
+  - tombstoned
   - ureq
   - unbootable
   - unbooted
+  - unparseable
   - unreviewable
   - unwritable
   - usize

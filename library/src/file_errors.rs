@@ -13,6 +13,7 @@ pub enum FileOperation {
     ReadFile,
     #[allow(dead_code)] // Included for completeness; not yet used outside tests.
     DeleteFile,
+    #[allow(dead_code)] // Included for completeness; not yet used outside tests.
     DeleteDir,
     RenameFile,
     GetMetadata,

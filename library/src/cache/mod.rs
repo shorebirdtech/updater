@@ -1,5 +1,5 @@
-mod disk_io;
-mod patch_manager;
+pub(crate) mod disk_io;
+pub mod lifecycle;
 mod signing;
 pub mod updater_state;
 
