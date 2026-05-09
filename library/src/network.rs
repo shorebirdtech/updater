@@ -263,10 +263,30 @@ impl PatchCheckRequest {
         client_id: &str,
         current_patch_number: Option<usize>,
     ) -> PatchCheckRequest {
+        Self::new_for_release(
+            config,
+            client_id,
+            &config.release_version,
+            current_patch_number,
+        )
+    }
+
+    /// Builds a patch-check request for an arbitrary `release_version`. Used
+    /// when prefetching patches for sibling releases on the same track that
+    /// the server advertised via `available_release_versions`. For sibling
+    /// fetches `current_patch_number` is always `None` — we're spoofing the
+    /// release_version and the server's own per-release patch number space
+    /// is independent of what we're running.
+    pub fn new_for_release(
+        config: &UpdateConfig,
+        client_id: &str,
+        release_version: &str,
+        current_patch_number: Option<usize>,
+    ) -> PatchCheckRequest {
         PatchCheckRequest {
             app_id: config.app_id.clone(),
             channel: config.channel.clone(),
-            release_version: config.release_version.clone(),
+            release_version: release_version.to_string(),
             platform: current_platform().to_string(),
             arch: current_arch().to_string(),
             client_id: client_id.to_string(),
@@ -295,6 +315,19 @@ pub struct PatchCheckResponse {
     /// uninstalled from the device and not booted from.
     #[serde(default)]
     pub rolled_back_patch_numbers: Option<Vec<usize>>,
+
+    /// Other release_versions on this app's track that have publishable
+    /// patches. The client may issue follow-up `/patches/check` requests
+    /// scoped to each entry to prefetch those patches before the user's
+    /// native binary updates to the corresponding release.
+    ///
+    /// The current release_version is filtered out by the client; the server
+    /// may include or exclude it for convenience.
+    ///
+    /// Older clients that don't recognize this field simply ignore it, so
+    /// it's safe for the server to populate unconditionally.
+    #[serde(default)]
+    pub available_release_versions: Option<Vec<String>>,
 }
 
 /// Reports a patch event (e.g., install success/failure) to the server.

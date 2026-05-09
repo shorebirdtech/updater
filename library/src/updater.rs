@@ -3,22 +3,20 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
-use std::path::Path;
-// PathBuf is only used by `libapp_path_from_settings`, which is itself
-// gated to non-android, non-test builds.
-#[cfg(not(any(target_os = "android", test)))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
-use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
+use crate::cache::lifecycle::{self, BadReason, DownloadAction, PatchLifecycle, PatchState, SkipReason};
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
-use crate::network::{download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest};
+use crate::network::{
+    download_to_path, patches_check_url, NetworkHooks, PatchCheckRequest, PatchCheckResponse,
+};
 use crate::updater_lock::{with_updater_thread_lock, UpdaterLockState};
 use crate::yaml::YamlConfig;
 
@@ -258,6 +256,17 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             ))?;
         }
 
+        // If a previous run prefetched a patch for the now-running release,
+        // inflate it against this binary and promote it into the active
+        // patch lifecycle. Best-effort; failures don't break init.
+        if let Err(e) = try_promote_prefetched_patches(&mut state, config) {
+            shorebird_warn!(
+                "Failed to promote prefetched patches for {}: {:?}",
+                config.release_version,
+                e
+            );
+        }
+
         Ok(())
     })
     .map_err(|e| {
@@ -426,6 +435,33 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     let response = patch_check_request_fn(&patches_check_url(&config.base_url), request)?;
     shorebird_info!("Patch check response: {:?}", response);
 
+    // Carve off the sibling-release list before consuming the rest of the
+    // response in the main install path. Server-side, this is populated
+    // from the set of release_versions on this app's track that have a
+    // publishable patch; older clients ignore it.
+    let advertised_siblings = response.available_release_versions.clone();
+    let main_status = install_from_patch_check_response(&config, response)?;
+
+    // Best-effort: prefetch patches for sibling releases the server advertised.
+    // Failures here don't affect the main update result.
+    if let Some(siblings) = advertised_siblings {
+        if let Err(e) = prefetch_sibling_release_patches(&config, siblings) {
+            shorebird_warn!("Sibling-release patch prefetch failed: {:?}", e);
+        }
+    }
+
+    Ok(main_status)
+}
+
+/// Acts on a patch-check response for the running release: rolls back any
+/// patches the server marked rolled-back, then downloads, inflates, and
+/// installs the response's patch (if any). Extracted from
+/// `update_internal` so the prefetch tail can run independently of which
+/// of this function's early-returns fired.
+fn install_from_patch_check_response(
+    config: &UpdateConfig,
+    response: PatchCheckResponse,
+) -> anyhow::Result<UpdateStatus> {
     if let Some(rolled_back_patches) = response.rolled_back_patch_numbers {
         roll_back_patches_if_needed(rolled_back_patches)?;
     }
@@ -524,7 +560,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         shorebird_info!("Prior download already complete; skipping fetch.");
     }
 
-    install_downloaded_patch(&config, &patch, &download_path)
+    install_downloaded_patch(config, &patch, &download_path)
 }
 
 /// Inflates the compressed bytes at `download_path` into the lifecycle's
@@ -610,6 +646,381 @@ fn mark_patch_bad(patch_number: usize, reason: BadReason) {
         );
     }
 }
+
+// =============================================================================
+// Sibling-release prefetch
+// =============================================================================
+//
+// Closes the patchless-first-launch gap from
+// shorebirdtech/shorebird#3755. When a user's native binary auto-updates
+// between Shorebird patch-checks, the device today must boot the unpatched
+// new release until the next patch-check completes. The prefetch path
+// parks raw deltas for *other* release_versions on the same track so
+// that when the user later updates to one of them, the matching delta
+// is already on disk and gets promoted into the active boot path on init.
+//
+// Layout for prefetched patches mirrors the per-release lifecycle, just
+// namespaced by release_version:
+//
+//   <storage_dir>/prefetched_patches/<rv>/patches/<n>/state.json
+//   <download_dir>/prefetched_patches/<rv>/<n>
+//
+// This namespace is wholly separate from the per-release `patches/` and
+// `download_dir/<n>` paths the active lifecycle owns — the release-version
+// reset wipes the active store but leaves the prefetched store intact.
+// We construct an independent `PatchLifecycle` against the prefetched
+// roots to reuse `record_download_started`, `record_download_complete`,
+// `read_state`, and `decide_start` for free.
+//
+// Promotion (in `handle_prior_boot_failure_if_necessary`) finds a
+// prefetched delta matching the now-running release_version, moves the
+// compressed bytes into the active download root, writes `Downloaded`
+// state into the active patches dir, then runs the existing
+// inflate → check_hash → record_install_complete → promote_to_next_boot
+// pipeline against it. The new binary's `patch_public_key` is the right
+// key for both hash verification and Strict-mode boot signing; no
+// special handling is needed.
+
+const PREFETCHED_DIR_NAME: &str = "prefetched_patches";
+
+fn prefetched_state_root(storage_dir: &Path, release_version: &str) -> PathBuf {
+    storage_dir
+        .join(PREFETCHED_DIR_NAME)
+        .join(sanitize_path_component(release_version))
+}
+
+fn prefetched_download_root(download_dir: &Path, release_version: &str) -> PathBuf {
+    download_dir
+        .join(PREFETCHED_DIR_NAME)
+        .join(sanitize_path_component(release_version))
+}
+
+fn prefetched_lifecycle(config: &UpdateConfig, release_version: &str) -> PatchLifecycle {
+    PatchLifecycle::load_or_default(
+        prefetched_state_root(&config.storage_dir, release_version),
+        prefetched_download_root(Path::new(&config.download_dir), release_version),
+    )
+}
+
+/// True if a `Downloaded` delta with this patch number is already cached
+/// for `release_version`. Used to skip redundant downloads on repeated
+/// prefetch passes.
+fn has_prefetched_downloaded(
+    config: &UpdateConfig,
+    release_version: &str,
+    patch_number: usize,
+) -> bool {
+    let lc = prefetched_lifecycle(config, release_version);
+    matches!(lc.read_state(patch_number), Some(PatchState::Downloaded { .. }))
+}
+
+/// For each sibling release_version on the same track, downloads the raw
+/// delta and parks it under `prefetched_patches/<rv>/`. No inflation,
+/// hash check, or signature check at prefetch time — the running binary
+/// is the wrong inflation base for any release other than its own.
+/// Promotion handles all of that later, after the binary updates.
+fn prefetch_sibling_release_patches(
+    config: &UpdateConfig,
+    advertised_siblings: Vec<String>,
+) -> anyhow::Result<()> {
+    let siblings: Vec<String> = advertised_siblings
+        .into_iter()
+        .filter(|rv| rv.as_str() != config.release_version.as_str())
+        .collect();
+
+    // Drop cached entries the server is no longer advertising.
+    if let Err(e) = retain_prefetched_release_versions(config, &siblings) {
+        shorebird_warn!("Failed to prune stale prefetched patches: {:?}", e);
+    }
+
+    if siblings.is_empty() {
+        return Ok(());
+    }
+
+    let client_id = with_state(|state| Ok(state.client_id()))?;
+    let request_fn = config.network_hooks.patch_check_request_fn;
+    let url = patches_check_url(&config.base_url);
+
+    for release_version in &siblings {
+        // Spoof `release_version`; we have no installed patch on that
+        // release so `current_patch_number` is None.
+        let request = PatchCheckRequest::new_for_release(config, &client_id, release_version, None);
+        let response = match request_fn(&url, request) {
+            Ok(r) => r,
+            Err(e) => {
+                shorebird_warn!(
+                    "Patch check for sibling release {} failed: {:?}",
+                    release_version,
+                    e
+                );
+                continue;
+            }
+        };
+
+        if !response.patch_available {
+            continue;
+        }
+        let patch = match response.patch {
+            Some(p) => p,
+            None => continue,
+        };
+
+        if has_prefetched_downloaded(config, release_version, patch.number) {
+            shorebird_debug!(
+                "Already have prefetched patch {} for release {}, skipping download",
+                patch.number,
+                release_version
+            );
+            continue;
+        }
+
+        if let Err(e) = download_and_store_prefetched_patch(config, release_version, &patch) {
+            shorebird_warn!(
+                "Failed to prefetch patch for sibling release {}: {:?}",
+                release_version,
+                e
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Downloads `patch` into the prefetched namespace for `release_version`
+/// and records a `Downloaded` state for it. Reuses the per-patch
+/// lifecycle's transition machinery so promotion later goes through the
+/// same `Downloaded → Installed` path the active flow uses.
+fn download_and_store_prefetched_patch(
+    config: &UpdateConfig,
+    release_version: &str,
+    patch: &crate::network::Patch,
+) -> anyhow::Result<()> {
+    let lc = prefetched_lifecycle(config, release_version);
+    lc.record_download_started(
+        patch.number,
+        &patch.download_url,
+        &patch.hash,
+        patch.hash_signature.as_deref(),
+    )?;
+
+    let download_path = lc.download_artifact_path(patch.number);
+    if let Some(parent) = download_path.parent() {
+        std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
+    }
+    let dl_result = download_to_path(
+        &config.network_hooks,
+        &patch.download_url,
+        &download_path,
+        0,
+    )?;
+
+    if let Some(expected) = dl_result.content_length {
+        if dl_result.total_bytes != expected {
+            // Bytes don't match the server's Content-Length; drop the
+            // partial. We don't `mark_bad` because that's a
+            // per-release-version concept and this is a different
+            // release_version from the running one.
+            let _ = std::fs::remove_file(&download_path);
+            bail!(
+                "Sibling-release download size mismatch: expected {} bytes, got {}",
+                expected,
+                dl_result.total_bytes
+            );
+        }
+    }
+
+    lc.record_download_complete(patch.number, dl_result.total_bytes)?;
+
+    shorebird_info!(
+        "Prefetched patch {} for sibling release {}",
+        patch.number,
+        release_version
+    );
+    Ok(())
+}
+
+/// Drops every cached prefetched-release directory whose release_version
+/// isn't in `keep`. Cleans up siblings the server has stopped
+/// advertising, which limits how much disk we hold for indefinitely-stale
+/// future releases.
+fn retain_prefetched_release_versions(config: &UpdateConfig, keep: &[String]) -> anyhow::Result<()> {
+    let state_dir = config.storage_dir.join(PREFETCHED_DIR_NAME);
+    let download_dir = Path::new(&config.download_dir).join(PREFETCHED_DIR_NAME);
+    if !state_dir.exists() {
+        return Ok(());
+    }
+
+    let keep_set: std::collections::HashSet<String> =
+        keep.iter().map(|rv| sanitize_path_component(rv)).collect();
+
+    if let Ok(entries) = std::fs::read_dir(&state_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
+            if !keep_set.contains(&name_str) {
+                let _ = std::fs::remove_dir_all(entry.path());
+                let _ = std::fs::remove_dir_all(download_dir.join(&name_str));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// If a previous run prefetched a delta for the now-running release,
+/// move the compressed bytes into the active download root, write
+/// `Downloaded` state under the active patches dir, then run the
+/// existing inflate → hash-check → install pipeline against it. Any
+/// failure removes the prefetched entry so we don't loop. Whatever's
+/// left under `prefetched_patches/<current_rv>/` after promotion is
+/// removed.
+fn try_promote_prefetched_patches(
+    state: &mut UpdaterState,
+    config: &UpdateConfig,
+) -> anyhow::Result<()> {
+    let prefetched_root = prefetched_state_root(&config.storage_dir, &config.release_version);
+    if !prefetched_root.exists() {
+        return Ok(());
+    }
+
+    let patch_numbers = list_prefetched_patch_numbers(&prefetched_root);
+    if !patch_numbers.is_empty() {
+        let lc = prefetched_lifecycle(config, &config.release_version);
+        for n in patch_numbers {
+            if let Err(e) = promote_one_prefetched_patch(state, config, &lc, n) {
+                shorebird_warn!("Failed to promote prefetched patch {}: {:?}", n, e);
+            }
+        }
+    }
+
+    // Clean up the now-current release's prefetched directory tree
+    // regardless of which patches succeeded — successful ones already
+    // had their bytes moved out, failed ones stay un-promoted.
+    let _ = std::fs::remove_dir_all(&prefetched_root);
+    let _ = std::fs::remove_dir_all(prefetched_download_root(
+        Path::new(&config.download_dir),
+        &config.release_version,
+    ));
+
+    Ok(())
+}
+
+fn list_prefetched_patch_numbers(prefetched_state_root: &Path) -> Vec<usize> {
+    let patches_dir = prefetched_state_root.join("patches");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&patches_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Ok(n) = name.parse::<usize>() {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Single-patch promotion. Reads the prefetched `Downloaded` state,
+/// moves the compressed bytes into the active download root, writes
+/// `Downloaded` into the active patches dir, then runs the same
+/// inflate + hash-check + record_install_complete + promote_to_next_boot
+/// pipeline `install_downloaded_patch` uses for the current release.
+/// Failures mark the patch `Bad` in the active lifecycle so we don't
+/// retry within this release.
+fn promote_one_prefetched_patch(
+    state: &mut UpdaterState,
+    config: &UpdateConfig,
+    prefetched_lc: &PatchLifecycle,
+    n: usize,
+) -> anyhow::Result<()> {
+    let prefetched_state = prefetched_lc
+        .read_state(n)
+        .context("prefetched patch has no state file")?;
+    let (url, hash, signature, _size) = match prefetched_state {
+        PatchState::Downloaded {
+            url,
+            hash,
+            signature,
+            size,
+        } => (url, hash, signature, size),
+        other => bail!("prefetched patch in unexpected state: {:?}", other),
+    };
+
+    if state.is_known_bad_patch(n) {
+        // The active release already tombstoned this patch number; skip
+        // (the prefetched dir gets wiped by the caller anyway).
+        return Ok(());
+    }
+
+    let prefetched_bytes = prefetched_lc.download_artifact_path(n);
+    if !prefetched_bytes.exists() {
+        bail!("prefetched delta missing at {:?}", prefetched_bytes);
+    }
+
+    let active_bytes = lifecycle::download_artifact_path(Path::new(&config.download_dir), n);
+    if let Some(parent) = active_bytes.parent() {
+        std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
+    }
+    std::fs::rename(&prefetched_bytes, &active_bytes)
+        .with_file_context(FileOperation::RenameFile, &prefetched_bytes)?;
+
+    let active_size = std::fs::metadata(&active_bytes)
+        .with_file_context(FileOperation::GetMetadata, &active_bytes)?
+        .len();
+
+    state.lifecycle_mut().write_state(
+        n,
+        &PatchState::Downloaded {
+            url: url.clone(),
+            hash: hash.clone(),
+            signature: signature.clone(),
+            size: active_size,
+        },
+    )?;
+
+    let installed_path = lifecycle::installed_artifact_path(&config.storage_dir, n);
+    if let Some(parent) = installed_path.parent() {
+        std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
+    }
+
+    let patch_base_rs = patch_base(config)?;
+    if let Err(e) = inflate(&active_bytes, patch_base_rs, &installed_path) {
+        state
+            .lifecycle_mut()
+            .mark_bad(n, BadReason::InvalidPatchBytes)?;
+        return Err(e);
+    }
+    if let Err(e) = check_hash(&installed_path, &hash) {
+        state
+            .lifecycle_mut()
+            .mark_bad(n, BadReason::InstallHashMismatch)?;
+        return Err(e);
+    }
+
+    let installed_size = std::fs::metadata(&installed_path)
+        .with_file_context(FileOperation::GetMetadata, &installed_path)?
+        .len();
+    state
+        .lifecycle_mut()
+        .record_install_complete(n, installed_size)?;
+    state.lifecycle_mut().promote_to_next_boot(n)?;
+
+    shorebird_info!(
+        "Promoted prefetched patch {} into active store for release {}",
+        n,
+        config.release_version
+    );
+    Ok(())
+}
+
+fn sanitize_path_component(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '+' | '-' | '_' => c,
+            _ => '_',
+        })
+        .collect()
+}
+
 
 fn roll_back_patches_if_needed(patch_numbers: Vec<usize>) -> anyhow::Result<()> {
     with_mut_state(|state| {
@@ -1194,6 +1605,8 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: Some(vec![2]),
+
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1268,6 +1681,8 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: Some(vec![2]),
+
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1557,6 +1972,7 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1607,6 +2023,7 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1639,6 +2056,7 @@ patch_verification: bogus_mode
             patch_available: false,
             patch: None,
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1716,6 +2134,7 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1785,6 +2204,7 @@ patch_verification: bogus_mode
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| {
@@ -1832,6 +2252,7 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1894,6 +2315,7 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -1977,6 +2399,7 @@ patch_verification: bogus_mode
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: None,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -2049,6 +2472,7 @@ patch_verification: bogus_mode
                         patch_available: false,
                         patch: None,
                         rolled_back_patch_numbers: None,
+            available_release_versions: None,
                     });
                 }
 
@@ -2127,6 +2551,7 @@ mod rollback_tests {
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: Some(vec![3, 2]),
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -2193,6 +2618,8 @@ mod rollback_tests {
             patch_available: false,
             patch: None,
             rolled_back_patch_numbers: Some(vec![]),
+
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -2232,6 +2659,8 @@ mod rollback_tests {
             patch_available: false,
             patch: None,
             rolled_back_patch_numbers: Some(vec![1]),
+
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -2279,6 +2708,8 @@ mod rollback_tests {
                 hash_signature: None,
             }),
             rolled_back_patch_numbers: Some(vec![2]),
+
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -2362,6 +2793,7 @@ mod check_for_downloadable_update_tests {
                 hash_signature: None,
             }),
             rolled_back_patch_numbers,
+            available_release_versions: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
         let _ = server
@@ -2850,6 +3282,7 @@ mod download_validation_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, _dest: &Path, _resume_from: u64| {
@@ -2897,6 +3330,7 @@ mod download_validation_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| {
@@ -2945,6 +3379,7 @@ mod download_validation_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| {
@@ -2983,6 +3418,7 @@ mod download_validation_tests {
                     patch_available: true,
                     patch: None, // Server says available but doesn't provide patch.
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, _dest: &Path, _resume_from: u64| {
@@ -3069,6 +3505,8 @@ mod rollback_unit_tests {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: Some(vec![99]),
+
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
@@ -3112,6 +3550,7 @@ mod rollback_unit_tests {
                     patch: None,
                     // Roll back both patches.
                     rolled_back_patch_numbers: Some(vec![1, 2]),
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
@@ -3170,6 +3609,7 @@ mod resume_edge_case_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             download_fn,
@@ -3458,6 +3898,7 @@ mod resume_edge_case_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             crate::network::UNEXPECTED_DOWNLOAD,
@@ -3496,6 +3937,7 @@ mod multi_engine_tests {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,

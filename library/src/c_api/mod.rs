@@ -428,6 +428,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -482,6 +483,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -539,6 +541,7 @@ mod test {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: None,
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
@@ -623,6 +626,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+                    available_release_versions: None,
                 })
             },
             |_url, _dest: &Path, _resume_from: u64| Err(anyhow::anyhow!("Error")),
@@ -673,6 +677,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -739,6 +744,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -768,6 +774,8 @@ mod test {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: Some(vec![1]),
+
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
@@ -824,6 +832,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -846,6 +855,8 @@ mod test {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: Some(vec![1]),
+
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
@@ -914,6 +925,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -936,6 +948,8 @@ mod test {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: Some(vec![1]),
+
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
@@ -959,6 +973,8 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: Some(vec![]),
+
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -1011,6 +1027,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+            available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_PATCH_2_PATCH.write_to(dest),
@@ -1035,6 +1052,8 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: Some(vec![2]),
+
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -1123,6 +1142,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,
