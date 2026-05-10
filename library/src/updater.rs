@@ -9,7 +9,9 @@ use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{bail, Context, Result};
 use dyn_clone::DynClone;
 
-use crate::cache::lifecycle::{self, BadReason, DownloadAction, PatchLifecycle, PatchState, SkipReason};
+use crate::cache::lifecycle::{
+    self, BadReason, DownloadAction, PatchLifecycle, PatchState, SkipReason,
+};
 use crate::cache::{PatchInfo, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
@@ -711,7 +713,10 @@ fn has_prefetched_downloaded(
     patch_number: usize,
 ) -> bool {
     let lc = prefetched_lifecycle(config, release_version);
-    matches!(lc.read_state(patch_number), Some(PatchState::Downloaded { .. }))
+    matches!(
+        lc.read_state(patch_number),
+        Some(PatchState::Downloaded { .. })
+    )
 }
 
 /// For each sibling release_version on the same track, downloads the raw
@@ -843,7 +848,10 @@ fn download_and_store_prefetched_patch(
 /// isn't in `keep`. Cleans up siblings the server has stopped
 /// advertising, which limits how much disk we hold for indefinitely-stale
 /// future releases.
-fn retain_prefetched_release_versions(config: &UpdateConfig, keep: &[String]) -> anyhow::Result<()> {
+fn retain_prefetched_release_versions(
+    config: &UpdateConfig,
+    keep: &[String],
+) -> anyhow::Result<()> {
     let state_dir = config.storage_dir.join(PREFETCHED_DIR_NAME);
     let download_dir = Path::new(&config.download_dir).join(PREFETCHED_DIR_NAME);
     if !state_dir.exists() {
@@ -1020,7 +1028,6 @@ fn sanitize_path_component(s: &str) -> String {
         })
         .collect()
 }
-
 
 fn roll_back_patches_if_needed(patch_numbers: Vec<usize>) -> anyhow::Result<()> {
     with_mut_state(|state| {
@@ -2204,7 +2211,7 @@ patch_verification: bogus_mode
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| {
@@ -2472,7 +2479,7 @@ patch_verification: bogus_mode
                         patch_available: false,
                         patch: None,
                         rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                        available_release_versions: None,
                     });
                 }
 
@@ -3282,7 +3289,7 @@ mod download_validation_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, _dest: &Path, _resume_from: u64| {
@@ -3330,7 +3337,7 @@ mod download_validation_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| {
@@ -3379,7 +3386,7 @@ mod download_validation_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| {
@@ -3418,7 +3425,7 @@ mod download_validation_tests {
                     patch_available: true,
                     patch: None, // Server says available but doesn't provide patch.
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, _dest: &Path, _resume_from: u64| {
@@ -3609,7 +3616,7 @@ mod resume_edge_case_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             download_fn,
@@ -3898,7 +3905,7 @@ mod resume_edge_case_tests {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             crate::network::UNEXPECTED_DOWNLOAD,
@@ -3937,7 +3944,7 @@ mod multi_engine_tests {
                     patch_available: false,
                     patch: None,
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             UNEXPECTED_DOWNLOAD,

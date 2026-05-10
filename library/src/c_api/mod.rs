@@ -744,7 +744,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -832,7 +832,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -925,7 +925,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_TESTS_PATCH.write_to(dest),
@@ -1027,7 +1027,7 @@ mod test {
                         hash_signature: None,
                     }),
                     rolled_back_patch_numbers: None,
-            available_release_versions: None,
+                    available_release_versions: None,
                 })
             },
             |_url, dest: &Path, _resume_from: u64| HELLO_PATCH_2_PATCH.write_to(dest),
