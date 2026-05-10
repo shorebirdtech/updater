@@ -66,6 +66,7 @@ words:
   - msvc
   - nscloud
   - oslog
+  - patchless
   - pubspec
   - repr
   - reqwest
