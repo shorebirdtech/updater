@@ -232,10 +232,10 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
-            let boot_time_info = match state.boot_started_at() {
-                Some(ts) => format!("boot_started_at={ts}"),
-                None => "boot_started_at=unknown".to_string(),
-            };
+            let boot_time_info = state
+                .boot_started_at()
+                .map(|ts| format!(",boot_started_at={ts}"))
+                .unwrap_or_default();
 
             let file_info = match std::fs::metadata(&patch.path) {
                 Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
@@ -244,7 +244,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
 
             let now = crate::time::unix_timestamp();
             let message = format!(
-                "crash_recovery: patch {} failed to boot (detected_at={now},{boot_time_info},{file_info})",
+                "crash_recovery: patch {} failed to boot (detected_at={now}{boot_time_info},{file_info})",
                 patch.number
             );
 
@@ -453,6 +453,51 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         _ => {}
     }
 
+    let patch_number = patch.number;
+    let result = download_and_install_patch(&config, &patch, action);
+
+    if let Err(ref err) = result {
+        // Queue a diagnostic event for the failed update attempt.
+        // This captures download failures, inflate errors, hash mismatches,
+        // and install failures — all of which are otherwise invisible.
+        let message = format!(
+            "update_failure: patch {} failed ({})",
+            patch_number,
+            truncate_error_message(err)
+        );
+        let queue_result = with_mut_state(|state| {
+            state.queue_event(PatchEvent::new(
+                &config,
+                EventType::PatchUpdateFailure,
+                patch_number,
+                state.client_id(),
+                Some(&message),
+            ))
+        });
+        if let Err(queue_err) = queue_result {
+            shorebird_error!("Failed to queue update failure event: {:?}", queue_err);
+        }
+    }
+
+    result
+}
+
+/// Truncates an error message to a reasonable length for the event payload.
+/// Avoids sending excessively long messages while preserving the root cause.
+fn truncate_error_message(err: &anyhow::Error) -> String {
+    let msg = format!("{:#}", err);
+    if msg.len() > 256 {
+        format!("{}...", &msg[..253])
+    } else {
+        msg
+    }
+}
+
+fn download_and_install_patch(
+    config: &UpdateConfig,
+    patch: &crate::network::Patch,
+    action: DownloadAction,
+) -> anyhow::Result<UpdateStatus> {
     shorebird_info!(
         "Downloading patch {} for app {} (version {})",
         patch.number,
@@ -524,7 +569,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         shorebird_info!("Prior download already complete; skipping fetch.");
     }
 
-    install_downloaded_patch(&config, &patch, &download_path)
+    install_downloaded_patch(config, patch, &download_path)
 }
 
 /// Inflates the compressed bytes at `download_path` into the lifecycle's
@@ -1812,7 +1857,44 @@ patch_verification: bogus_mode
         // fresh.
         assert!(!tmp_dir.path().join("patches/1").exists());
 
+        // Verify a PatchUpdateFailure event was queued.
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(
+                events[0].identifier,
+                crate::events::EventType::PatchUpdateFailure
+            );
+            assert_eq!(events[0].patch_number, 1);
+            let message = events[0].message.as_ref().unwrap();
+            assert!(
+                message.starts_with("update_failure: patch 1 failed"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("Download size mismatch"),
+                "message should contain error detail: {message}"
+            );
+            Ok(())
+        })?;
+
         Ok(())
+    }
+
+    #[test]
+    fn truncate_error_message_short() {
+        let err = anyhow::anyhow!("short error");
+        let msg = super::truncate_error_message(&err);
+        assert_eq!(msg, "short error");
+    }
+
+    #[test]
+    fn truncate_error_message_long() {
+        let long = "x".repeat(300);
+        let err = anyhow::anyhow!("{}", long);
+        let msg = super::truncate_error_message(&err);
+        assert_eq!(msg.len(), 256);
+        assert!(msg.ends_with("..."));
     }
 
     #[serial]
@@ -2706,7 +2788,7 @@ mod state_recovery_tests {
     }
 
     /// Crash recovery when boot_started_at is not set (old state file format).
-    /// The message should report elapsed_secs=unknown.
+    /// The boot_started_at field should be omitted from the message entirely.
     #[serial]
     #[test]
     fn crash_recovery_without_boot_timestamp() -> Result<()> {
@@ -2732,8 +2814,8 @@ mod state_recovery_tests {
             assert_eq!(events.len(), 1);
             let message = events[0].message.as_ref().unwrap();
             assert!(
-                message.contains("boot_started_at=unknown"),
-                "expected boot_started_at=unknown in message: {message}"
+                !message.contains("boot_started_at"),
+                "expected boot_started_at to be omitted from message: {message}"
             );
             Ok(())
         })?;
