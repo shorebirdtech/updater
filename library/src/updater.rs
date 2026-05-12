@@ -232,10 +232,10 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
-            let boot_time_info = match state.boot_started_at() {
-                Some(ts) => format!("boot_started_at={ts}"),
-                None => "boot_started_at=unknown".to_string(),
-            };
+            let boot_time_info = state
+                .boot_started_at()
+                .map(|ts| format!(",boot_started_at={ts}"))
+                .unwrap_or_default();
 
             let file_info = match std::fs::metadata(&patch.path) {
                 Ok(meta) => format!("file_ok=true,file_size={}", meta.len()),
@@ -244,7 +244,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
 
             let now = crate::time::unix_timestamp();
             let message = format!(
-                "crash_recovery: patch {} failed to boot (detected_at={now},{boot_time_info},{file_info})",
+                "crash_recovery: patch {} failed to boot (detected_at={now}{boot_time_info},{file_info})",
                 patch.number
             );
 
@@ -2788,7 +2788,7 @@ mod state_recovery_tests {
     }
 
     /// Crash recovery when boot_started_at is not set (old state file format).
-    /// The message should report elapsed_secs=unknown.
+    /// The boot_started_at field should be omitted from the message entirely.
     #[serial]
     #[test]
     fn crash_recovery_without_boot_timestamp() -> Result<()> {
@@ -2814,8 +2814,8 @@ mod state_recovery_tests {
             assert_eq!(events.len(), 1);
             let message = events[0].message.as_ref().unwrap();
             assert!(
-                message.contains("boot_started_at=unknown"),
-                "expected boot_started_at=unknown in message: {message}"
+                !message.contains("boot_started_at"),
+                "expected boot_started_at to be omitted from message: {message}"
             );
             Ok(())
         })?;
