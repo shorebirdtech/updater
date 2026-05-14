@@ -1013,11 +1013,16 @@ where
     // doesn't disappear entirely.
     match (patch_result, decompress_result) {
         (Ok(_), Ok(_)) => {
-            // Match the previous info-level chattiness on the happy path:
-            // a single short success line. Detailed counters land at debug
-            // level for development / opt-in production diagnostics.
-            shorebird_info!("Patch successfully applied to {:?}", output_path);
-            shorebird_debug!("Inflate diagnostics on success: {}", diag);
+            // One info-level line per inflate, with the diagnostic blob
+            // appended. This is the same line count as before this change;
+            // the blob makes the line longer but enables cross-run forensic
+            // comparison (e.g. "did base_size change between this user's
+            // last working patch and the broken one?").
+            shorebird_info!(
+                "Patch successfully applied to {:?}. {}",
+                output_path,
+                diag
+            );
             Ok(())
         }
         (Err(patch_err), Ok(_)) => {
