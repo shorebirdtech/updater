@@ -1018,11 +1018,7 @@ where
             // the blob makes the line longer but enables cross-run forensic
             // comparison (e.g. "did base_size change between this user's
             // last working patch and the broken one?").
-            shorebird_info!(
-                "Patch successfully applied to {:?}. {}",
-                output_path,
-                diag
-            );
+            shorebird_info!("Patch successfully applied to {:?}. {}", output_path, diag);
             Ok(())
         }
         (Err(patch_err), Ok(_)) => {
