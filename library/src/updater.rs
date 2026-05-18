@@ -492,7 +492,7 @@ fn install_from_patch_check_response(
     }
 
     let patch_number = patch.number;
-    let result = download_and_install_patch(&config, &patch, action);
+    let result = download_and_install_patch(config, &patch, action);
 
     if let Err(ref err) = result {
         // Queue a diagnostic event for the failed update attempt.
@@ -505,7 +505,7 @@ fn install_from_patch_check_response(
         );
         let queue_result = with_mut_state(|state| {
             state.queue_event(PatchEvent::new(
-                &config,
+                config,
                 EventType::PatchUpdateFailure,
                 patch_number,
                 state.client_id(),
@@ -710,14 +710,15 @@ fn mark_patch_bad(patch_number: usize, reason: BadReason) {
 // namespaced by release_version:
 //
 //   <storage_dir>/prefetched_patches/<rv>/patches/<n>/state.json
-//   <download_dir>/prefetched_patches/<rv>/<n>
+//   <storage_dir>/prefetched_patches/<rv>/downloads/<n>
 //
-// This namespace is wholly separate from the per-release `patches/` and
-// `download_dir/<n>` paths the active lifecycle owns — the release-version
-// reset wipes the active store but leaves the prefetched store intact.
-// We construct an independent `PatchLifecycle` against the prefetched
-// roots to reuse `record_download_started`, `record_download_complete`,
-// `read_state`, and `decide_start` for free.
+// The compressed bytes intentionally live under `storage_dir`, not
+// `download_dir`: release-version resets wipe the active download root
+// before promotion runs for the new binary.
+//
+// The prefetched namespace is still modeled as a `PatchLifecycle`, so it
+// uses the same downloaded-state transitions as the active update path
+// without sharing the active release's patch directory.
 //
 // Promotion (in `handle_prior_boot_failure_if_necessary`) finds a
 // prefetched delta matching the now-running release_version, moves the
@@ -736,7 +737,13 @@ fn prefetched_state_root(storage_dir: &Path, release_version: &str) -> PathBuf {
         .join(sanitize_path_component(release_version))
 }
 
-fn prefetched_download_root(download_dir: &Path, release_version: &str) -> PathBuf {
+fn prefetched_download_root(storage_dir: &Path, release_version: &str) -> PathBuf {
+    prefetched_state_root(storage_dir, release_version).join("downloads")
+}
+
+// Older drafts wrote prefetched bytes under the active download root.
+// Keep this helper only so pruning/promotion can clean those directories up.
+fn legacy_prefetched_download_root(download_dir: &Path, release_version: &str) -> PathBuf {
     download_dir
         .join(PREFETCHED_DIR_NAME)
         .join(sanitize_path_component(release_version))
@@ -745,7 +752,7 @@ fn prefetched_download_root(download_dir: &Path, release_version: &str) -> PathB
 fn prefetched_lifecycle(config: &UpdateConfig, release_version: &str) -> PatchLifecycle {
     PatchLifecycle::load_or_default(
         prefetched_state_root(&config.storage_dir, release_version),
-        prefetched_download_root(Path::new(&config.download_dir), release_version),
+        prefetched_download_root(&config.storage_dir, release_version),
     )
 }
 
@@ -891,17 +898,16 @@ fn download_and_store_prefetched_patch(
 
 /// Drops every cached prefetched-release directory whose release_version
 /// isn't in `keep`. Cleans up siblings the server has stopped
-/// advertising, which limits how much disk we hold for indefinitely-stale
-/// future releases.
+/// advertising, which keeps old future-release candidates bounded.
 fn retain_prefetched_release_versions(
     config: &UpdateConfig,
     keep: &[String],
 ) -> anyhow::Result<()> {
     let state_dir = config.storage_dir.join(PREFETCHED_DIR_NAME);
-    let download_dir = Path::new(&config.download_dir).join(PREFETCHED_DIR_NAME);
     if !state_dir.exists() {
         return Ok(());
     }
+    let legacy_download_dir = Path::new(&config.download_dir).join(PREFETCHED_DIR_NAME);
 
     let keep_set: std::collections::HashSet<String> =
         keep.iter().map(|rv| sanitize_path_component(rv)).collect();
@@ -912,7 +918,7 @@ fn retain_prefetched_release_versions(
             let name_str = name.to_string_lossy().to_string();
             if !keep_set.contains(&name_str) {
                 let _ = std::fs::remove_dir_all(entry.path());
-                let _ = std::fs::remove_dir_all(download_dir.join(&name_str));
+                let _ = std::fs::remove_dir_all(legacy_download_dir.join(&name_str));
             }
         }
     }
@@ -949,7 +955,7 @@ fn try_promote_prefetched_patches(
     // regardless of which patches succeeded — successful ones already
     // had their bytes moved out, failed ones stay un-promoted.
     let _ = std::fs::remove_dir_all(&prefetched_root);
-    let _ = std::fs::remove_dir_all(prefetched_download_root(
+    let _ = std::fs::remove_dir_all(legacy_prefetched_download_root(
         Path::new(&config.download_dir),
         &config.release_version,
     ));
@@ -1013,8 +1019,7 @@ fn promote_one_prefetched_patch(
     if let Some(parent) = active_bytes.parent() {
         std::fs::create_dir_all(parent).with_file_context(FileOperation::CreateDir, parent)?;
     }
-    std::fs::rename(&prefetched_bytes, &active_bytes)
-        .with_file_context(FileOperation::RenameFile, &prefetched_bytes)?;
+    move_or_copy_file(&prefetched_bytes, &active_bytes)?;
 
     let active_size = std::fs::metadata(&active_bytes)
         .with_file_context(FileOperation::GetMetadata, &active_bytes)?
@@ -1063,6 +1068,28 @@ fn promote_one_prefetched_patch(
         config.release_version
     );
     Ok(())
+}
+
+/// Move a prefetched delta into the active download namespace.
+///
+/// A rename is expected inside one app sandbox, but falling back to copy
+/// keeps this safe if an embedder points storage and cache at different
+/// filesystems.
+fn move_or_copy_file(from: &Path, to: &Path) -> anyhow::Result<()> {
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            shorebird_warn!(
+                "Failed to move prefetched patch bytes from {:?} to {:?}: {:?}; copying instead",
+                from,
+                to,
+                rename_error
+            );
+            std::fs::copy(from, to).with_file_context(FileOperation::WriteFile, to)?;
+            std::fs::remove_file(from).with_file_context(FileOperation::DeleteFile, from)?;
+            Ok(())
+        }
+    }
 }
 
 fn sanitize_path_component(s: &str) -> String {
@@ -1641,7 +1668,7 @@ pub fn start_update_thread() {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::{fs, thread, time::Duration};
     use tempfile::TempDir;
 
@@ -1662,7 +1689,23 @@ mod tests {
         }
     }
 
+    const HELLO_TESTS_PATCH_HASH: &str =
+        "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
+    // Generated by `string_patch "hello world" "hello tests"`.
+    const HELLO_TESTS_PATCH_BYTES: &[u8] = &[
+        40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0, 5,
+        116, 101, 115, 116, 115, 0,
+    ];
+
     pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
+        init_for_testing_with_release(tmp_dir, base_url, "1.0.0+1");
+    }
+
+    pub fn init_for_testing_with_release(
+        tmp_dir: &TempDir,
+        base_url: Option<&str>,
+        release_version: &str,
+    ) {
         testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         let mut yaml = "app_id: 1234".to_string();
@@ -1681,7 +1724,7 @@ mod tests {
             crate::AppConfig {
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
-                release_version: "1.0.0+1".to_string(),
+                release_version: release_version.to_string(),
                 original_libapp_paths: vec![libapp_path],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -1853,6 +1896,126 @@ mod tests {
                 .to_string(),
             "Invalid hash string from server."
         );
+    }
+
+    #[serial]
+    #[test]
+    fn prefetched_patch_survives_release_reset_and_promotes_on_new_release_init(
+    ) -> anyhow::Result<()> {
+        let mut server = mockito::Server::new();
+        let next_release = "1.0.1+2";
+        let sibling_download_url = format!("{}/patches/next/1", server.url());
+        let current_check_response = PatchCheckResponse {
+            patch_available: false,
+            patch: None,
+            rolled_back_patch_numbers: None,
+            available_release_versions: Some(vec![next_release.to_string()]),
+        };
+        let sibling_check_response = PatchCheckResponse {
+            patch_available: true,
+            patch: Some(Patch {
+                number: 1,
+                download_url: sibling_download_url,
+                hash: HELLO_TESTS_PATCH_HASH.to_string(),
+                hash_signature: None,
+            }),
+            rolled_back_patch_numbers: None,
+            available_release_versions: None,
+        };
+        let current_check = server
+            .mock("POST", "/api/v1/patches/check")
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"release_version":"1.0.0+1"}"#.to_string(),
+            ))
+            .with_status(200)
+            .with_body(serde_json::to_string(&current_check_response)?)
+            .create();
+        let sibling_check = server
+            .mock("POST", "/api/v1/patches/check")
+            .match_body(mockito::Matcher::PartialJsonString(format!(
+                r#"{{"release_version":"{}"}}"#,
+                next_release
+            )))
+            .with_status(200)
+            .with_body(serde_json::to_string(&sibling_check_response)?)
+            .create();
+        let sibling_download = server
+            .mock("GET", "/patches/next/1")
+            .with_status(200)
+            .with_body(HELLO_TESTS_PATCH_BYTES)
+            .create();
+
+        let tmp_dir = TempDir::new()?;
+        let base_apk = tmp_dir.path().join("base.apk");
+        write_fake_apk(base_apk.to_str().unwrap(), b"hello world");
+        init_for_testing(&tmp_dir, Some(&server.url()));
+
+        assert_eq!(super::update(None)?, crate::UpdateStatus::NoUpdate);
+        current_check.assert();
+        sibling_check.assert();
+        sibling_download.assert();
+
+        init_for_testing_with_release(&tmp_dir, Some(&server.url()), next_release);
+
+        let next_boot = crate::next_boot_patch()?.expect("prefetched patch should promote");
+        assert_eq!(next_boot.number, 1);
+        assert_eq!(fs::read_to_string(&next_boot.path)?, "hello tests");
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn stale_prefetched_releases_are_pruned() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new()?;
+        init_for_testing(&tmp_dir, None);
+
+        let (keep_root, stale_root) = with_config(|config| {
+            let keep_root = super::prefetched_state_root(&config.storage_dir, "1.0.1+2");
+            let stale_root = super::prefetched_state_root(&config.storage_dir, "1.0.2+3");
+            fs::create_dir_all(&keep_root)?;
+            fs::create_dir_all(&stale_root)?;
+            super::retain_prefetched_release_versions(config, &["1.0.1+2".to_string()])?;
+            Ok::<(PathBuf, PathBuf), anyhow::Error>((keep_root, stale_root))
+        })?;
+
+        assert!(keep_root.exists());
+        assert!(!stale_root.exists());
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn missing_prefetched_bytes_fall_back_without_promoting() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new()?;
+        write_fake_apk(
+            tmp_dir.path().join("base.apk").to_str().unwrap(),
+            b"hello world",
+        );
+        init_for_testing(&tmp_dir, None);
+
+        with_config(|config| {
+            let lc = super::prefetched_lifecycle(config, "1.0.1+2");
+            lc.record_download_started(
+                1,
+                "https://example.com/patch",
+                HELLO_TESTS_PATCH_HASH,
+                None,
+            )?;
+            lc.record_download_complete(1, HELLO_TESTS_PATCH_BYTES.len() as u64)?;
+            let bytes_path = lc.download_artifact_path(1);
+            if bytes_path.exists() {
+                fs::remove_file(bytes_path)?;
+            }
+            Ok(())
+        })?;
+
+        init_for_testing_with_release(&tmp_dir, None, "1.0.1+2");
+
+        assert!(crate::next_boot_patch()?.is_none());
+
+        Ok(())
     }
 
     #[serial]
