@@ -38,6 +38,7 @@ words:
   - Decompressor
   - dllexport
   - dlopen
+  - dorny
   - downloadables
   - EACCES
   - EDQUOT
@@ -48,6 +49,7 @@ words:
   - ENOSPC
   - EROFS
   - eseidel
+  - felangel
   - ffigen
   - gclient
   - hdpi
@@ -84,6 +86,7 @@ words:
   - sigstore
   - staticlib
   - subosito
+  - subpackages
   - swiftpm
   - symbolication
   - tombstoned
