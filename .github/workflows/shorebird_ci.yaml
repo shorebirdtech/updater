@@ -17,7 +17,7 @@ jobs:
       shorebird_code_push: ${{ steps.filter.outputs.shorebird_code_push }}
       shorebird_code_push_example: ${{ steps.filter.outputs.shorebird_code_push_example }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history so dorny/paths-filter can diff on push events.
           fetch-depth: 0
@@ -65,7 +65,7 @@ jobs:
     name: CSpell
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: streetsidesoftware/cspell-action@v8
