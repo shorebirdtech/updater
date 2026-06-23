@@ -82,7 +82,7 @@ runs:
       run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
 
     - name: Upload Coverage
-      uses: codecov/codecov-action@v6
+      uses: codecov/codecov-action@v7
       with:
         # We use Codecov's carryforward flags to allow our PR testing to only
         # run affected packages, but also allow our coverage information from
