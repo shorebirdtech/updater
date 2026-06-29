@@ -282,7 +282,7 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     let (client_id, current_patch_number) = with_state(|state| {
         Ok((
             state.client_id().to_string(),
-            state.currently_booting_patch().map(|p| p.number),
+            state.running_patch().map(|p| p.number),
         ))
     })?;
 
@@ -417,7 +417,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         Ok(PatchCheckRequest::new(
             &config,
             &state.client_id(),
-            state.currently_booting_patch().map(|p| p.number),
+            state.running_patch().map(|p| p.number),
         ))
     })?;
 
