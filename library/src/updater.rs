@@ -4080,17 +4080,10 @@ mod multi_engine_tests {
     }
 }
 
-/// Regression tests for the `current_patch_number` field on the patch-check
-/// request.
-///
-/// The field must carry the patch the process is *running* (`running_patch`),
-/// not the transient boot breadcrumb (`currently_booting_patch`). The
-/// breadcrumb is cleared by `report_launch_success` before any
-/// Dart-initiated patch check can fire, so reading it omitted the field from
-/// nearly every request in the fleet. These tests reproduce that steady
-/// state (booted patch, breadcrumb cleared) and assert the request still
-/// carries the running patch number — both at the `check_for_downloadable_update`
-/// and `update` construction sites.
+/// Regression tests asserting the patch-check request's `current_patch_number`
+/// carries the running patch, not the boot breadcrumb (`currently_booting_patch`)
+/// which `report_launch_success` clears before any patch check fires. Covers
+/// both construction sites: `check_for_downloadable_update` and `update`.
 #[cfg(test)]
 mod patch_check_current_patch_number_tests {
     use anyhow::Result;
@@ -4100,7 +4093,9 @@ mod patch_check_current_patch_number_tests {
 
     use crate::{
         check_for_downloadable_update,
-        network::{testing_set_network_hooks, DownloadResult, PatchCheckResponse},
+        network::{
+            testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD, UNEXPECTED_REPORT,
+        },
         report_launch_start, report_launch_success,
         test_utils::install_fake_patch,
         update,
@@ -4129,15 +4124,10 @@ mod patch_check_current_patch_number_tests {
         report_launch_start()?;
         report_launch_success()?;
         with_state(|state| {
-            assert!(
-                state.currently_booting_patch().is_none(),
-                "record_boot_success should have cleared the boot breadcrumb"
-            );
-            assert_eq!(
-                state.running_patch().map(|p| p.number),
-                Some(1),
-                "process should still be running patch 1"
-            );
+            // Steady state: the boot breadcrumb is cleared, yet patch 1 is
+            // still the running patch.
+            assert!(state.currently_booting_patch().is_none());
+            assert_eq!(state.running_patch().map(|p| p.number), Some(1));
             Ok(())
         })
     }
@@ -4162,13 +4152,9 @@ mod patch_check_current_patch_number_tests {
                     rolled_back_patch_numbers: None,
                 })
             },
-            |_url, _dest, _resume_from| {
-                Ok(DownloadResult {
-                    total_bytes: 0,
-                    content_length: None,
-                })
-            },
-            |_url, _event| Ok(()),
+            // No update is offered, so neither hook should ever fire.
+            UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
         );
     }
 
@@ -4181,12 +4167,8 @@ mod patch_check_current_patch_number_tests {
 
         check_for_downloadable_update(None)?;
 
-        assert_eq!(
-            CAPTURED.load(Ordering::SeqCst),
-            1,
-            "check request must send running patch 1 as current_patch_number \
-             (-1 = field omitted, i64::MIN = hook never ran)"
-        );
+        // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
         Ok(())
     }
 
@@ -4199,12 +4181,8 @@ mod patch_check_current_patch_number_tests {
 
         update(None)?;
 
-        assert_eq!(
-            CAPTURED.load(Ordering::SeqCst),
-            1,
-            "update request must send running patch 1 as current_patch_number \
-             (-1 = field omitted, i64::MIN = hook never ran)"
-        );
+        // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
         Ok(())
     }
 }
