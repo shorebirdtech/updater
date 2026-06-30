@@ -282,7 +282,7 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     let (client_id, current_patch_number) = with_state(|state| {
         Ok((
             state.client_id().to_string(),
-            state.currently_booting_patch().map(|p| p.number),
+            state.running_patch().map(|p| p.number),
         ))
     })?;
 
@@ -417,7 +417,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         Ok(PatchCheckRequest::new(
             &config,
             &state.client_id(),
-            state.currently_booting_patch().map(|p| p.number),
+            state.running_patch().map(|p| p.number),
         ))
     })?;
 
@@ -4076,6 +4076,113 @@ mod multi_engine_tests {
             Ok(())
         })?;
 
+        Ok(())
+    }
+}
+
+/// Regression tests asserting the patch-check request's `current_patch_number`
+/// carries the running patch, not the boot breadcrumb (`currently_booting_patch`)
+/// which `report_launch_success` clears before any patch check fires. Covers
+/// both construction sites: `check_for_downloadable_update` and `update`.
+#[cfg(test)]
+mod patch_check_current_patch_number_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use tempfile::TempDir;
+
+    use crate::{
+        check_for_downloadable_update,
+        network::{
+            testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD, UNEXPECTED_REPORT,
+        },
+        report_launch_start, report_launch_success,
+        test_utils::install_fake_patch,
+        update,
+        updater::tests::init_for_testing,
+        with_state,
+    };
+
+    /// `current_patch_number` was `None` on the wire (the bug we're guarding).
+    const FIELD_OMITTED: i64 = -1;
+    /// The patch-check hook never ran.
+    const HOOK_NOT_CALLED: i64 = i64::MIN;
+
+    /// Last `current_patch_number` seen by the patch-check hook. Shared by
+    /// both tests; safe because they are `#[serial]` (only one runs at a
+    /// time) and `arrange_capturing_hooks` resets it before each check.
+    static CAPTURED: AtomicI64 = AtomicI64::new(HOOK_NOT_CALLED);
+
+    /// Installs patch 1 and completes a full boot, then asserts the steady
+    /// state in which patch checks actually run: the boot breadcrumb is
+    /// cleared, but the process is still running patch 1. Reading
+    /// `currently_booting_patch` here yields `None` — that is precisely the
+    /// regression this guards against.
+    fn boot_patch_one(tmp_dir: &TempDir) -> Result<()> {
+        init_for_testing(tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        with_state(|state| {
+            // Steady state: the boot breadcrumb is cleared, yet patch 1 is
+            // still the running patch.
+            assert!(state.currently_booting_patch().is_none());
+            assert_eq!(state.running_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })
+    }
+
+    /// Installs network hooks whose patch-check leg records the request's
+    /// `current_patch_number` into `CAPTURED` (`None` -> `FIELD_OMITTED`) and
+    /// reports no available update.
+    fn arrange_capturing_hooks() {
+        CAPTURED.store(HOOK_NOT_CALLED, Ordering::SeqCst);
+        testing_set_network_hooks(
+            |_url, request| {
+                CAPTURED.store(
+                    request
+                        .current_patch_number
+                        .map(|n| n as i64)
+                        .unwrap_or(FIELD_OMITTED),
+                    Ordering::SeqCst,
+                );
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            // No update is offered, so neither hook should ever fire.
+            UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn check_for_downloadable_update_sends_running_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        boot_patch_one(&tmp_dir)?;
+        arrange_capturing_hooks();
+
+        check_for_downloadable_update(None)?;
+
+        // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn update_sends_running_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        boot_patch_one(&tmp_dir)?;
+        arrange_capturing_hooks();
+
+        update(None)?;
+
+        // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
         Ok(())
     }
 }
