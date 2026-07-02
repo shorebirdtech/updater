@@ -154,19 +154,21 @@ pub(crate) enum NetworkError {
     Server { status: u16 },
     /// The request never reached the server: offline, DNS failure, connection
     /// refused, or a transport-level IO error.
-    // TODO: The message says "Patch check request" even when the failure is a
-    // download or event report.
     Transport,
 }
 
 impl std::fmt::Display for NetworkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // These messages are not shown to end users — they surface only in logs
-        // and the server-bound failure diagnostic event.
+        // and the server-bound failure diagnostic event. They must stay generic
+        // across all network operations (patch check, download, event report).
         match self {
             NetworkError::Server { status } => write!(f, "Request failed with status: {status}"),
             NetworkError::Transport => {
-                write!(f, "Patch check request failed due to network error.")
+                write!(
+                    f,
+                    "Network request failed; the server could not be reached."
+                )
             }
         }
     }
@@ -517,7 +519,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Patch check request failed due to network error."
+            "Network request failed; the server could not be reached."
         );
     }
 
@@ -568,7 +570,7 @@ mod tests {
         let error = result.err().unwrap();
         assert_eq!(
             error.to_string(),
-            "Patch check request failed due to network error."
+            "Network request failed; the server could not be reached."
         )
     }
 
