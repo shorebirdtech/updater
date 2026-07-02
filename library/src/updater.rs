@@ -561,24 +561,26 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         // Queue a diagnostic event for the failed update attempt.
         // This captures download failures, inflate errors, hash mismatches,
         // and install failures — all of which are otherwise invisible.
-        // The category is a stable, low-cardinality key for server-side
-        // telemetry; it is derived here (not over the FFI) so we get
-        // categorized failure reporting with no C ABI change.
+        // The category is sent as a structured field (not baked into the
+        // message string) so the server can consume it directly; it is derived
+        // here rather than over the FFI, so we get categorized failure
+        // reporting with no C ABI change.
         let category = classify_failure(err);
         let message = format!(
-            "update_failure: patch {} failed [{}] ({})",
+            "update_failure: patch {} failed ({})",
             patch_number,
-            category.code(),
             truncate_error_message(err)
         );
         let queue_result = with_mut_state(|state| {
-            state.queue_event(PatchEvent::new(
+            let mut event = PatchEvent::new(
                 &config,
                 EventType::PatchUpdateFailure,
                 patch_number,
                 state.client_id(),
                 Some(&message),
-            ))
+            );
+            event.failure_category = Some(category.code().to_string());
+            state.queue_event(event)
         });
         if let Err(queue_err) = queue_result {
             shorebird_error!("Failed to queue update failure event: {:?}", queue_err);
@@ -2160,6 +2162,7 @@ patch_verification: bogus_mode
                 release_version: config.release_version.clone(),
                 timestamp: time::unix_timestamp(),
                 message: Some("engine_report: patch 1 failed to launch".to_string()),
+                failure_category: None,
             };
             // Queue 5 events.
             assert!(state.queue_event(fail_event.clone()).is_ok());

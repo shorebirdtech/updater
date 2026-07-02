@@ -399,6 +399,7 @@ mod tests {
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
             message: None,
+            failure_category: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -406,6 +407,29 @@ mod tests {
             json_string,
             r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":null}}"#
         )
+    }
+
+    #[test]
+    fn create_patch_event_request_serializes_with_failure_category() {
+        // Locks the wire key (`failure_category`) the server reads. When None,
+        // the field is omitted entirely (see the other serialization tests).
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            client_id: "client_id".to_string(),
+            arch: "arch".to_string(),
+            patch_number: 1,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: EventType::PatchUpdateFailure,
+            timestamp: 1234,
+            message: Some("update_failure: patch 1 failed (...)".to_string()),
+            failure_category: Some("network".to_string()),
+        };
+        let json_string = serde_json::to_string(&event).unwrap();
+        assert!(
+            json_string.contains(r#""failure_category":"network""#),
+            "expected failure_category in: {json_string}"
+        );
     }
 
     #[test]
@@ -420,6 +444,7 @@ mod tests {
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
             message: Some("hello".to_string()),
+            failure_category: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -530,6 +555,7 @@ mod tests {
             identifier: EventType::PatchInstallSuccess,
             timestamp: time::unix_timestamp(),
             message: None,
+            failure_category: None,
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -563,6 +589,7 @@ mod tests {
                     identifier: EventType::PatchInstallSuccess,
                     timestamp: time::unix_timestamp(),
                     message: None,
+                    failure_category: None,
                 },
             },
         );
