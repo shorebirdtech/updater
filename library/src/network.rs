@@ -142,21 +142,51 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
 /// Handles the result of a network request, returning the response if it was
 /// successful, an error if it was not, or a special error if the network
 /// request failed due to a lack of internet connection.
+/// A typed network-layer failure.
+///
+/// Preserving the failure as a concrete type (rather than a `bail!`-ed string)
+/// lets the failure classifier in `updater.rs` distinguish "the server answered
+/// with an error status" from "we never reached the server". This is internal
+/// enabling work for the categorized-failure surface planned in the
+/// `shorebird_code_push` v3 PRD (Change #7: sealed `Failed{category, code,
+/// retryable}`). It is intentionally *not* exposed across the C ABI — the FFI
+/// still flattens every failure to `SHOREBIRD_UPDATE_ERROR` today.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NetworkError {
+    /// The server was reached but responded with a non-success HTTP status.
+    Server { status: u16 },
+    /// The request never reached the server: offline, DNS failure, connection
+    /// refused, or a transport-level IO error.
+    // TODO: The message says "Patch check request" even when the failure is a
+    // download or event report.
+    Transport,
+}
+
+impl std::fmt::Display for NetworkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Messages are preserved verbatim from the previous `bail!` strings so
+        // existing user-visible text and telemetry payloads do not change.
+        match self {
+            NetworkError::Server { status } => write!(f, "Request failed with status: {status}"),
+            NetworkError::Transport => write!(
+                f,
+                "Patch check request failed due to network error. Please check your internet connection."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NetworkError {}
+
 fn handle_network_result(
     result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
 ) -> anyhow::Result<ureq::http::Response<ureq::Body>> {
     match result {
         Ok(response) => Ok(response),
-        Err(ureq::Error::StatusCode(code)) => {
-            bail!("Request failed with status: {}", code)
-        }
+        Err(ureq::Error::StatusCode(code)) => Err(NetworkError::Server { status: code }.into()),
         Err(ureq::Error::HostNotFound)
         | Err(ureq::Error::ConnectionFailed)
-        | Err(ureq::Error::Io(_)) => {
-            // TODO: This message says "Patch check request" even when the
-            // failure is a download or event report.
-            bail!("Patch check request failed due to network error. Please check your internet connection.");
-        }
+        | Err(ureq::Error::Io(_)) => Err(NetworkError::Transport.into()),
         Err(e) => bail!(e),
     }
 }

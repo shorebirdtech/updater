@@ -10,7 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::file_errors::{FileOperation, IoResultExt};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use dyn_clone::DynClone;
 
 use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
@@ -98,6 +98,11 @@ pub enum UpdateError {
     FailedToSaveState,
     ConfigNotInitialized,
     UpdateAlreadyInProgress,
+    /// A patch was downloaded but could not be turned into a usable artifact:
+    /// its bytes failed to decompress, or the installed result did not match
+    /// the expected hash. Distinct from a transient download failure — this is
+    /// deterministic for the given patch on this device.
+    CorruptPatch,
 }
 
 impl std::error::Error for UpdateError {}
@@ -112,8 +117,105 @@ impl Display for UpdateError {
             UpdateError::UpdateAlreadyInProgress => {
                 write!(f, "Update already in progress")
             }
+            UpdateError::CorruptPatch => write!(f, "Downloaded patch was invalid"),
         }
     }
+}
+
+/// A coarse, stable classification of an update failure.
+///
+/// This is internal enabling work for the categorized-failure surface planned
+/// in the `shorebird_code_push` v3 PRD (Change #7: a sealed
+/// `Failed{category, code, retryable}` with telemetry-stable `code` strings).
+/// It is deliberately kept *off* the C ABI for now: the FFI already flattens
+/// every failure to `SHOREBIRD_UPDATE_ERROR`, and v3 will expose categories via
+/// a new structured-result symbol rather than by overloading the existing one
+/// (which the PRD rules out as a transitional shape). Today this is consumed
+/// only to enrich the server-bound failure diagnostic event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureCategory {
+    /// Never reached the server (offline, DNS, connection, transport IO).
+    Network,
+    /// The server was reached but responded with an error, or the response was
+    /// unusable.
+    Server,
+    /// The device is out of storage.
+    OutOfSpace,
+    /// The updater lacks a filesystem permission it needs.
+    PermissionDenied,
+    /// A filesystem error that is neither out-of-space nor permission-related.
+    Filesystem,
+    /// A downloaded patch failed to decompress or did not match its hash.
+    CorruptPatch,
+    /// Not yet classified.
+    Unknown,
+}
+
+impl FailureCategory {
+    /// A short, stable identifier safe to use as a telemetry key. These strings
+    /// are a contract with our dashboards — treat them as append-only.
+    pub fn code(self) -> &'static str {
+        match self {
+            FailureCategory::Network => "network",
+            FailureCategory::Server => "server",
+            FailureCategory::OutOfSpace => "out_of_space",
+            FailureCategory::PermissionDenied => "permission_denied",
+            FailureCategory::Filesystem => "filesystem",
+            FailureCategory::CorruptPatch => "corrupt_patch",
+            FailureCategory::Unknown => "unknown",
+        }
+    }
+
+    /// Whether retrying the update later is likely to succeed without any user
+    /// or developer intervention. Transient (network/server) failures are
+    /// retryable and auto-retried on the next launch; local-state failures are
+    /// not. This is the signal behind v3's customer-facing `retryable` axis.
+    pub fn retryable(self) -> bool {
+        match self {
+            FailureCategory::Network | FailureCategory::Server => true,
+            FailureCategory::OutOfSpace
+            | FailureCategory::PermissionDenied
+            | FailureCategory::Filesystem
+            | FailureCategory::CorruptPatch => false,
+            // Be conservative: an unclassified failure might be transient. A
+            // genuinely permanent one will simply fail again and re-report.
+            FailureCategory::Unknown => true,
+        }
+    }
+}
+
+/// Classifies an update failure by walking the `anyhow` error chain for the
+/// typed errors our origins attach. Unambiguous OS error kinds win regardless
+/// of which layer raised them, so e.g. a disk-full while inflating a patch is
+/// reported as `OutOfSpace` rather than `CorruptPatch`.
+pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
+    // 1. Unambiguous OS error kinds, wherever in the chain they occurred.
+    if let Some(io) = err.downcast_ref::<std::io::Error>() {
+        match io.kind() {
+            std::io::ErrorKind::StorageFull => return FailureCategory::OutOfSpace,
+            std::io::ErrorKind::PermissionDenied => return FailureCategory::PermissionDenied,
+            _ => {}
+        }
+    }
+    // 2. Our own typed errors.
+    if let Some(net) = err.downcast_ref::<crate::network::NetworkError>() {
+        return match net {
+            crate::network::NetworkError::Server { .. } => FailureCategory::Server,
+            crate::network::NetworkError::Transport => FailureCategory::Network,
+        };
+    }
+    if let Some(update_err) = err.downcast_ref::<UpdateError>() {
+        return match update_err {
+            UpdateError::BadServerResponse => FailureCategory::Server,
+            UpdateError::CorruptPatch => FailureCategory::CorruptPatch,
+            _ => FailureCategory::Unknown,
+        };
+    }
+    // 3. Any remaining IO error is a generic filesystem problem.
+    if err.downcast_ref::<std::io::Error>().is_some() {
+        return FailureCategory::Filesystem;
+    }
+    FailureCategory::Unknown
 }
 
 // `AppConfig` is the rust API.
@@ -333,15 +435,14 @@ fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // server only send updates when the hash matches.
     // https://github.com/shorebirdtech/updater/issues/56
     if !hash_matches {
-        bail!(
+        // Tag as `CorruptPatch` (via context) so the failure classifier can
+        // categorize it; the detailed, developer-facing message is preserved.
+        return Err(UpdateError::CorruptPatch).context(format!(
             "Update rejected: hash mismatch. Update was downloaded but \
             contents did not match the expected hash. This is most often \
             caused by using the same version number with a different app \
-            binary. Path: {:?}, expected: {}, got: {}",
-            path,
-            expected_string,
-            hash
-        );
+            binary. Path: {path:?}, expected: {expected_string}, got: {hash}"
+        ));
     }
     shorebird_debug!("Hash match: {:?}", path);
     Ok(())
@@ -460,9 +561,14 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         // Queue a diagnostic event for the failed update attempt.
         // This captures download failures, inflate errors, hash mismatches,
         // and install failures — all of which are otherwise invisible.
+        // The category is a stable, low-cardinality key for server-side
+        // telemetry; it is derived here (not over the FFI) so we get
+        // categorized failure reporting with no C ABI change.
+        let category = classify_failure(err);
         let message = format!(
-            "update_failure: patch {} failed ({})",
+            "update_failure: patch {} failed [{}] ({})",
             patch_number,
+            category.code(),
             truncate_error_message(err)
         );
         let queue_result = with_mut_state(|state| {
@@ -547,11 +653,12 @@ fn download_and_install_patch(
         if let Some(expected) = dl_result.content_length {
             if dl_result.total_bytes != expected {
                 let _ = with_mut_state(|state| state.uninstall_patch(patch.number));
-                bail!(
-                    "Download size mismatch: expected {} bytes, got {}",
-                    expected,
+                // Server declared a Content-Length it did not deliver: a server
+                // contract violation, tagged so the classifier reports `Server`.
+                return Err(UpdateError::BadServerResponse).context(format!(
+                    "Download size mismatch: expected {expected} bytes, got {}",
                     dl_result.total_bytes
-                );
+                ));
             }
         }
 
@@ -588,6 +695,9 @@ fn install_downloaded_patch(
     let patch_base_rs = patch_base(config)?;
     if let Err(e) = inflate(download_path, patch_base_rs, &installed_path) {
         // Inflate failed — bytes won't decompress. Deterministically bad.
+        // The error is returned as-is (message-preserving): content problems are
+        // already tagged `CorruptPatch` inside `validate_compressed_patch`, and a
+        // disk-full/permission IO cause stays downcastable for classification.
         mark_patch_bad(patch.number, BadReason::InvalidPatchBytes);
         return Err(e);
     }
@@ -694,16 +804,19 @@ fn validate_compressed_patch(patch_path: &Path) -> anyhow::Result<()> {
     let metadata =
         fs::metadata(patch_path).with_file_context(FileOperation::GetMetadata, patch_path)?;
     let size = metadata.len();
+    // These are content-corruption failures: the bytes we received are not a
+    // usable patch. Tag each as `CorruptPatch` (as an inner marker, via
+    // `.context`) so the failure classifier can categorize it while the
+    // detailed, developer-facing message stays the top-level `Display`.
     if size == 0 {
-        bail!("Downloaded patch file is empty: {:?}", patch_path);
+        return Err(UpdateError::CorruptPatch)
+            .context(format!("Downloaded patch file is empty: {patch_path:?}"));
     }
     // A valid zstd frame is at least 4 bytes (magic number).
     if size < 4 {
-        bail!(
-            "Downloaded patch file is too small ({} bytes) to be a valid zstd archive: {:?}",
-            size,
-            patch_path
-        );
+        return Err(UpdateError::CorruptPatch).context(format!(
+            "Downloaded patch file is too small ({size} bytes) to be a valid zstd archive: {patch_path:?}"
+        ));
     }
     let mut file =
         fs::File::open(patch_path).with_file_context(FileOperation::ReadFile, patch_path)?;
@@ -711,13 +824,10 @@ fn validate_compressed_patch(patch_path: &Path) -> anyhow::Result<()> {
     file.read_exact(&mut magic)
         .with_file_context(FileOperation::ReadFile, patch_path)?;
     if magic != ZSTD_MAGIC {
-        bail!(
+        return Err(UpdateError::CorruptPatch).context(format!(
             "Downloaded patch file does not have valid zstd magic bytes \
-            (expected {:02x?}, got {:02x?}). The download may be corrupt: {:?}",
-            ZSTD_MAGIC,
-            magic,
-            patch_path
-        );
+            (expected {ZSTD_MAGIC:02x?}, got {magic:02x?}). The download may be corrupt: {patch_path:?}"
+        ));
     }
     Ok(())
 }
@@ -4184,5 +4294,94 @@ mod patch_check_current_patch_number_tests {
         // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
         assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod failure_classification_tests {
+    use super::{classify_failure, FailureCategory, UpdateError};
+    use crate::network::NetworkError;
+    use std::io::{Error as IoError, ErrorKind};
+
+    #[test]
+    fn io_out_of_space_and_permission_win() {
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(IoError::from(ErrorKind::StorageFull))),
+            FailureCategory::OutOfSpace
+        );
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(IoError::from(
+                ErrorKind::PermissionDenied
+            ))),
+            FailureCategory::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn network_errors_classify() {
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(NetworkError::Transport)),
+            FailureCategory::Network
+        );
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(NetworkError::Server { status: 503 })),
+            FailureCategory::Server
+        );
+    }
+
+    #[test]
+    fn update_errors_classify() {
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(UpdateError::BadServerResponse)),
+            FailureCategory::Server
+        );
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(UpdateError::CorruptPatch)),
+            FailureCategory::CorruptPatch
+        );
+    }
+
+    #[test]
+    fn os_error_kind_beats_corrupt_patch_tag() {
+        // A disk-full while inflating is tagged CorruptPatch but must report
+        // OutOfSpace — the underlying OS kind takes priority.
+        let err = anyhow::Error::new(IoError::from(ErrorKind::StorageFull))
+            .context(UpdateError::CorruptPatch);
+        assert_eq!(classify_failure(&err), FailureCategory::OutOfSpace);
+    }
+
+    #[test]
+    fn generic_io_is_filesystem() {
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(IoError::from(ErrorKind::NotFound))),
+            FailureCategory::Filesystem
+        );
+    }
+
+    #[test]
+    fn untyped_error_is_unknown() {
+        assert_eq!(
+            classify_failure(&anyhow::anyhow!("something went wrong")),
+            FailureCategory::Unknown
+        );
+    }
+
+    #[test]
+    fn context_wrapping_preserves_classification() {
+        // Extra `.context()` layers (as added at real origins) must not defeat
+        // downcast-based classification.
+        let err = anyhow::Error::new(NetworkError::Server { status: 500 })
+            .context("while checking for a patch");
+        assert_eq!(classify_failure(&err), FailureCategory::Server);
+    }
+
+    #[test]
+    fn codes_and_retryability() {
+        assert_eq!(FailureCategory::Network.code(), "network");
+        assert_eq!(FailureCategory::CorruptPatch.code(), "corrupt_patch");
+        assert!(FailureCategory::Network.retryable());
+        assert!(FailureCategory::Server.retryable());
+        assert!(!FailureCategory::OutOfSpace.retryable());
+        assert!(!FailureCategory::CorruptPatch.retryable());
     }
 }
