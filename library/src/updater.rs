@@ -2322,6 +2322,13 @@ patch_verification: bogus_mode
                 message.contains("Download size mismatch"),
                 "message should contain error detail: {message}"
             );
+            // A size mismatch is a server contract violation, so the event
+            // carries the structured `server` category (not baked into message).
+            assert_eq!(
+                events[0].failure_category.as_deref(),
+                Some("server"),
+                "expected server category on the failure event"
+            );
             Ok(())
         })?;
 
