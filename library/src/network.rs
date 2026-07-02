@@ -139,9 +139,6 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
     Ok(())
 }
 
-/// Handles the result of a network request, returning the response if it was
-/// successful, an error if it was not, or a special error if the network
-/// request failed due to a lack of internet connection.
 /// A typed network-layer failure.
 ///
 /// Preserving the failure as a concrete type (rather than a `bail!`-ed string)
@@ -164,20 +161,22 @@ pub(crate) enum NetworkError {
 
 impl std::fmt::Display for NetworkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Messages are preserved verbatim from the previous `bail!` strings so
-        // existing user-visible text and telemetry payloads do not change.
+        // These messages are not shown to end users — they surface only in logs
+        // and the server-bound failure diagnostic event.
         match self {
             NetworkError::Server { status } => write!(f, "Request failed with status: {status}"),
-            NetworkError::Transport => write!(
-                f,
-                "Patch check request failed due to network error. Please check your internet connection."
-            ),
+            NetworkError::Transport => {
+                write!(f, "Patch check request failed due to network error.")
+            }
         }
     }
 }
 
 impl std::error::Error for NetworkError {}
 
+/// Maps a raw `ureq` result into our typed [`NetworkError`] (or preserves the
+/// underlying `ureq` error for the uncommon cases), returning the response on
+/// success.
 fn handle_network_result(
     result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
 ) -> anyhow::Result<ureq::http::Response<ureq::Body>> {
@@ -493,7 +492,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Patch check request failed due to network error. Please check your internet connection."
+            "Patch check request failed due to network error."
         );
     }
 
@@ -541,7 +540,10 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.err().unwrap();
-        assert_eq!(error.to_string(), "Patch check request failed due to network error. Please check your internet connection.")
+        assert_eq!(
+            error.to_string(),
+            "Patch check request failed due to network error."
+        )
     }
 
     #[test]
