@@ -139,24 +139,55 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
     Ok(())
 }
 
-/// Handles the result of a network request, returning the response if it was
-/// successful, an error if it was not, or a special error if the network
-/// request failed due to a lack of internet connection.
+/// A typed network-layer failure.
+///
+/// Preserving the failure as a concrete type (rather than a `bail!`-ed string)
+/// lets the failure classifier in `updater.rs` distinguish "the server answered
+/// with an error status" from "we never reached the server". This is internal
+/// enabling work for the categorized-failure surface planned in the
+/// `shorebird_code_push` v3 PRD (Change #7: sealed `Failed{category, code,
+/// retryable}`). It is intentionally *not* exposed across the C ABI — the FFI
+/// still flattens every failure to `SHOREBIRD_UPDATE_ERROR` today.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NetworkError {
+    /// The server was reached but responded with a non-success HTTP status.
+    Server { status: u16 },
+    /// The request never reached the server: offline, DNS failure, connection
+    /// refused, or a transport-level IO error.
+    Transport,
+}
+
+impl std::fmt::Display for NetworkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // These messages are not shown to end users — they surface only in logs
+        // and the server-bound failure diagnostic event. They must stay generic
+        // across all network operations (patch check, download, event report).
+        match self {
+            NetworkError::Server { status } => write!(f, "Request failed with status: {status}"),
+            NetworkError::Transport => {
+                write!(
+                    f,
+                    "Network request failed; the server could not be reached."
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for NetworkError {}
+
+/// Maps a raw `ureq` result into our typed [`NetworkError`] (or preserves the
+/// underlying `ureq` error for the uncommon cases), returning the response on
+/// success.
 fn handle_network_result(
     result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
 ) -> anyhow::Result<ureq::http::Response<ureq::Body>> {
     match result {
         Ok(response) => Ok(response),
-        Err(ureq::Error::StatusCode(code)) => {
-            bail!("Request failed with status: {}", code)
-        }
+        Err(ureq::Error::StatusCode(code)) => Err(NetworkError::Server { status: code }.into()),
         Err(ureq::Error::HostNotFound)
         | Err(ureq::Error::ConnectionFailed)
-        | Err(ureq::Error::Io(_)) => {
-            // TODO: This message says "Patch check request" even when the
-            // failure is a download or event report.
-            bail!("Patch check request failed due to network error. Please check your internet connection.");
-        }
+        | Err(ureq::Error::Io(_)) => Err(NetworkError::Transport.into()),
         Err(e) => bail!(e),
     }
 }
@@ -370,6 +401,7 @@ mod tests {
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
             message: None,
+            failure_category: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -377,6 +409,29 @@ mod tests {
             json_string,
             r#"{"event":{"app_id":"app_id","arch":"arch","client_id":"client_id","type":"__patch_install__","patch_number":1,"platform":"platform","release_version":"release_version","timestamp":1234,"message":null}}"#
         )
+    }
+
+    #[test]
+    fn create_patch_event_request_serializes_with_failure_category() {
+        // Locks the wire key (`failure_category`) the server reads. When None,
+        // the field is omitted entirely (see the other serialization tests).
+        let event = PatchEvent {
+            app_id: "app_id".to_string(),
+            client_id: "client_id".to_string(),
+            arch: "arch".to_string(),
+            patch_number: 1,
+            platform: "platform".to_string(),
+            release_version: "release_version".to_string(),
+            identifier: EventType::PatchUpdateFailure,
+            timestamp: 1234,
+            message: Some("update_failure: patch 1 failed (...)".to_string()),
+            failure_category: Some("network".to_string()),
+        };
+        let json_string = serde_json::to_string(&event).unwrap();
+        assert!(
+            json_string.contains(r#""failure_category":"network""#),
+            "expected failure_category in: {json_string}"
+        );
     }
 
     #[test]
@@ -391,6 +446,7 @@ mod tests {
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
             message: Some("hello".to_string()),
+            failure_category: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -463,7 +519,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Patch check request failed due to network error. Please check your internet connection."
+            "Network request failed; the server could not be reached."
         );
     }
 
@@ -501,6 +557,7 @@ mod tests {
             identifier: EventType::PatchInstallSuccess,
             timestamp: time::unix_timestamp(),
             message: None,
+            failure_category: None,
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -511,7 +568,10 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.err().unwrap();
-        assert_eq!(error.to_string(), "Patch check request failed due to network error. Please check your internet connection.")
+        assert_eq!(
+            error.to_string(),
+            "Network request failed; the server could not be reached."
+        )
     }
 
     #[test]
@@ -531,6 +591,7 @@ mod tests {
                     identifier: EventType::PatchInstallSuccess,
                     timestamp: time::unix_timestamp(),
                     message: None,
+                    failure_category: None,
                 },
             },
         );

@@ -80,6 +80,13 @@ pub struct PatchEvent {
     /// An optional message to be sent with the event.
     /// Care should be taken that this field *never* contain PII or sensitive information.
     pub message: Option<String>,
+
+    /// For failure events, a stable, low-cardinality classification of the
+    /// failure (the `FailureCategory` code, e.g. "network", "corrupt_patch").
+    /// Sent as structured data so the server does not have to parse it back out
+    /// of `message`. Optional and ignored by servers that don't yet read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
 }
 
 impl PatchEvent {
@@ -101,6 +108,7 @@ impl PatchEvent {
             release_version: config.release_version.clone(),
             timestamp: time::unix_timestamp(),
             message: message.map(|s| s.to_string()),
+            failure_category: None,
         }
     }
 }
