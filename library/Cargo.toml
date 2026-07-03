@@ -73,7 +73,7 @@ oslog = "0.2.0"
 simple_logger = "5.0.0"
 
 [dev-dependencies]
-mockall = "0.14.0"
+mockall = "0.15.0"
 mockito = "1.2.0"
 mock_instant = "0.6.0"
 # Gives #[serial] attribute for locking all of our shorebird_init
