@@ -4386,12 +4386,33 @@ mod failure_classification_tests {
     }
 
     #[test]
-    fn codes_and_retryability() {
-        assert_eq!(FailureCategory::Network.code(), "network");
-        assert_eq!(FailureCategory::CorruptPatch.code(), "corrupt_patch");
-        assert!(FailureCategory::Network.retryable());
-        assert!(FailureCategory::Server.retryable());
-        assert!(!FailureCategory::OutOfSpace.retryable());
-        assert!(!FailureCategory::CorruptPatch.retryable());
+    fn codes_and_retryability_cover_all_categories() {
+        use FailureCategory::*;
+        // Exhaustive: every variant's stable code string and retryable flag.
+        let cases = [
+            (Network, "network", true),
+            (Server, "server", true),
+            (OutOfSpace, "out_of_space", false),
+            (PermissionDenied, "permission_denied", false),
+            (Filesystem, "filesystem", false),
+            (CorruptPatch, "corrupt_patch", false),
+            (Unknown, "unknown", true),
+        ];
+        for (category, code, retryable) in cases {
+            assert_eq!(category.code(), code, "code for {category:?}");
+            assert_eq!(
+                category.retryable(),
+                retryable,
+                "retryable for {category:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn corrupt_patch_error_displays() {
+        assert_eq!(
+            UpdateError::CorruptPatch.to_string(),
+            "Downloaded patch was invalid"
+        );
     }
 }
