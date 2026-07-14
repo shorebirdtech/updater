@@ -144,6 +144,16 @@ SHOREBIRD_EXPORT void shorebird_report_launch_failure(void);
  */
 SHOREBIRD_EXPORT void shorebird_report_launch_success(void);
 
+/**
+ * Registers the engine's restart handler, used to service
+ * `shorebird_restart_app` requests from `package:shorebird_code_push`.
+ * The handler must tear down and relaunch the app's Dart isolate, loading
+ * the current next-boot patch, and return true if the restart was
+ * scheduled. Pass null to unregister (e.g. if the last engine capable of
+ * restarting is destroyed).
+ */
+SHOREBIRD_EXPORT void shorebird_set_restart_handler(bool (*handler)(void));
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

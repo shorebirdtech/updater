@@ -106,6 +106,20 @@ const struct UpdateResult *shorebird_update_with_result(const char *c_channel);
  */
 SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
 
+/**
+ * Requests that the Flutter engine restart the app's Dart code without
+ * killing the host process, booting from whatever patch the updater has
+ * selected as the next boot patch (or the base release if none). This is
+ * how a downloaded patch is applied without the user relaunching the app.
+ *
+ * Returns true if the engine accepted the request and will restart
+ * momentarily; Dart code continues running until the restart begins, so
+ * callers should not assume execution stops at this call. Returns false if
+ * restarting is not supported (engine too old, debug build, or an
+ * unsupported engine configuration such as multiple concurrent engines).
+ */
+SHOREBIRD_EXPORT bool shorebird_restart_app(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

@@ -142,7 +142,40 @@ class _MyHomePageState extends State<MyHomePage> {
       ..hideCurrentMaterialBanner()
       ..showMaterialBanner(
         MaterialBanner(
-          content: const Text('A new patch is ready! Please restart your app.'),
+          content: const Text('A new patch is ready!'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                // Restart the app's Dart code so the patch takes effect
+                // immediately. Returns false if hot restart isn't supported
+                // in this environment (e.g. an older engine), in which case
+                // the patch takes effect on the next app launch instead.
+                final restarting = await _updater.restartApp();
+                if (!mounted || restarting) return;
+                _showRestartFailedBanner();
+              },
+              child: const Text('Restart now'),
+            ),
+            TextButton(
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              },
+              child: const Text('Later'),
+            ),
+          ],
+        ),
+      );
+  }
+
+  void _showRestartFailedBanner() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        MaterialBanner(
+          content: const Text(
+            'Restarting is not supported here. '
+            'The patch will take effect the next time the app is launched.',
+          ),
           actions: [
             TextButton(
               onPressed: () {
