@@ -4186,3 +4186,108 @@ mod patch_check_current_patch_number_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod hot_restart_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use crate::{
+        network::{testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD},
+        report_launch_failure, report_launch_start, report_launch_success, running_patch,
+        test_utils::install_fake_patch,
+        updater::tests::init_for_testing,
+        with_mut_state,
+    };
+
+    fn set_noop_network_hooks() {
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            |_url, _event| Ok(()),
+        );
+    }
+
+    /// Hot restart runs a second launch cycle (start → success) within one
+    /// process. This is the updater-side contract the engine's hot restart
+    /// relies on: after the second cycle, the in-memory `running_patch`
+    /// reflects the patch that was just booted, and the on-disk pointers
+    /// record it as last booted.
+    #[serial]
+    #[test]
+    fn second_launch_cycle_adopts_new_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        // Cold boot: no patch installed, running the base release.
+        report_launch_start()?;
+        report_launch_success()?;
+        assert_eq!(running_patch()?.map(|p| p.number), None);
+
+        // A patch is downloaded in the background while the app runs.
+        install_fake_patch(1)?;
+        assert_eq!(running_patch()?.map(|p| p.number), None);
+
+        // Hot restart: the engine begins a fresh launch cycle.
+        report_launch_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+        report_launch_success()?;
+
+        with_mut_state(|state| {
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// If the relaunched isolate fails to come up, the engine reports launch
+    /// failure. The patch that was being hot restarted into must be marked
+    /// bad and the next boot must fall back to the previously good patch, so
+    /// the engine's recovery relaunch boots something known-good.
+    #[serial]
+    #[test]
+    fn failed_hot_restart_rolls_back_to_last_good_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        // Cold boot onto patch 1 and confirm it as good.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+
+        // Patch 2 arrives; hot restart into it fails.
+        install_fake_patch(2)?;
+        report_launch_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(2));
+        report_launch_failure()?;
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(2));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // The engine's recovery relaunch begins another cycle, which lands
+        // back on patch 1.
+        report_launch_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+        report_launch_success()?;
+
+        Ok(())
+    }
+}
