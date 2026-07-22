@@ -638,5 +638,68 @@ void main() {
         });
       });
     });
+
+    group('restartApp', () {
+      group('when updater is unavailable', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenThrow(Exception('oops'));
+        });
+
+        test(
+          'returns false without calling the updater',
+          overridePrint((_) async {
+            shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+            await expectLater(
+              shorebirdUpdater.restartApp(),
+              completion(isFalse),
+            );
+            verifyNever(updater.restartApp);
+          }),
+        );
+      });
+
+      group('when the engine accepts the restart request', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(0);
+          when(updater.restartApp).thenReturn(true);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('returns true', () async {
+          await expectLater(shorebirdUpdater.restartApp(), completion(isTrue));
+          verify(updater.restartApp).called(1);
+        });
+      });
+
+      group('when the engine rejects the restart request', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(0);
+          when(updater.restartApp).thenReturn(false);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('returns false', () async {
+          await expectLater(shorebirdUpdater.restartApp(), completion(isFalse));
+          verify(updater.restartApp).called(1);
+        });
+      });
+
+      group('when the engine does not support hot restart', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(0);
+          // Engines that predate hot restart support don't export the
+          // symbol; the late-bound FFI lookup throws an ArgumentError.
+          when(updater.restartApp).thenThrow(
+            ArgumentError('Failed to lookup symbol shorebird_restart_app'),
+          );
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('returns false', () async {
+          await expectLater(shorebirdUpdater.restartApp(), completion(isFalse));
+          verify(updater.restartApp).called(1);
+        });
+      });
+    });
   });
 }

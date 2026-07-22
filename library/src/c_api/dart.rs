@@ -136,3 +136,18 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
     let result = unsafe { Box::from_raw(result) };
     unsafe { free_c_string(result.message) };
 }
+
+/// Requests that the Flutter engine restart the app's Dart code without
+/// killing the host process, booting from whatever patch the updater has
+/// selected as the next boot patch (or the base release if none). This is
+/// how a downloaded patch is applied without the user relaunching the app.
+///
+/// Returns true if the engine accepted the request and will restart
+/// momentarily; Dart code continues running until the restart begins, so
+/// callers should not assume execution stops at this call. Returns false if
+/// restarting is not supported (engine too old, debug build, or an
+/// unsupported engine configuration such as multiple concurrent engines).
+#[no_mangle]
+pub extern "C" fn shorebird_restart_app() -> bool {
+    crate::restart::request_restart()
+}
