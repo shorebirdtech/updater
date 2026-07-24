@@ -21,7 +21,7 @@ test-hooks = []
 [dependencies]
 # Used for error handling for now.
 anyhow = "1.0.69"
-base64 = "0.22.0"
+base64 = "0.23.0"
 # For inflating compressed patch files.
 bipatch = "1.0.0"
 # Used for exposing C API
