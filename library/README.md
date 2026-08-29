@@ -32,30 +32,35 @@ Not all of the above is implemented yet, but such is the intent.
 ## Architecture
 
 The updater is split into separate layers. The top layer is the C-compatible
-API, which is used by all consumers of the updater. The C-compatible API
-is a thin wrapper around the Rust API, which is the main implementation but
-only used directly for testing (see the `cli` directory).
+API. That API is a thin wrapper around the Rust implementation, which is used
+directly for testing (`library_test_hooks` and `cargo test` in `library`).
 
 Thread safety is handled by a global configuration object that is locked
 when accessed. It's possible I've missed cases where this is not sufficient,
 and there could be thread safety issues in the library.
 
-- c_api (module) - C-compatible API
-  - c_file.rs - a read-seek interface usable by the engine (used to provide access
-    to iOS patch files)
-  - mod.rs - the implementation of the C API.
-- src/lib.rs - Rust API (and crate root)
-- src/updater.rs - Core updater logic
-- cache (module) - On-disk state management
-  - disk-io.rs - Manages reading and writing serializable state to disk
-  - mod.rs - Cache management
-  - patch_manager.rs - Patch file state management. Owned by UpdaterState.
-  - updater_state.rs - Public API for this module. Provides functions that
-    trigger updates to the internal Boot State Machine (detailed below).
-- src/config.rs - In memory configuration and thread locking
-- src/cache.rs - On-disk state management
-- src/logging.rs - Logging configuration (for platforms that need it)
-- src/network.rs - Logic dealing with network requests and updater server
+- `c_api` (module) — C-compatible API, split into two cbindgen surfaces
+  - `dart.rs` — stable ABI for `package:shorebird_code_push` (`include/updater_dart.h`)
+  - `engine.rs` — engine-internal symbols (`include/updater_engine.h`, no stability guarantee)
+  - `c_file.rs` — read-seek interface for the engine (iOS patch files)
+  - `mod.rs` — shared C helpers; not `extern "C"`
+- `src/lib.rs` — Rust API (crate root)
+- `src/updater.rs` — core updater logic
+- `src/updater_lock.rs` — lock so only one update runs at a time
+- `cache` (module) — on-disk state (`src/cache/`, not a single `cache.rs`)
+  - `disk_io.rs` — read/write serializable state
+  - `lifecycle.rs` — per-patch lifecycle state machine (replaces `PatchManager`)
+  - `updater_state.rs` — public cache API; drives the boot state machine (below)
+  - `signing.rs` — patch hashing / signature verification
+  - `mod.rs` — `PatchInfo` and module exports
+- `src/config.rs` — in-memory configuration and thread locking
+- `src/network.rs` — updater server requests
+- `src/events.rs` — patch download/install events sent to the server
+- `src/yaml.rs` — `shorebird.yaml` parsing and verification mode
+- `src/logging.rs` / `src/logging_macros.rs` — logging
+- `src/file_errors.rs` — richer I/O error context
+- `src/time.rs` — timestamps
+- `src/android.rs` — Android APK path workaround
 
 ## Rust
 
