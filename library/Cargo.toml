@@ -21,7 +21,7 @@ test-hooks = []
 [dependencies]
 # Used for error handling for now.
 anyhow = "1.0.69"
-base64 = "0.22.0"
+base64 = "0.23.0"
 # For inflating compressed patch files.
 bipatch = "1.0.0"
 # Used for exposing C API
@@ -78,7 +78,7 @@ mockito = "1.2.0"
 mock_instant = "0.6.0"
 # Gives #[serial] attribute for locking all of our shorebird_init
 # tests to a single thread so they don't conflict with each other.
-serial_test = "3.2.0"
+serial_test = "4.0.1"
 tempfile = "3"
 
 # <https://github.com/eqrion/cbindgen/blob/master/docs.md#buildrs>
