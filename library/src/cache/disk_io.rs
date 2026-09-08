@@ -38,7 +38,7 @@ where
     let temp_path = temp_sibling_path(path_as_ref);
     let file = File::create(&temp_path).with_file_context(FileOperation::CreateFile, &temp_path)?;
     if let Err(err) = serialize_and_flush(serializable, file)
-        .with_context(|| format!("failed to serialize to {:?}", &temp_path))
+        .with_context(|| format!("failed to serialize to {temp_path:?}"))
     {
         // Best-effort cleanup so a failed write doesn't leave orphan temp files.
         let _ = std::fs::remove_file(&temp_path);
@@ -89,7 +89,7 @@ where
     let file = File::open(path_as_ref).with_file_context(FileOperation::ReadFile, path_as_ref)?;
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
-        .with_context(|| format!("failed to deserialize from {:?}", &path_as_ref))
+        .with_context(|| format!("failed to deserialize from {path_as_ref:?}"))
 }
 
 #[cfg(test)]
