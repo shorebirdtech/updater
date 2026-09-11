@@ -208,4 +208,4 @@ Unit tests in `library/src/updater.rs` verify the boot state machine:
 The Rust API does not guard against multiple `report_launch_start()` calls, so
 the Rust-level tests demonstrate behavior that can only occur if the engine's
 guard is bypassed. Engine-side ordering (one thread per process, thread only
-after success) is tested in `shell/common/shorebird/updater_unittests.cc`.
+after success) is tested in the engine's `Updater` unit tests in `shell/common/shorebird/`.
