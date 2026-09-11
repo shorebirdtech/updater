@@ -112,6 +112,11 @@ SHOREBIRD_EXPORT void shorebird_validate_next_boot_patch(void);
  * The path to the patch that will boot on the next run of the app, or NULL
  * if there is no next patch. The caller must free the returned string with
  * `shorebird_free_string`.
+ *
+ * The first call also records the returned patch as the one this process
+ * is running, so call it before `shorebird_start_update_thread`: the patch
+ * check that thread sends reports the running patch, and
+ * `shorebird_report_launch_start` runs too late to set it.
  */
 SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
 

@@ -166,14 +166,16 @@ pub extern "C" fn shorebird_validate_next_boot_patch() {
 /// The path to the patch that will boot on the next run of the app, or NULL
 /// if there is no next patch. The caller must free the returned string with
 /// `shorebird_free_string`.
+///
+/// The first call also records the returned patch as the one this process
+/// is running, so call it before `shorebird_start_update_thread`: the patch
+/// check that thread sends reports the running patch, and
+/// `shorebird_report_launch_start` runs too late to set it.
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
-        || {
-            let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
-            path_to_c_string(maybe_path)
-        },
-        "fetching next_boot_patch_path",
+        || path_to_c_string(updater::resolve_boot_patch_path()?),
+        "resolving boot patch path",
         std::ptr::null_mut(),
     )
 }

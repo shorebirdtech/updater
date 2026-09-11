@@ -3,11 +3,7 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
-use std::path::Path;
-// PathBuf is only used by `libapp_path_from_settings`, which is itself
-// gated to non-android, non-test builds.
-#[cfg(not(any(target_os = "android", test)))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{bail, Context, Result};
@@ -1081,8 +1077,24 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_mut_state(|state| Ok(state.next_boot_patch()))
 }
 
-/// The patch this process is using, set at `report_launch_start` and
-/// surfaced over FFI as `shorebird_current_boot_patch_number`. `None`
+/// The path to the patch the engine will boot, or `None` for the base
+/// release. Also latches that patch as `running_patch`.
+///
+/// The engine starts the update thread right after this call, and that
+/// thread's patch check reports `running_patch`. `report_launch_start` runs
+/// later, once the Dart VM resolves the isolate snapshot, so latching there
+/// is too late. Kept separate from `next_boot_patch`, which Dart may call at
+/// any time and must not latch.
+pub fn resolve_boot_patch_path() -> anyhow::Result<Option<PathBuf>> {
+    with_mut_state(|state| {
+        let next_boot_patch = state.next_boot_patch();
+        crate::config::latch_running_patch_number(next_boot_patch.as_ref().map(|p| p.number));
+        Ok(next_boot_patch.map(|p| p.path))
+    })
+}
+
+/// The patch this process is using, latched by `resolve_boot_patch_path`
+/// and surfaced over FFI as `shorebird_current_boot_patch_number`. `None`
 /// means the process is running the base release. Survives server-driven
 /// rollbacks of the running patch — the process is still using it.
 pub fn running_patch() -> anyhow::Result<Option<PatchInfo>> {
@@ -1094,11 +1106,11 @@ pub fn report_launch_start() -> anyhow::Result<()> {
 
     with_mut_state(|state| {
         let next_boot_patch = state.next_boot_patch();
-        // Capture what this run is using. None means we're booting the base
-        // release. Backed by a session-scoped global, not by PatchesState
-        // on disk, so this is in-memory only — the record_boot_start_for_patch
-        // call below is the only disk write on this path.
-        state.set_running_patch(next_boot_patch.as_ref().map(|p| p.number));
+        // No-op when `resolve_boot_patch_path` already latched; covers
+        // embedders that never ask for the path. The boot breadcrumb below
+        // still uses `next_boot_patch`, which can differ from the latched
+        // patch if the update thread installed one during boot.
+        crate::config::latch_running_patch_number(next_boot_patch.as_ref().map(|p| p.number));
         if let Some(next_boot_patch) = next_boot_patch {
             state.record_boot_start_for_patch(next_boot_patch.number)?;
         }
@@ -4099,7 +4111,7 @@ mod patch_check_current_patch_number_tests {
         report_launch_start, report_launch_success,
         test_utils::install_fake_patch,
         update,
-        updater::tests::init_for_testing,
+        updater::{resolve_boot_patch_path, tests::init_for_testing},
         with_state,
     };
 
@@ -4109,8 +4121,8 @@ mod patch_check_current_patch_number_tests {
     const HOOK_NOT_CALLED: i64 = i64::MIN;
 
     /// Last `current_patch_number` seen by the patch-check hook. Shared by
-    /// both tests; safe because they are `#[serial]` (only one runs at a
-    /// time) and `arrange_capturing_hooks` resets it before each check.
+    /// the tests here; safe because they are `#[serial]` (only one runs at
+    /// a time) and `arrange_capturing_hooks` resets it before each check.
     static CAPTURED: AtomicI64 = AtomicI64::new(HOOK_NOT_CALLED);
 
     /// Installs patch 1 and completes a full boot, then asserts the steady
@@ -4184,5 +4196,65 @@ mod patch_check_current_patch_number_tests {
         // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
         assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
         Ok(())
+    }
+
+    /// The engine's startup order: resolve the patch path, start the update
+    /// thread, and only then `report_launch_start`.
+    #[serial]
+    #[test]
+    fn update_thread_before_launch_start_sends_running_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        resolve_boot_patch_path()?;
+        arrange_capturing_hooks();
+
+        update(None)?;
+
+        // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    /// The update thread can install a newer patch before the Dart VM boots.
+    /// Neither a second engine resolving the path nor `report_launch_start`
+    /// may relabel this process as running it.
+    #[serial]
+    #[test]
+    fn patch_installed_during_boot_does_not_relabel_running_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        resolve_boot_patch_path()?;
+
+        install_fake_patch(2)?;
+        resolve_boot_patch_path()?;
+        report_launch_start()?;
+
+        with_state(|state| {
+            assert_eq!(state.running_patch().map(|p| p.number), Some(1));
+            // The breadcrumb still follows `next_boot_patch`. Known wrong in
+            // this race; tracked separately from the latch.
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(2));
+            Ok(())
+        })
+    }
+
+    /// Latching the base release is an answer, not "unknown", so a patch
+    /// installed during boot must not overwrite it either.
+    #[serial]
+    #[test]
+    fn base_release_boot_stays_on_the_base_release() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        assert_eq!(resolve_boot_patch_path()?, None);
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+
+        with_state(|state| {
+            assert_eq!(state.running_patch().map(|p| p.number), None);
+            Ok(())
+        })
     }
 }

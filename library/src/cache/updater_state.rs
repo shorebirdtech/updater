@@ -314,10 +314,6 @@ impl UpdaterState {
         crate::config::running_patch_number().map(|n| self.patch_info(n))
     }
 
-    pub fn set_running_patch(&mut self, patch_number: Option<usize>) {
-        crate::config::set_running_patch_number(patch_number);
-    }
-
     pub fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         self.lifecycle
             .pointers()

@@ -28,31 +28,37 @@ fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
-/// Session-scoped patch number this process is using. Set by
-/// `report_launch_start` from the next-boot patch at that moment, read
-/// by `updater::running_patch()` (surfaced to Dart as
+/// Session-scoped patch number this process is using, read by
+/// `updater::running_patch()` (surfaced to Dart as
 /// `shorebird_current_boot_patch_number`). Lives outside the on-disk
 /// `PatchesState` because it tracks running state, not bootable-patch
 /// metadata: it must survive a server-driven rollback of the running
-/// patch (the process is still using it) and must reset to `None` on
-/// every fresh process start. `report_launch_start` is called by
-/// flutter_engine before `dart:ffi` is available, so the `None` window
-/// before launch start is not observable from Dart.
-fn global_running_patch() -> &'static Mutex<Option<usize>> {
-    static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
+/// patch (the process is still using it) and must reset on every fresh
+/// process start.
+///
+/// The outer `Option` is whether the patch has been latched; the inner
+/// `None` means the base release, which is an answer, not "unknown".
+fn global_running_patch() -> &'static Mutex<Option<Option<usize>>> {
+    static INSTANCE: OnceCell<Mutex<Option<Option<usize>>>> = OnceCell::new();
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
 pub fn running_patch_number() -> Option<usize> {
-    *global_running_patch()
+    global_running_patch()
         .lock()
         .expect("Failed to acquire running_patch lock.")
+        .flatten()
 }
 
-pub fn set_running_patch_number(patch_number: Option<usize>) {
-    *global_running_patch()
+/// The first call wins: later callers may see a newer patch that the
+/// update thread installed after this process chose its snapshot.
+pub fn latch_running_patch_number(patch_number: Option<usize>) {
+    let mut running_patch = global_running_patch()
         .lock()
-        .expect("Failed to acquire running_patch lock.") = patch_number;
+        .expect("Failed to acquire running_patch lock.");
+    if running_patch.is_none() {
+        *running_patch = Some(patch_number);
+    }
 }
 
 /// Unit tests should call this to reset the config between tests.
@@ -64,7 +70,9 @@ pub fn testing_reset_config() {
     with_config_mut(|config| {
         *config = None;
     });
-    set_running_patch_number(None);
+    *global_running_patch()
+        .lock()
+        .expect("Failed to acquire running_patch lock.") = None;
 }
 
 pub fn check_initialized_and_call<F, R>(
