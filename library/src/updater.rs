@@ -4,6 +4,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 // PathBuf is only used by `libapp_path_from_settings`, which is itself
 // gated to non-android, non-test builds.
 #[cfg(not(any(target_os = "android", test)))]
@@ -1129,6 +1130,9 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
+        // The engine boots base code after a patch fails to load, so the
+        // patch check this launch sends must not name the failed patch.
+        state.set_running_patch(None);
         let client_id = state.client_id();
         let message = format!("engine_report: patch {} failed to launch", patch.number);
         let event = PatchEvent::new(
@@ -1144,9 +1148,19 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     })
 }
 
+/// Report that the engine booted. Records the boot against the patch that
+/// was booting, if any, then starts the background update check. The
+/// engine calls this from every Shell constructor, so both halves tolerate
+/// repeats: a boot is recorded once, and the thread starts once per
+/// process.
 pub fn report_launch_success() -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch.");
+    let result = record_launch_success();
+    maybe_start_update_thread();
+    result
+}
 
+fn record_launch_success() -> anyhow::Result<()> {
     with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
@@ -1203,9 +1217,66 @@ pub fn report_launch_success() -> anyhow::Result<()> {
     })
 }
 
-/// This does not return status.  The only output is the change to the saved
-/// cache. The Engine calls this during boot and it will check for an update
-/// and install it if available.
+static UPDATE_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Starts the update thread once per process, from the first launch-success
+/// report. Nothing earlier is safe: before `report_launch_start` the patch
+/// check would not know the running patch, and before the boot outcome is
+/// recorded an install could retire the patch being booted (the lifecycle
+/// only protects the last successfully booted patch). After a failed patch
+/// load the engine boots base code and still reports success, and that
+/// launch wants the check most, so the guard is independent of the boot
+/// record. We do not check synchronously on launch; apps that want that use
+/// package:shorebird_code_push.
+/// https://github.com/shorebirdtech/shorebird/issues/950
+fn maybe_start_update_thread() {
+    // An unconfigured updater (Android debug builds, iOS bundles without
+    // shorebird.yaml) leaves the guard alone so a later `init` in the same
+    // process can still start the thread.
+    let auto_update = match should_auto_update() {
+        Ok(auto_update) => auto_update,
+        Err(_) => {
+            shorebird_info!("Updater not configured, not checking for updates.");
+            return;
+        }
+    };
+    if UPDATE_THREAD_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if !auto_update {
+        shorebird_info!("auto_update disabled, not checking for updates.");
+        return;
+    }
+    shorebird_info!("Starting Shorebird update");
+    #[cfg(test)]
+    testing::UPDATE_THREAD_STARTS.fetch_add(1, Ordering::SeqCst);
+    #[cfg(not(test))]
+    start_update_thread();
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// How many times `maybe_start_update_thread` would have spawned the
+    /// thread. Tests count this instead of racing a real update against
+    /// the next test's config reset.
+    pub static UPDATE_THREAD_STARTS: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn reset_update_thread_guard() {
+        UPDATE_THREAD_STARTED.store(false, Ordering::SeqCst);
+        UPDATE_THREAD_STARTS.store(0, Ordering::SeqCst);
+    }
+
+    pub fn update_thread_starts() -> usize {
+        UPDATE_THREAD_STARTS.load(Ordering::SeqCst)
+    }
+}
+
+/// Spawns a thread that checks for an update and installs one if available.
+/// The engine's launch-success report calls this once per process through
+/// `maybe_start_update_thread`; the C API still exposes it directly.
 pub fn start_update_thread() {
     std::thread::spawn(move || {
         let result = update(None);
@@ -1246,6 +1317,7 @@ mod tests {
 
     pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
         testing_reset_config();
+        super::testing::reset_update_thread_guard();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         let mut yaml = "app_id: 1234".to_string();
         if let Some(url) = base_url {
@@ -1703,6 +1775,8 @@ patch_verification: bogus_mode
             );
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
+            // And no longer what this process is running.
+            assert!(state.running_patch().is_none());
             // And we've queued an event.
             let events = state.copy_events(1);
             assert_eq!(events.len(), 1);
@@ -1713,6 +1787,89 @@ patch_verification: bogus_mode
             Ok(())
         })
         .unwrap();
+    }
+
+    #[serial]
+    #[test]
+    fn launch_success_starts_update_thread_once() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1).unwrap();
+
+        crate::report_launch_start().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 0);
+        super::report_launch_success().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 1);
+
+        // Add-to-app: every engine reports success; one thread per process.
+        super::report_launch_success().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 1);
+    }
+
+    // A patch that fails to load reports failure, then the base-code boot
+    // that follows reports success. That launch still checks for updates.
+    #[serial]
+    #[test]
+    fn launch_failure_then_success_starts_update_thread() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1).unwrap();
+
+        crate::report_launch_start().unwrap();
+        super::report_launch_failure().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 0);
+        super::report_launch_success().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 1);
+    }
+
+    #[serial]
+    #[test]
+    fn launch_success_honors_auto_update_disabled() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        crate::config::with_config_mut(|config| {
+            config.as_mut().unwrap().auto_update = false;
+        });
+
+        crate::report_launch_start().unwrap();
+        super::report_launch_success().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 0);
+    }
+
+    // An unconfigured process must not consume the once-per-process guard;
+    // a later init in the same process still gets its update check.
+    #[serial]
+    #[test]
+    fn launch_success_before_init_does_not_claim_update_thread_guard() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        // Unconfigure without touching the guard.
+        testing_reset_config();
+        assert!(super::report_launch_success().is_err());
+        assert_eq!(super::testing::update_thread_starts(), 0);
+
+        // Configure again, still without touching the guard.
+        let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
+        let libapp_path = tmp_dir
+            .path()
+            .join("lib/arch/libapp.so")
+            .to_str()
+            .unwrap()
+            .to_string();
+        crate::init(
+            crate::AppConfig {
+                app_storage_dir: cache_dir.clone(),
+                code_cache_dir: cache_dir,
+                release_version: "1.0.0+1".to_string(),
+                original_libapp_paths: vec![libapp_path],
+            },
+            Box::new(FakeExternalFileProvider {}),
+            "app_id: 1234",
+        )
+        .unwrap();
+        crate::report_launch_start().unwrap();
+        super::report_launch_success().unwrap();
+        assert_eq!(super::testing::update_thread_starts(), 1);
     }
 
     #[test]
