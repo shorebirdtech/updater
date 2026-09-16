@@ -15,6 +15,7 @@ mod events;
 mod file_errors;
 mod logging;
 mod network;
+mod restart;
 mod time;
 mod updater;
 mod updater_lock;

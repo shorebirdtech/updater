@@ -2414,6 +2414,38 @@ class TestHooksBindings {
   late final _shorebird_test_simulate_successful_launch =
       _shorebird_test_simulate_successful_launchPtr
           .asFunction<void Function()>();
+
+  /// Installs a fake engine restart handler, as the Shorebird engine does
+  /// at startup. `accept` controls whether the handler reports the restart
+  /// as scheduled (the value returned to `shorebird_restart_app` callers).
+  /// Also resets the request counter. `shorebird_test_reset` removes the
+  /// handler again.
+  void shorebird_test_install_restart_handler(
+    bool accept,
+  ) {
+    return _shorebird_test_install_restart_handler(
+      accept,
+    );
+  }
+
+  late final _shorebird_test_install_restart_handlerPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Bool)>>(
+          'shorebird_test_install_restart_handler');
+  late final _shorebird_test_install_restart_handler =
+      _shorebird_test_install_restart_handlerPtr
+          .asFunction<void Function(bool)>();
+
+  /// The number of restart requests the fake handler has received since it
+  /// was last installed.
+  int shorebird_test_restart_request_count() {
+    return _shorebird_test_restart_request_count();
+  }
+
+  late final _shorebird_test_restart_request_countPtr =
+      _lookup<ffi.NativeFunction<ffi.UintPtr Function()>>(
+          'shorebird_test_restart_request_count');
+  late final _shorebird_test_restart_request_count =
+      _shorebird_test_restart_request_countPtr.asFunction<int Function()>();
 }
 
 typedef __builtin_va_list = ffi.Pointer<ffi.Char>;
@@ -4077,6 +4109,8 @@ const int __MAC_26_3 = 260300;
 
 const int __MAC_26_4 = 260400;
 
+const int __MAC_26_5 = 260500;
+
 const int __IPHONE_2_0 = 20000;
 
 const int __IPHONE_2_1 = 20100;
@@ -4263,6 +4297,8 @@ const int __IPHONE_26_3 = 260300;
 
 const int __IPHONE_26_4 = 260400;
 
+const int __IPHONE_26_5 = 260500;
+
 const int __WATCHOS_1_0 = 10000;
 
 const int __WATCHOS_2_0 = 20000;
@@ -4386,6 +4422,8 @@ const int __WATCHOS_26_2 = 260200;
 const int __WATCHOS_26_3 = 260300;
 
 const int __WATCHOS_26_4 = 260400;
+
+const int __WATCHOS_26_5 = 260500;
 
 const int __TVOS_9_0 = 90000;
 
@@ -4511,6 +4549,8 @@ const int __TVOS_26_3 = 260300;
 
 const int __TVOS_26_4 = 260400;
 
+const int __TVOS_26_5 = 260500;
+
 const int __BRIDGEOS_2_0 = 20000;
 
 const int __BRIDGEOS_3_0 = 30000;
@@ -4589,6 +4629,8 @@ const int __BRIDGEOS_10_3 = 100300;
 
 const int __BRIDGEOS_10_4 = 100400;
 
+const int __BRIDGEOS_26_5 = 260500;
+
 const int __DRIVERKIT_19_0 = 190000;
 
 const int __DRIVERKIT_20_0 = 200000;
@@ -4641,6 +4683,8 @@ const int __DRIVERKIT_25_3 = 250300;
 
 const int __DRIVERKIT_25_4 = 250400;
 
+const int __DRIVERKIT_25_5 = 250500;
+
 const int __VISIONOS_1_0 = 10000;
 
 const int __VISIONOS_1_1 = 10100;
@@ -4674,6 +4718,8 @@ const int __VISIONOS_26_2 = 260200;
 const int __VISIONOS_26_3 = 260300;
 
 const int __VISIONOS_26_4 = 260400;
+
+const int __VISIONOS_26_5 = 260500;
 
 const int MAC_OS_X_VERSION_10_0 = 1000;
 
@@ -4829,6 +4875,8 @@ const int MAC_OS_VERSION_26_3 = 260300;
 
 const int MAC_OS_VERSION_26_4 = 260400;
 
+const int MAC_OS_VERSION_26_5 = 260500;
+
 const int __AVAILABILITY_VERSIONS_VERSION_HASH = 93585900;
 
 const String __AVAILABILITY_VERSIONS_VERSION_STRING = 'Local';
@@ -4837,7 +4885,7 @@ const String __AVAILABILITY_FILE = 'AvailabilityVersions.h';
 
 const int __MAC_OS_X_VERSION_MIN_REQUIRED = 260000;
 
-const int __MAC_OS_X_VERSION_MAX_ALLOWED = 260400;
+const int __MAC_OS_X_VERSION_MAX_ALLOWED = 260500;
 
 const int __ENABLE_LEGACY_MAC_AVAILABILITY = 1;
 

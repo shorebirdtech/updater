@@ -102,3 +102,35 @@ pub extern "C" fn shorebird_test_simulate_successful_launch() {
     engine::shorebird_report_launch_start();
     engine::shorebird_report_launch_success();
 }
+
+// Fake engine restart handler state. Mirrors what the Shorebird engine
+// does in production: it registers a handler via
+// `shorebird_set_restart_handler` at startup, and `shorebird_restart_app`
+// (called by `package:shorebird_code_push`) relays to it.
+static RESTART_REQUEST_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+static RESTART_ACCEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+extern "C" fn test_restart_handler() -> bool {
+    RESTART_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    RESTART_ACCEPT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Installs a fake engine restart handler, as the Shorebird engine does
+/// at startup. `accept` controls whether the handler reports the restart
+/// as scheduled (the value returned to `shorebird_restart_app` callers).
+/// Also resets the request counter. `shorebird_test_reset` removes the
+/// handler again.
+#[no_mangle]
+pub extern "C" fn shorebird_test_install_restart_handler(accept: bool) {
+    RESTART_ACCEPT.store(accept, std::sync::atomic::Ordering::SeqCst);
+    RESTART_REQUEST_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    engine::shorebird_set_restart_handler(Some(test_restart_handler));
+}
+
+/// The number of restart requests the fake handler has received since it
+/// was last installed.
+#[no_mangle]
+pub extern "C" fn shorebird_test_restart_request_count() -> usize {
+    RESTART_REQUEST_COUNT.load(std::sync::atomic::Ordering::SeqCst)
+}

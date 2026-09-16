@@ -42,4 +42,11 @@ class Updater {
   /// Frees an update result allocated by the updater.
   void freeUpdateResult(Pointer<UpdateResult> ptr) =>
       bindings.shorebird_free_update_result(ptr);
+
+  /// Requests that the engine restart the app's Dart code, booting from the
+  /// next boot patch. Returns true if the engine accepted the request.
+  /// Throws an [ArgumentError] if running against an engine that does not
+  /// export `shorebird_restart_app` (i.e. engines without hot restart
+  /// support).
+  bool restartApp() => bindings.shorebird_restart_app();
 }

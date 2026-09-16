@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use super::{allocate_c_string, free_c_string, log_on_error, to_rust};
 use crate::c_api::c_file::CFileProvider;
+use crate::restart;
 use crate::updater;
 
 /// Struct containing configuration parameters for the updater.
@@ -217,4 +218,15 @@ pub extern "C" fn shorebird_report_launch_success() {
         "reporting launch success",
         (),
     );
+}
+
+/// Registers the engine's restart handler, used to service
+/// `shorebird_restart_app` requests from `package:shorebird_code_push`.
+/// The handler must tear down and relaunch the app's Dart isolate, loading
+/// the current next-boot patch, and return true if the restart was
+/// scheduled. Pass null to unregister (e.g. if the last engine capable of
+/// restarting is destroyed).
+#[no_mangle]
+pub extern "C" fn shorebird_set_restart_handler(handler: Option<extern "C" fn() -> bool>) {
+    restart::set_restart_handler(handler);
 }

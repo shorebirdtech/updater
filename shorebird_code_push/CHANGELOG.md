@@ -1,3 +1,10 @@
+# 2.1.0
+
+- feat: add `ShorebirdUpdater.restartApp()`, which restarts the app's Dart
+  code in place so a downloaded patch takes effect without the user
+  relaunching the app. Requires an engine with hot restart support; returns
+  `false` (patch still applies on next launch) on older engines.
+
 # 2.0.7
 
 - chore: internal cleanup; no public API changes.

@@ -48,6 +48,21 @@ bool shorebird_test_init(const char *app_storage_dir,
  */
 SHOREBIRD_EXPORT void shorebird_test_simulate_successful_launch(void);
 
+/**
+ * Installs a fake engine restart handler, as the Shorebird engine does
+ * at startup. `accept` controls whether the handler reports the restart
+ * as scheduled (the value returned to `shorebird_restart_app` callers).
+ * Also resets the request counter. `shorebird_test_reset` removes the
+ * handler again.
+ */
+SHOREBIRD_EXPORT void shorebird_test_install_restart_handler(bool accept);
+
+/**
+ * The number of restart requests the fake handler has received since it
+ * was last installed.
+ */
+SHOREBIRD_EXPORT uintptr_t shorebird_test_restart_request_count(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
