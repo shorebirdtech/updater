@@ -1129,6 +1129,9 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         if mark_result.is_err() {
             shorebird_error!("Failed to mark patch as bad: {:?}", mark_result);
         }
+        // The engine boots base code after a patch fails to load, so the
+        // patch check this launch sends must not name the failed patch.
+        state.set_running_patch(None);
         let client_id = state.client_id();
         let message = format!("engine_report: patch {} failed to launch", patch.number);
         let event = PatchEvent::new(
@@ -1703,6 +1706,8 @@ patch_verification: bogus_mode
             );
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
+            // And no longer what this process is running.
+            assert!(state.running_patch().is_none());
             // And we've queued an event.
             let events = state.copy_events(1);
             assert_eq!(events.len(), 1);
