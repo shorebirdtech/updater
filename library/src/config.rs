@@ -65,6 +65,7 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
+    crate::restart::set_restart_handler(None);
 }
 
 pub fn check_initialized_and_call<F, R>(

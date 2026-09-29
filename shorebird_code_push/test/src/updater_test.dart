@@ -124,5 +124,17 @@ void main() {
         ).called(1);
       });
     });
+
+    group('restartApp', () {
+      test('forwards the result of shorebird_restart_app', () {
+        when(() => updaterBindings.shorebird_restart_app()).thenReturn(true);
+        expect(updater.restartApp(), isTrue);
+
+        when(() => updaterBindings.shorebird_restart_app()).thenReturn(false);
+        expect(updater.restartApp(), isFalse);
+
+        verify(() => updaterBindings.shorebird_restart_app()).called(2);
+      });
+    });
   });
 }

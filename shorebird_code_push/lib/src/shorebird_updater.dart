@@ -188,6 +188,38 @@ abstract class ShorebirdUpdater {
   /// * [checkForUpdate], which should be called to check if an update is
   ///   available before calling this method.
   Future<void> update({UpdateTrack? track});
+
+  /// Restarts the app's Dart code so the most recently downloaded patch takes
+  /// effect immediately, without the user relaunching the app.
+  ///
+  /// This tears down the running Dart isolate and boots a fresh one from the
+  /// next boot patch (the patch reported by [readNextPatch], or the base
+  /// release if the current patch was rolled back). It is the production
+  /// equivalent of a development-time hot restart: all in-memory Dart state
+  /// is lost and `main()` runs again, while the surrounding platform
+  /// activity/view controller and plugin registrations are preserved.
+  ///
+  /// Returns `true` if the engine accepted the restart request. When this
+  /// returns `true` the restart happens asynchronously — Dart code (including
+  /// code immediately after this call) may continue to run briefly before the
+  /// isolate is torn down, so don't rely on execution stopping here.
+  ///
+  /// Returns `false` when hot restart is not supported in the current
+  /// environment:
+  /// * The updater is not available (see [isAvailable]).
+  /// * The app is running against a Shorebird engine that predates hot
+  ///   restart support.
+  /// * The engine configuration is unsupported (e.g. multiple Flutter engines
+  ///   in one process, as with some add-to-app setups).
+  ///
+  /// When this returns `false`, the downloaded patch still takes effect on
+  /// the next full app launch, so callers can fall back to prompting the user
+  /// to restart the app.
+  ///
+  /// Note: this restarts Dart code even if no new patch is waiting; check
+  /// [checkForUpdate] for [UpdateStatus.restartRequired] before calling this
+  /// if you only want to restart when a patch is pending.
+  Future<bool> restartApp();
 }
 
 /// A track to check for updates on.

@@ -130,6 +130,25 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       _updater.freeUpdateResult(result);
     }
   }
+
+  @override
+  Future<bool> restartApp() async {
+    if (!_isAvailable) return false;
+
+    // Intentionally not run in a separate isolate: the underlying call only
+    // posts a restart request to the engine's platform thread and returns
+    // immediately, and a helper isolate could be torn down mid-call once the
+    // restart begins.
+    try {
+      return _updater.restartApp();
+      // Catch everything: engines that predate hot restart support don't
+      // export the symbol, which surfaces as an ArgumentError from the
+      // late-bound FFI lookup.
+      // ignore: avoid_catches_without_on_clauses
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 extension on int {

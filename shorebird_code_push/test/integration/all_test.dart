@@ -187,5 +187,43 @@ void main() {
       // next_boot_patch was cleared by the rollback.
       expect(await updater.readNextPatch(), isNull);
     });
+
+    // Drives the full production hot restart request path:
+    // ShorebirdUpdater.restartApp() → shorebird_restart_app FFI →
+    // the Rust relay → the engine-registered restart handler. In
+    // production the handler tears down and relaunches the Dart
+    // isolate; here a fake handler records the request.
+    test('restartApp relays to the engine-registered restart handler',
+        () async {
+      final reason = skipReason;
+      if (reason != null) {
+        markTestSkipped(reason);
+        return;
+      }
+
+      engine.init(tmp: tmp, server: server);
+      final updater = engine.createUpdater();
+
+      // No handler registered (e.g. an engine without hot restart
+      // support): the request is rejected.
+      expect(await updater.restartApp(), isFalse);
+
+      // The engine registers a handler at startup and accepts the
+      // request.
+      engine.installRestartHandler();
+      expect(await updater.restartApp(), isTrue);
+      expect(engine.restartRequestCount, 1);
+
+      // The engine can also reject the request (e.g. unsupported
+      // multi-engine configuration).
+      engine.installRestartHandler(accept: false);
+      expect(await updater.restartApp(), isFalse);
+      expect(engine.restartRequestCount, 1);
+
+      // engine.reset() (shorebird_test_reset) removes the handler, as
+      // process teardown would.
+      engine.reset();
+      expect(await updater.restartApp(), isFalse);
+    });
   });
 }
