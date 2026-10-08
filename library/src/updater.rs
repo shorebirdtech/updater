@@ -231,7 +231,7 @@ pub struct AppConfig {
 pub trait ReadSeek: Read + Seek {}
 
 /// Provides an interface to get an opaque ReadSeek object for a given path.
-/// This is used to provide a way to read the patch base file on iOS.
+/// This is used to provide a way to read the patch base file on iOS and macOS.
 pub trait ExternalFileProvider: Debug + Send + DynClone {
     fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>>;
 }
@@ -457,12 +457,21 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     crate::android::open_base_lib(&config.libapp_path, "libapp.so")
 }
 
-#[cfg(target_os = "ios")]
+// On Apple platforms the engine supplies the base: just the Dart snapshot
+// regions of the app binary, which patches are diffed against. The rest of the
+// binary (Mach-O headers, code signature) can change after release, e.g. when
+// the app is re-signed for notarization or the Mac App Store.
+#[cfg(all(not(test), any(target_os = "ios", target_os = "macos")))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     config.file_provider.open()
 }
 
-#[cfg(all(not(test), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(all(
+    not(test),
+    not(target_os = "ios"),
+    not(target_os = "macos"),
+    not(target_os = "android")
+))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     let file = fs::File::open(&config.libapp_path)
         .with_file_context(FileOperation::ReadFile, &config.libapp_path)?;
