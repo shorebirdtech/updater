@@ -233,8 +233,7 @@ pub trait ReadSeek: Read + Seek {}
 /// Provides an interface to get an opaque ReadSeek object for a given path.
 /// This is used to provide a way to read the patch base file on iOS and macOS.
 pub trait ExternalFileProvider: Debug + Send + DynClone {
-    /// Opens the patch base, or returns `None` if the engine provides none.
-    fn open(&self) -> anyhow::Result<Option<Box<dyn ReadSeek>>>;
+    fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>>;
 }
 
 // This is required for ExternalFileProvider to be used as a field in the Clone-able
@@ -458,32 +457,30 @@ fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
     crate::android::open_base_lib(&config.libapp_path, "libapp.so")
 }
 
-// On iOS the engine always supplies the base: just the Dart snapshot regions
-// of the app binary, which patches are diffed against.
+// On Apple platforms the engine supplies the base: just the Dart snapshot
+// regions of the app binary, which patches are diffed against. The rest of the
+// binary (Mach-O headers, code signature) can change after release, e.g. when
+// the app is re-signed for notarization or the Mac App Store.
 #[cfg(all(not(test), target_os = "ios"))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    config
-        .file_provider
-        .open()?
-        .ok_or_else(|| anyhow::anyhow!("The engine provided no patch base."))
+    config.file_provider.open()
 }
 
 #[cfg(all(not(test), target_os = "macos"))]
 fn patch_base(config: &UpdateConfig) -> anyhow::Result<Box<dyn ReadSeek>> {
-    macos_patch_base(config.file_provider.open()?, &config.libapp_path)
+    macos_patch_base(config.file_provider.open(), &config.libapp_path)
 }
 
-/// The base macOS patches apply to. Engines that supply one (the Dart
-/// snapshot regions of App.framework/App) get patches diffed against just
-/// those regions, which don't change when the app is re-signed after release
-/// (notarization, Mac App Store). Older engines supply none and get patches
-/// diffed against the whole file.
+/// macOS engines from before they served the Dart snapshot base fail to open
+/// one, and the CLI diffs their patches against the whole App.framework/App,
+/// so fall back to that file. Remove once every engine with this updater
+/// serves the base.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn macos_patch_base(
-    engine_base: Option<Box<dyn ReadSeek>>,
+    engine_base: anyhow::Result<Box<dyn ReadSeek>>,
     libapp_path: &Path,
 ) -> anyhow::Result<Box<dyn ReadSeek>> {
-    if let Some(base) = engine_base {
+    if let Ok(base) = engine_base {
         return Ok(base);
     }
     let file =
@@ -1388,8 +1385,8 @@ mod tests {
     #[derive(Debug, Clone)]
     pub struct FakeExternalFileProvider {}
     impl ExternalFileProvider for FakeExternalFileProvider {
-        fn open(&self) -> anyhow::Result<Option<Box<dyn crate::ReadSeek>>> {
-            Ok(Some(Box::new(std::io::Cursor::new(vec![]))))
+        fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
+            Ok(Box::new(std::io::Cursor::new(vec![])))
         }
     }
 
@@ -1556,7 +1553,7 @@ mod tests {
         let engine_base: Box<dyn crate::ReadSeek> =
             Box::new(std::io::Cursor::new(b"dart regions".to_vec()));
 
-        let mut base = super::macos_patch_base(Some(engine_base), &libapp_path).unwrap();
+        let mut base = super::macos_patch_base(Ok(engine_base), &libapp_path).unwrap();
         let mut contents = Vec::new();
         base.read_to_end(&mut contents).unwrap();
         assert_eq!(contents, b"dart regions");
@@ -1568,7 +1565,9 @@ mod tests {
         let libapp_path = tmp_dir.path().join("App");
         std::fs::write(&libapp_path, b"whole binary").unwrap();
 
-        let mut base = super::macos_patch_base(None, &libapp_path).unwrap();
+        let mut base =
+            super::macos_patch_base(Err(anyhow::anyhow!("CFile open failed")), &libapp_path)
+                .unwrap();
         let mut contents = Vec::new();
         base.read_to_end(&mut contents).unwrap();
         assert_eq!(contents, b"whole binary");
@@ -1579,7 +1578,10 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let libapp_path = tmp_dir.path().join("missing");
 
-        assert!(super::macos_patch_base(None, &libapp_path).is_err());
+        assert!(
+            super::macos_patch_base(Err(anyhow::anyhow!("CFile open failed")), &libapp_path)
+                .is_err()
+        );
     }
 
     #[test]

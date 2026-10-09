@@ -15,18 +15,16 @@ pub struct CFileProvider {
 }
 
 impl ExternalFileProvider for CFileProvider {
-    /// A null handle means the engine has no base to provide (e.g. a macOS
-    /// engine from before it served the Dart snapshot base).
-    fn open(&self) -> anyhow::Result<Option<Box<dyn ReadSeek>>> {
+    fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>> {
         let handle = (self.file_callbacks.open)();
         if handle.is_null() {
-            return Ok(None);
+            return Err(anyhow::anyhow!("CFile open failed"));
         }
         let file = CFile {
             file_callbacks: self.file_callbacks,
             handle,
         };
-        Ok(Some(Box::new(file)))
+        Ok(Box::new(file))
     }
 }
 
@@ -155,7 +153,7 @@ mod test {
 
     #[serial]
     #[test]
-    fn test_open_null_handle_provides_no_file() {
+    fn test_open_failure() {
         reset_tests();
         unsafe {
             OPEN_RET = std::ptr::null_mut();
@@ -165,7 +163,7 @@ mod test {
             file_callbacks: FileCallbacks::new(),
         };
         let result = file_provider.open();
-        assert!(result.unwrap().is_none());
+        assert!(result.is_err());
     }
 
     #[serial]
@@ -176,7 +174,7 @@ mod test {
         let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
-        let mut handle = file_provider.open().unwrap().unwrap();
+        let mut handle = file_provider.open().unwrap();
         let mut buffer = [0u8; 10];
         let _read = handle.read(&mut buffer).unwrap();
         unsafe {
@@ -193,7 +191,7 @@ mod test {
         let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
-        let mut handle = file_provider.open().unwrap().unwrap();
+        let mut handle = file_provider.open().unwrap();
         unsafe {
             SEEK_RET = 1;
         }
@@ -239,7 +237,7 @@ mod test {
         let file_provider = CFileProvider {
             file_callbacks: FileCallbacks::new(),
         };
-        let mut handle = file_provider.open().unwrap().unwrap();
+        let mut handle = file_provider.open().unwrap();
         unsafe {
             SEEK_RET = -1;
         }

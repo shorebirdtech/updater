@@ -207,8 +207,8 @@ mod tests {
     #[derive(Debug, Clone)]
     pub struct FakeExternalFileProvider {}
     impl ExternalFileProvider for FakeExternalFileProvider {
-        fn open(&self) -> anyhow::Result<Option<Box<dyn crate::ReadSeek>>> {
-            Ok(Some(Box::new(std::io::Cursor::new(vec![]))))
+        fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
+            Ok(Box::new(std::io::Cursor::new(vec![])))
         }
     }
 
