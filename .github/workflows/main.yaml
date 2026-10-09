@@ -57,6 +57,7 @@ jobs:
         with:
           filters: |
             library:
+              - ./.github/workflows/main.yaml
               - ./.github/actions/rust_crate/action.yaml
               - library/**
             patch:
