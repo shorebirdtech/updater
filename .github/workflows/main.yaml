@@ -57,6 +57,7 @@ jobs:
         with:
           filters: |
             library:
+              - ./.github/workflows/main.yaml
               - ./.github/actions/rust_crate/action.yaml
               - library/**
             patch:
@@ -90,6 +91,50 @@ jobs:
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
           working_directory: ${{ matrix.crate }}
 
+  # The host builds above never compile code behind cfg(target_os =
+  # "android") or cfg(target_os = "ios"); the engine build is the first place
+  # those paths compile. Lint them for the mobile targets here instead.
+  check_mobile_targets:
+    needs: changes
+    if: ${{ contains(fromJSON(needs.changes.outputs.needs_rust_build), 'library') }}
+
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+          - target: aarch64-apple-ios
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    name: 📱 Check library (${{ matrix.target }})
+
+    steps:
+      - name: 📚 Git Checkout
+        uses: actions/checkout@v7
+
+      - name: 🦀 Add ${{ matrix.target }}
+        run: rustup target add ${{ matrix.target }}
+
+      # The runner image ships an NDK at ANDROID_NDK_HOME; cargo-ndk points
+      # the C compilers that ring and zstd-sys build with at it.
+      - name: 🤖 Install cargo-ndk
+        if: ${{ contains(matrix.target, 'android') }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: 🤖 Clippy (Android)
+        if: ${{ contains(matrix.target, 'android') }}
+        working-directory: library
+        run: cargo ndk --target ${{ matrix.target }} clippy -- -D warnings
+
+      - name: 🍎 Clippy (iOS)
+        if: ${{ contains(matrix.target, 'ios') }}
+        working-directory: library
+        run: cargo clippy --target ${{ matrix.target }} -- -D warnings
+
   build_flutter_packages:
     needs: changes
     if: ${{ needs.changes.outputs.needs_flutter_build != '[]' }}
@@ -116,7 +161,7 @@ jobs:
           working_directory: ${{ matrix.package }}
 
   ci:
-    needs: [semantic_pull_request, build_flutter_packages, build_rust_crates]
+    needs: [semantic_pull_request, build_flutter_packages, build_rust_crates, check_mobile_targets]
     if: ${{ always() }}
 
     runs-on: ubuntu-latest
