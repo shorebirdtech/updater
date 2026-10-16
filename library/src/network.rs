@@ -70,17 +70,7 @@ pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
-    // Hand-listed to hold this line to the fields troubleshooting asks users
-    // to read off it, rather than whatever the struct happens to carry.
-    shorebird_info!(
-        "Sending patch check request: app_id: {}, channel: {}, release_version: {}, platform: {}, arch: {}, current_patch_number: {:?}",
-        request.app_id,
-        request.channel,
-        request.release_version,
-        request.platform,
-        request.arch,
-        request.current_patch_number
-    );
+    shorebird_info!("Sending patch check request: {}", request.log_line());
     let result = ureq::post(url).send_json(&request);
     let response = handle_network_result(result)?;
     let parsed = response.into_body().read_json()?;
@@ -304,14 +294,25 @@ pub struct PatchCheckRequest {
 /// check payload the server counts installs from.
 impl std::fmt::Debug for PatchCheckRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured without `..` so a field added to this struct fails to
+        // compile here rather than silently vanishing from the render.
+        let Self {
+            app_id,
+            channel,
+            release_version,
+            platform,
+            arch,
+            client_id: _,
+            current_patch_number,
+        } = self;
         f.debug_struct("PatchCheckRequest")
-            .field("app_id", &self.app_id)
-            .field("channel", &self.channel)
-            .field("release_version", &self.release_version)
-            .field("platform", &self.platform)
-            .field("arch", &self.arch)
+            .field("app_id", app_id)
+            .field("channel", channel)
+            .field("release_version", release_version)
+            .field("platform", platform)
+            .field("arch", arch)
             .field("client_id", &"<redacted>")
-            .field("current_patch_number", &self.current_patch_number)
+            .field("current_patch_number", current_patch_number)
             .finish()
     }
 }
@@ -331,6 +332,30 @@ impl PatchCheckRequest {
             client_id: client_id.to_string(),
             current_patch_number,
         }
+    }
+
+    /// The fields of this request that are safe to log, in the order
+    /// troubleshooting asks users to read them off the line.
+    ///
+    /// Split out from the log call because `shorebird_info!` expands to
+    /// `println!` under `cfg(test)`, so a test cannot assert what the macro
+    /// emitted. Returning the line makes the omission of `client_id`
+    /// assertable.
+    fn log_line(&self) -> String {
+        // Destructured without `..` so a field added to this struct fails to
+        // compile here rather than silently vanishing from the line.
+        let Self {
+            app_id,
+            channel,
+            release_version,
+            platform,
+            arch,
+            client_id: _,
+            current_patch_number,
+        } = self;
+        format!(
+            "app_id: {app_id}, channel: {channel}, release_version: {release_version}, platform: {platform}, arch: {arch}, current_patch_number: {current_patch_number:?}"
+        )
     }
 }
 
@@ -432,6 +457,26 @@ mod tests {
         assert!(!debug.contains("11111111-2222-3333-4444-555555555555"));
         assert!(debug.contains("client_id: \"<redacted>\""));
         assert!(debug.contains("channel: \"stable\""));
+    }
+
+    #[test]
+    fn patch_check_request_log_line_omits_client_id() {
+        let request = super::PatchCheckRequest {
+            app_id: "app_id".to_string(),
+            channel: "stable".to_string(),
+            release_version: "1.0.0+1".to_string(),
+            platform: "android".to_string(),
+            arch: "aarch64".to_string(),
+            client_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            current_patch_number: Some(3),
+        };
+        // Pinned whole rather than by substring: the docs examples of this
+        // line are matched to it character for character.
+        assert_eq!(
+            request.log_line(),
+            "app_id: app_id, channel: stable, release_version: 1.0.0+1, platform: android, arch: aarch64, current_patch_number: Some(3)"
+        );
+        assert!(!request.log_line().contains("client_id"));
     }
 
     #[test]
