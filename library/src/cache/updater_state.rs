@@ -39,11 +39,11 @@ const SHOREBIRD_OWNED_PATHS: &[&str] = &["patches", "pointers.json", "patches_st
 ///
 /// Per-patch state lives inside [`PatchLifecycle`] (one document per
 /// patch number under `{cache}/patches/{N}/state.json`). UpdaterState
-/// itself only owns the per-device `client_id` and the per-release event
+/// itself only owns the per-install `client_id` and the per-release event
 /// queue; all other patch-related fields are pointers managed by the
 /// lifecycle.
-// TODO(eseidel): Split the per-release state from the per-device state
-// so per-device state isn't reset on release-version change.
+// TODO(eseidel): Split the per-release state from the per-install state
+// so per-install state isn't reset on release-version change.
 #[derive(Debug)]
 pub struct UpdaterState {
     /// Persistent app-storage root. Holds `state.json`, `pointers.json`,
