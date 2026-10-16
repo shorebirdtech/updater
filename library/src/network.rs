@@ -339,8 +339,8 @@ impl PatchCheckRequest {
     ///
     /// Split out from the log call because `shorebird_info!` expands to
     /// `println!` under `cfg(test)`, so a test cannot assert what the macro
-    /// emitted. Returning the line makes the omission of `client_id`
-    /// assertable.
+    /// emitted. Returning the line lets a test check that `client_id` is
+    /// absent from it.
     fn log_line(&self) -> String {
         // Destructured without `..` so a field added to this struct fails to
         // compile here rather than silently vanishing from the line.
