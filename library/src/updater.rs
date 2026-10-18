@@ -2434,6 +2434,9 @@ patch_verification: bogus_mode
     // tests signs `HELLO_TESTS_HASH` with its private key, so any signature
     // offered for it fails verification.
     const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
+    // A genuine `TEST_PUBLIC_KEY` signature, but over a different message
+    // (signing.rs's test hash), so it fails to verify for `HELLO_TESTS_HASH`.
+    const WRONG_MESSAGE_SIGNATURE: &str = "2ixSo5LpaWUSLg2GJEV+D+uyLeLjp0c3vNXnl0yb1iJjAdpn10BFlbcwCcjaJW9PNky2HU2hKOBe62PkFHOU8DDYOfxf2LGg/ToLGPHin85WrwFAceAUYDs7JpQr43dRTbrXcT8k5tuCQOTwXecGwuWcOFFvh0GbXFnyAmi7fLfN9CtTsG2GIOle/LyYLwoviTrXn/fZTZEYrqxD/wZ4QzoWOWLWNvrPbILhqWELkBLhdZeK0+nC2CIxFRYd3bUeOi1AGtPyHKBfdwuf4VO3+HbwJVaAEiD7HU2Bj+Zp1xeSdbznmYgBV86oizrLFd23D+lBfTlmDGgdfNE9J4Z2/g==";
     // Hash of "hello tests", the result of applying `HELLO_TESTS_PATCH`
     // to the base "hello world".
     const HELLO_TESTS_HASH: &str =
@@ -2511,7 +2514,7 @@ patch_verification: bogus_mode
     #[test]
     fn install_only_rejects_patch_with_invalid_signature() -> anyhow::Result<()> {
         let tmp_dir = TempDir::new().unwrap();
-        let result = update_with_signature(&tmp_dir, "install_only", Some("bm90IGEgc2lnbmF0dXJl"));
+        let result = update_with_signature(&tmp_dir, "install_only", Some(WRONG_MESSAGE_SIGNATURE));
         let err = result.expect_err("an unverifiable patch must not install");
         assert!(
             err.to_string().contains("signature"),
@@ -2544,7 +2547,7 @@ patch_verification: bogus_mode
         // install, so the install itself succeeds and boot validation is
         // what rejects it.
         let tmp_dir = TempDir::new().unwrap();
-        let status = update_with_signature(&tmp_dir, "strict", Some("bm90IGEgc2lnbmF0dXJl"))?;
+        let status = update_with_signature(&tmp_dir, "strict", Some(WRONG_MESSAGE_SIGNATURE))?;
         assert_eq!(status, crate::UpdateStatus::UpdateInstalled);
         assert!(super::validate_next_boot_patch().is_err());
         super::with_mut_state(|state| {
