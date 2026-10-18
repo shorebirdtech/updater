@@ -11,6 +11,7 @@ pub mod c_api;
 // Declare other .rs file/module exists, but make them private.
 mod cache;
 mod config;
+mod engine_callbacks;
 mod events;
 mod file_errors;
 mod logging;
@@ -25,6 +26,14 @@ mod android;
 
 #[cfg(test)]
 mod test_utils;
+
+#[cfg(any(test, feature = "test-hooks"))]
+mod test_engine_callbacks;
+
+/// Engine callbacks for driving the updater without an engine; see
+/// `test_engine_callbacks`.
+#[cfg(feature = "test-hooks")]
+pub use test_engine_callbacks::callbacks as testing_engine_callbacks;
 
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;

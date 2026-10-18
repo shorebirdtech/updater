@@ -32,8 +32,8 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
 ///     -outform DER \
 ///     -out public_key.der
 ///
-/// See https://docs.rs/ring/latest/ring/signature/index.html#signing-and-verifying-with-rsa-pkcs1-15-padding
-/// for more information.
+/// The signature is RSASSA-PKCS1-v1_5 with SHA-256, checked by the engine's
+/// verifier (see `EngineCallbacks::verify_signature`).
 pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Result<()> {
     shorebird_debug!("Message is {}", message);
     shorebird_debug!("Public key is {:?}", public_key);
@@ -42,25 +42,27 @@ pub fn check_signature(message: &str, signature: &str, public_key: &str) -> Resu
     let public_key_bytes = base64::prelude::BASE64_STANDARD
         .decode(public_key)
         .with_context(|| format!("Failed to decode public_key: {}", public_key))?;
-    let public_key = ring::signature::UnparsedPublicKey::new(
-        &ring::signature::RSA_PKCS1_2048_8192_SHA256,
-        public_key_bytes,
-    );
     let decoded_sig = base64::prelude::BASE64_STANDARD
         .decode(signature)
         .map_err(|e| anyhow::Error::msg(format!("Failed to decode signature: {:?}", e)))?;
 
     shorebird_info!("Verifying patch signature...");
-    match public_key.verify(message.as_bytes(), &decoded_sig) {
-        Ok(_) => {
+    match crate::engine_callbacks::verify_signature(
+        &public_key_bytes,
+        message.as_bytes(),
+        &decoded_sig,
+    ) {
+        Some(true) => {
             shorebird_info!("Patch signature is valid");
             Ok(())
         }
-        Err(_) => {
-            // The error provided by `verify` is (by design) not helpful, so we ignore it.
-            // See https://docs.rs/ring/latest/ring/error/struct.Unspecified.html
+        Some(false) => {
             shorebird_error!("Patch signature is invalid");
             bail!("Patch signature is invalid")
+        }
+        None => {
+            shorebird_error!("No signature verifier registered");
+            bail!("Patch signature cannot be verified: no signature verifier registered")
         }
     }
 }
