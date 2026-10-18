@@ -117,6 +117,9 @@ pub enum BadReason {
     InvalidPatchBytes,
     /// Inflated bytes' hash didn't match the server-claimed hash.
     InstallHashMismatch,
+    /// `InstallOnly` mode: the patch's signature was missing or did not
+    /// verify against the configured public key at install time.
+    InstallSignatureInvalid,
     /// `validate_patch_is_bootable` failed at boot time (size mismatch
     /// vs Installed.size, or signature failed in Strict mode).
     ValidationFailed,

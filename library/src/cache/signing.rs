@@ -3,6 +3,8 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use std::path::Path;
 
+use crate::yaml::PatchVerificationMode;
+
 /// Reads the file at `path` and returns the SHA-256 hash of its contents as a String.
 pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
     use sha2::{Digest, Sha256}; // `Digest` is needed for `Sha256::new()`;
@@ -20,6 +22,27 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
     }
     let hash = hasher.finalize();
     Ok(hex::encode(hash))
+}
+
+/// The install-time half of patch verification. In `InstallOnly` mode the
+/// signature over the patch's `hash` is checked once, when the patch is
+/// installed; `Strict` mode instead checks it on every boot (see
+/// `PatchLifecycle::validate_next_boot_patch`), so this is a no-op there.
+/// With no `public_key` configured, signing is off and nothing is checked.
+pub fn check_install_signature(
+    hash: &str,
+    signature: Option<&str>,
+    public_key: Option<&str>,
+    mode: PatchVerificationMode,
+) -> Result<()> {
+    if mode != PatchVerificationMode::InstallOnly {
+        return Ok(());
+    }
+    let Some(public_key) = public_key else {
+        return Ok(());
+    };
+    let signature = signature.context("Patch signature is missing")?;
+    check_signature(hash, signature, public_key)
 }
 
 /// `public_key` is a DER base64-encoded RSA public key.

@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 #[cfg(test)]
-use anyhow::{bail, Context};
+use anyhow::bail;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::events::PatchEvent;
@@ -357,12 +357,12 @@ impl UpdaterState {
         }
         // InstallOnly mode verifies the signature here; Strict mode
         // verifies it again at boot time via validate_next_boot_patch.
-        if self.verification_mode == PatchVerificationMode::InstallOnly {
-            if let Some(public_key) = &self.patch_public_key {
-                let sig = signature.context("Patch signature is missing")?;
-                signing::check_signature(hash, sig, public_key)?;
-            }
-        }
+        signing::check_install_signature(
+            hash,
+            signature,
+            self.patch_public_key.as_deref(),
+            self.verification_mode,
+        )?;
         let installed_path = self.lifecycle.installed_artifact_path(patch.number);
         if let Some(parent) = installed_path.parent() {
             std::fs::create_dir_all(parent)?;
