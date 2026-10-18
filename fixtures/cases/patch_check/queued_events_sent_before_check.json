@@ -1,0 +1,170 @@
+{
+  "description": "Queued events are sent (at most 3, oldest first) before the patch check, then the whole queue is cleared, even events that were not sent.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": [
+          {
+            "app_id": "fixture-app-id",
+            "arch": "x86_64",
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "type": "__patch_install_failure__",
+            "patch_number": 1,
+            "platform": "linux",
+            "release_version": "1.0.0+1",
+            "timestamp": 1700000000,
+            "message": "e1"
+          },
+          {
+            "app_id": "fixture-app-id",
+            "arch": "x86_64",
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "type": "__patch_install_failure__",
+            "patch_number": 2,
+            "platform": "linux",
+            "release_version": "1.0.0+1",
+            "timestamp": 1700000000,
+            "message": "e2"
+          },
+          {
+            "app_id": "fixture-app-id",
+            "arch": "x86_64",
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "type": "__patch_install_failure__",
+            "patch_number": 3,
+            "platform": "linux",
+            "release_version": "1.0.0+1",
+            "timestamp": 1700000000,
+            "message": "e3"
+          },
+          {
+            "app_id": "fixture-app-id",
+            "arch": "x86_64",
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "type": "__patch_install_failure__",
+            "patch_number": 4,
+            "platform": "linux",
+            "release_version": "1.0.0+1",
+            "timestamp": 1700000000,
+            "message": "e4"
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "x86_64",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install_failure__",
+                "patch_number": 1,
+                "platform": "linux",
+                "release_version": "1.0.0+1",
+                "timestamp": 1700000000,
+                "message": "e1"
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "x86_64",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install_failure__",
+                "patch_number": 2,
+                "platform": "linux",
+                "release_version": "1.0.0+1",
+                "timestamp": 1700000000,
+                "message": "e2"
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "x86_64",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install_failure__",
+                "patch_number": 3,
+                "platform": "linux",
+                "release_version": "1.0.0+1",
+                "timestamp": 1700000000,
+                "message": "e3"
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": false
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": 0,
+        "message": "No update"
+      },
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": []
+          }
+        }
+      }
+    }
+  ]
+}

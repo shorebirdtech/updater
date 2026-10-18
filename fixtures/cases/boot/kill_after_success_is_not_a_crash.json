@@ -1,0 +1,74 @@
+{
+  "description": "A process killed after launch_success leaves no breadcrumb; the next launch boots the same patch.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": 1,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 1
+    },
+    {
+      "call": "report_launch_success"
+    },
+    {
+      "call": "restart"
+    },
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 1,
+      "expect_files": {
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Installed",
+            "signature": null,
+            "size": 5
+          }
+        },
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": 1,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    }
+  ]
+}

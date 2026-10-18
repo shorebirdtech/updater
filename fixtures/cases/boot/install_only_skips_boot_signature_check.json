@@ -1,0 +1,44 @@
+{
+  "description": "patch_verification: install_only does not re-verify the signature at boot, so a same-size tampered artifact still boots.",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\npatch_verification: install_only\n",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": 1,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": "AlI7gyCBmTq5kDSWXU6YRdnaoVfdTgGoltpBaXvQFtLh7BzbC75n5TaGfpF6epWm80u7En4ULzljpX8Oqp0xQyyj2bnXQDwVusCPhmRLioSa9Vb5nYbxjas6LFz8vkoeGpSzd5VAp+Q/kL0SbIM+CsbVQw92dmX6aukThNSyaZpim+4e/O8dlRYT7IYZX9VjAaYb1ldwrvCKVK5zH1yHS1FvrUemlOQPUJYnpYQc/7A/g6/JbINBXqDxo0TxPmZFuMLskG2mB1/ULT6tt9uc6BDbrCjCipjXnNsmbXJvE3piDMPBwSeGIT1KGONxiQ7DtypYUf2D4yzs5umW2rV3/g==",
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "jello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 1
+    }
+  ]
+}

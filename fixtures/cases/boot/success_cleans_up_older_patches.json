@@ -1,0 +1,133 @@
+{
+  "description": "Booting patch 3 removes older non-Bad patches (2), keeps Bad tombstones (1) without their artifacts, removes unrecognized entries in patches/, and removes orphaned downloads while keeping live ones.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 3,
+        "last_booted_patch": 2,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Bad",
+        "reason": "InstallHashMismatch",
+        "hash": null,
+        "signature": null,
+        "size": null
+      }
+    },
+    "storage/patches/1/leftover": {
+      "text": "x"
+    },
+    "storage/patches/2/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/2/dlc.vmcode": {
+      "text": "hello"
+    },
+    "storage/patches/3/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/3/dlc.vmcode": {
+      "text": "hello"
+    },
+    "storage/patches/4/state.json": {
+      "json": {
+        "kind": "Downloading",
+        "url": "https://example.com/4",
+        "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+        "signature": null
+      }
+    },
+    "storage/patches/junk/file": {
+      "text": "x"
+    },
+    "cache/downloads/4": {
+      "text": "part"
+    },
+    "cache/downloads/2": {
+      "text": "orphan"
+    },
+    "cache/downloads/not-a-number": {
+      "text": "orphan"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 3
+    },
+    {
+      "call": "report_launch_success",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install__",
+                "patch_number": 3,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": null
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        }
+      ],
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 3,
+            "last_booted_patch": 3,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      },
+      "expect_tree": [
+        "app/libapp.so",
+        "cache/downloads/4",
+        "storage/patches/1/state.json",
+        "storage/patches/3/dlc.vmcode",
+        "storage/patches/3/state.json",
+        "storage/patches/4/state.json",
+        "storage/pointers.json",
+        "storage/state.json"
+      ]
+    }
+  ]
+}
