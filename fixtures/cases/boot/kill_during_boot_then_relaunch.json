@@ -1,0 +1,155 @@
+{
+  "description": "Full sequence across three processes: boot patch 1, killed before success; the relaunch rolls back and boots base; the third launch is clean. The failure event goes out with the next update.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": null,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 1
+    },
+    {
+      "call": "restart"
+    },
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "report_launch_success"
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install_failure__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": "<prefix:crash_recovery: patch 1 failed to boot>"
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": false
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": 0,
+        "message": "No update"
+      },
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": []
+          }
+        }
+      }
+    },
+    {
+      "call": "restart"
+    },
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_files": {
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Bad",
+            "reason": "BootCrash",
+            "hash": null,
+            "signature": null,
+            "size": 5
+          }
+        },
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": null,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    }
+  ]
+}

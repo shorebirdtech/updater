@@ -1,0 +1,38 @@
+{
+  "description": "First launch with an empty storage dir: a new client_id is generated and only state.json is written.",
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": null
+    },
+    {
+      "call": "should_auto_update",
+      "expect": true,
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "<uuid>",
+            "release_version": "1.0.0+1",
+            "queued_events": []
+          }
+        }
+      },
+      "expect_tree": [
+        "app/libapp.so",
+        "storage/state.json"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "description": "An unparseable pointers.json falls back to empty pointers (boot the base release) without touching patches/.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "text": "garbage"
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_files": {
+        "storage/pointers.json": {
+          "text": "garbage"
+        },
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Installed",
+            "signature": null,
+            "size": 5
+          }
+        }
+      }
+    }
+  ]
+}

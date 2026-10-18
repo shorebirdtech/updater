@@ -2,6 +2,7 @@
 - Rust tests that call `shorebird_init` need `#[serial]`: the config is a global.
 - `library/include/*.h` come from `cbindgen` in `library/build.rs`; `updater_bindings.g.dart` comes from `ffigen`. Don't hand-edit either.
 - Fail open: any error leaves the app on its installed version.
+- `fixtures/` freezes updater behavior as JSON cases replayed through the C API by `library_test_hooks/tests/fixture_corpus.rs`; see `fixtures/README.md`. An intended behavior change updates its case in the same PR.
 
 ## FFI compatibility
 

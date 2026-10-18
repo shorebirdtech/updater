@@ -1,0 +1,17 @@
+{
+  "description": "shorebird.yaml without app_id fails init; nothing is written.",
+  "steps": [
+    {
+      "call": "init",
+      "yaml": "base_url: {{server}}\n",
+      "expect": false
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_tree": [
+        "app/libapp.so"
+      ]
+    }
+  ]
+}

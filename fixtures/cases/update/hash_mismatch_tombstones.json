@@ -1,0 +1,168 @@
+{
+  "description": "Inflated bytes that do not match the offered hash: error, tombstone InstallHashMismatch, nothing installed, __patch_update_failure__ queued as corrupt_patch.",
+  "base": {
+    "file": "bipatch/text_edit/base.bin"
+  },
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                "download_url": "{{server}}/patches/1.bin"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/patches/1.bin",
+            "headers": {
+              "range": null
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "file": "bipatch/text_edit/patch.bin"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": -1,
+        "message": "<any>"
+      },
+      "expect_files": {
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Bad",
+            "reason": "InstallHashMismatch",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "signature": null,
+            "size": 63
+          }
+        },
+        "storage/patches/1/dlc.vmcode": {
+          "absent": true
+        },
+        "cache/downloads/1": {
+          "absent": true
+        },
+        "storage/pointers.json": {
+          "absent": true
+        },
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": [
+              {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_update_failure__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": "<prefix:update_failure: patch 1 failed (>",
+                "failure_category": "corrupt_patch"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_update_failure__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": "<prefix:update_failure: patch 1 failed (>",
+                "failure_category": "corrupt_patch"
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                "download_url": "{{server}}/patches/1.bin"
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": 3,
+        "message": "Update available but previously failed to install. Not installing."
+      }
+    }
+  ]
+}
