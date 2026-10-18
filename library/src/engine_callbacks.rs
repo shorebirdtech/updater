@@ -84,6 +84,9 @@ pub fn http_request(
 struct HandlerContext<'a> {
     handler: &'a mut dyn ResponseHandler,
     error: Option<anyhow::Error>,
+    /// Whether `on_response` was delivered; body bytes before it, or success
+    /// without it, break the contract and fail the request.
+    responded: bool,
 }
 
 impl HandlerContext<'_> {
@@ -142,12 +145,19 @@ extern "C" fn on_response_trampoline(
             })
             .collect()
     };
+    context.responded = true;
     context.run(|handler| handler.on_response(status, &headers))
 }
 
 extern "C" fn on_body_trampoline(context: *mut c_void, data: *const u8, length: usize) -> bool {
     // SAFETY: as in `on_response_trampoline`.
     let context = unsafe { &mut *(context as *mut HandlerContext) };
+    if !context.responded {
+        context.error = Some(anyhow::anyhow!(
+            "HTTP body delivered before the response status"
+        ));
+        return false;
+    }
     if length == 0 {
         return true;
     }
@@ -168,7 +178,7 @@ fn http_request_with(
     body: &[u8],
     handler: &mut dyn ResponseHandler,
 ) -> Result<(), HttpError> {
-    let Some(callbacks) = callbacks else {
+    let Some(http_request) = callbacks.and_then(|c| c.http_request) else {
         shorebird_error!("No HTTP client registered; call shorebird_set_engine_callbacks first");
         return Err(HttpError::Transport);
     };
@@ -201,20 +211,22 @@ fn http_request_with(
     let mut context = HandlerContext {
         handler,
         error: None,
+        responded: false,
     };
     let response_callbacks = HttpResponseCallbacks {
         context: &mut context as *mut HandlerContext as *mut c_void,
         on_response: on_response_trampoline,
         on_body: on_body_trampoline,
     };
-    let code = (callbacks.http_request)(&request, &response_callbacks);
+    let code = http_request(&request, &response_callbacks);
     // A handler error is the most specific explanation, whatever code the
     // engine returned after the handler stopped the request.
     if let Some(error) = context.error {
         return Err(HttpError::Handler(error));
     }
     match code {
-        SHOREBIRD_HTTP_OK => Ok(()),
+        SHOREBIRD_HTTP_OK if context.responded => Ok(()),
+        SHOREBIRD_HTTP_OK => Err(HttpError::Protocol),
         SHOREBIRD_HTTP_TRANSPORT_ERROR => Err(HttpError::Transport),
         SHOREBIRD_HTTP_TLS_ERROR => Err(HttpError::Tls),
         SHOREBIRD_HTTP_PROTOCOL_ERROR => Err(HttpError::Protocol),
@@ -223,6 +235,11 @@ fn http_request_with(
         // this updater does not know: treat as a failed transport.
         _ => Err(HttpError::Transport),
     }
+}
+
+/// Whether the engine registered a signature verifier.
+pub fn has_signature_verifier() -> bool {
+    get().is_some_and(|c| c.verify_signature.is_some())
 }
 
 /// Verifies an RSASSA-PKCS1-v1_5 SHA-256 signature with the engine's
@@ -237,8 +254,8 @@ fn verify_signature_with(
     message: &[u8],
     signature: &[u8],
 ) -> Option<bool> {
-    let callbacks = callbacks?;
-    Some((callbacks.verify_signature)(
+    let verify_signature = callbacks?.verify_signature?;
+    Some(verify_signature(
         public_key_der.as_ptr(),
         public_key_der.len(),
         message.as_ptr(),
@@ -251,7 +268,9 @@ fn verify_signature_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::c_api::engine::{HttpRequestFn, SHOREBIRD_HTTP_ABORTED};
+    use crate::c_api::engine::SHOREBIRD_HTTP_ABORTED;
+
+    type HttpRequestFn = extern "C" fn(*const HttpRequest, *const HttpResponseCallbacks) -> i32;
 
     struct Recorder {
         status: Option<u16>,
@@ -296,7 +315,7 @@ mod tests {
 
     fn with_http(http_request: HttpRequestFn) -> Option<EngineCallbacks> {
         Some(EngineCallbacks {
-            http_request,
+            http_request: Some(http_request),
             ..crate::test_engine_callbacks::callbacks()
         })
     }
@@ -330,7 +349,11 @@ mod tests {
         ) {
             return SHOREBIRD_HTTP_ABORTED;
         }
-        let body = unsafe { std::slice::from_raw_parts(request.body, request.body_length) };
+        let body: &[u8] = if request.body_length == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(request.body, request.body_length) }
+        };
         let (first, second) = body.split_at(body.len() / 2);
         for chunk in [first, second] {
             if !(callbacks.on_body)(callbacks.context, chunk.as_ptr(), chunk.len()) {
@@ -434,5 +457,73 @@ mod tests {
     #[test]
     fn verify_without_registered_verifier_is_none() {
         assert_eq!(verify_signature_with(None, b"k", b"m", b"s"), None);
+        let http_only = EngineCallbacks {
+            verify_signature: None,
+            ..crate::test_engine_callbacks::callbacks()
+        };
+        assert_eq!(
+            verify_signature_with(Some(http_only), b"k", b"m", b"s"),
+            None
+        );
+    }
+
+    #[test]
+    fn null_http_request_is_a_transport_error() {
+        let verify_only = EngineCallbacks {
+            http_request: None,
+            ..crate::test_engine_callbacks::callbacks()
+        };
+        let mut recorder = Recorder::new();
+        let result = http_request_with(Some(verify_only), "GET", "u", &[], b"", &mut recorder);
+        assert!(matches!(result, Err(HttpError::Transport)));
+    }
+
+    // Reports success without ever delivering a response.
+    extern "C" fn silent(_: *const HttpRequest, _: *const HttpResponseCallbacks) -> i32 {
+        SHOREBIRD_HTTP_OK
+    }
+
+    // Delivers body bytes before the status.
+    extern "C" fn body_first(
+        _: *const HttpRequest,
+        callbacks: *const HttpResponseCallbacks,
+    ) -> i32 {
+        let callbacks = unsafe { &*callbacks };
+        let data = b"x";
+        if !(callbacks.on_body)(callbacks.context, data.as_ptr(), data.len()) {
+            return SHOREBIRD_HTTP_ABORTED;
+        }
+        SHOREBIRD_HTTP_OK
+    }
+
+    #[test]
+    fn ok_without_a_response_is_a_protocol_error() {
+        let mut recorder = Recorder::new();
+        let result = http_request_with(with_http(silent), "GET", "u", &[], b"", &mut recorder);
+        assert!(matches!(result, Err(HttpError::Protocol)));
+    }
+
+    #[test]
+    fn body_before_response_fails_the_request() {
+        let mut recorder = Recorder::new();
+        let result = http_request_with(with_http(body_first), "GET", "u", &[], b"", &mut recorder);
+        match result {
+            Err(HttpError::Handler(e)) => {
+                assert_eq!(
+                    e.to_string(),
+                    "HTTP body delivered before the response status"
+                )
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(recorder.body.is_empty());
+    }
+
+    #[test]
+    fn empty_request_body_echoes_nothing() {
+        let mut recorder = Recorder::new();
+        let result = http_request_with(with_http(echo), "GET", "u", &[], b"", &mut recorder);
+        assert!(result.is_ok());
+        assert!(recorder.body.is_empty());
     }
 }

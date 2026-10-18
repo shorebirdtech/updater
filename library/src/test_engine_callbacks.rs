@@ -14,8 +14,8 @@ use std::io::Read;
 
 pub fn callbacks() -> EngineCallbacks {
     EngineCallbacks {
-        http_request,
-        verify_signature,
+        http_request: Some(http_request),
+        verify_signature: Some(verify_signature),
     }
 }
 
