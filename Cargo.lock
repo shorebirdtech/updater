@@ -936,7 +936,11 @@ name = "library_test_hooks"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "hex",
  "libc",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "updater",
 ]
 

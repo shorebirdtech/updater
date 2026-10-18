@@ -4,6 +4,9 @@ ignorePaths:
   - target
   - build
   - "**/*.g.dart"
+  # Fixture binaries and test keys.
+  - "fixtures/**/*.bin"
+  - fixtures/keys
   # Flutter platform directories with per-platform build files
   - windows
   - macos
@@ -36,6 +39,8 @@ words:
   - debuginfo
   - declspec
   - Decompressor
+  - Deque
+  - dgst
   - dllexport
   - dlopen
   - dorny
@@ -53,7 +58,9 @@ words:
   - felangel
   - ffigen
   - gclient
+  - goldens
   - hdpi
+  - hexdigit
   - ifdef
   - keypair
   - libapp

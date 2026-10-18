@@ -1,0 +1,87 @@
+{
+  "description": "A new release_version wipes every per-release file shorebird owns (patches/, pointers.json, legacy patches_state.json, the downloads dir) and queued events, keeps client_id, and leaves files it does not own.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": [
+          {
+            "app_id": "fixture-app-id",
+            "arch": "x86_64",
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "type": "__patch_install_failure__",
+            "patch_number": 1,
+            "platform": "linux",
+            "release_version": "1.0.0+1",
+            "timestamp": 1700000000,
+            "message": "old"
+          }
+        ]
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": 1,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    },
+    "storage/patches_state.json": {
+      "text": "{\"legacy\": true}"
+    },
+    "storage/not_ours.txt": {
+      "text": "embedder file"
+    },
+    "storage/patches/2/state.json": {
+      "json": {
+        "kind": "Downloading",
+        "url": "https://example.com/2",
+        "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+        "signature": null
+      }
+    },
+    "cache/downloads/2": {
+      "text": "partial"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "release_version": "1.0.0+2",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+2",
+            "queued_events": []
+          }
+        },
+        "storage/not_ours.txt": {
+          "text": "embedder file"
+        }
+      },
+      "expect_tree": [
+        "app/libapp.so",
+        "storage/not_ours.txt",
+        "storage/state.json"
+      ]
+    }
+  ]
+}
