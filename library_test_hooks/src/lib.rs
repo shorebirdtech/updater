@@ -89,6 +89,10 @@ pub extern "C" fn shorebird_test_init(
         seek: stub_seek,
         close: stub_close,
     };
+    // The engine registers its BoringSSL HTTP client and signature verifier;
+    // these tests run without an engine, so register the test ones.
+    let engine_callbacks = updater::testing_engine_callbacks();
+    unsafe { engine::shorebird_set_engine_callbacks(&engine_callbacks) };
     engine::shorebird_init(&params, callbacks, yaml)
 }
 

@@ -15,6 +15,125 @@
 
 
 /**
+ * The whole response was delivered.
+ */
+#define SHOREBIRD_HTTP_OK 0
+
+/**
+ * The server could not be reached or the connection failed: DNS, connect,
+ * a read or write error, or a timeout.
+ */
+#define SHOREBIRD_HTTP_TRANSPORT_ERROR 1
+
+/**
+ * The TLS handshake failed, including an untrusted certificate.
+ */
+#define SHOREBIRD_HTTP_TLS_ERROR 2
+
+/**
+ * The server's response was not valid HTTP/1.1, or redirected too often.
+ */
+#define SHOREBIRD_HTTP_PROTOCOL_ERROR 3
+
+/**
+ * A response callback returned false.
+ */
+#define SHOREBIRD_HTTP_ABORTED 4
+
+/**
+ * The request itself was unusable, e.g. a malformed URL.
+ */
+#define SHOREBIRD_HTTP_INVALID_REQUEST 5
+
+/**
+ * One HTTP header: a NUL-terminated name and value.
+ */
+typedef struct ShorebirdHttpHeader {
+  const char *name;
+  const char *value;
+} ShorebirdHttpHeader;
+
+/**
+ * An HTTP request the updater asks the engine to send.
+ *
+ * Every pointer is owned by the updater and valid only for the duration of
+ * the `EngineCallbacks::http_request` call.
+ */
+typedef struct ShorebirdHttpRequest {
+  /**
+   * "GET" or "POST".
+   */
+  const char *method;
+  /**
+   * An absolute `http://` or `https://` URL.
+   */
+  const char *url;
+  const struct ShorebirdHttpHeader *headers;
+  uintptr_t header_count;
+  /**
+   * The request body, or null with `body_length` 0 for none.
+   */
+  const uint8_t *body;
+  uintptr_t body_length;
+} ShorebirdHttpRequest;
+
+/**
+ * Where the engine delivers a response, on the thread that called
+ * `EngineCallbacks::http_request`, before that call returns.
+ */
+typedef struct ShorebirdHttpResponseCallbacks {
+  /**
+   * Passed back unchanged as the first argument of each callback.
+   */
+  void *context;
+  /**
+   * Called once with the status and headers of the final response (after
+   * any redirects), before any body bytes. The pointers are valid only
+   * during the call. Returning false stops the request, which then returns
+   * `SHOREBIRD_HTTP_ABORTED`.
+   */
+  bool (*on_response)(void *context,
+                      uint16_t status,
+                      const struct ShorebirdHttpHeader *headers,
+                      uintptr_t header_count);
+  /**
+   * Called with each run of decoded body bytes, in order. Returning false
+   * stops the request, which then returns `SHOREBIRD_HTTP_ABORTED`.
+   */
+  bool (*on_body)(void *context, const uint8_t *data, uintptr_t length);
+} ShorebirdHttpResponseCallbacks;
+
+/**
+ * Sends `request` and delivers the response through `callbacks`, blocking
+ * until done. Returns one of the `SHOREBIRD_HTTP_*` codes. A response with
+ * any status, including 4xx and 5xx, is `SHOREBIRD_HTTP_OK` as long as it
+ * was delivered. Must be safe to call from any thread.
+ */
+typedef int32_t (*ShorebirdHttpRequestFn)(const struct ShorebirdHttpRequest *request,
+                                          const struct ShorebirdHttpResponseCallbacks *callbacks);
+
+/**
+ * Returns whether `signature` is a valid RSASSA-PKCS1-v1_5 SHA-256 signature
+ * of `message` by `public_key`, a DER-encoded PKCS#1 RSAPublicKey with a
+ * 2048 to 8192 bit modulus. Must be safe to call from any thread.
+ */
+typedef bool (*ShorebirdVerifySignatureFn)(const uint8_t *public_key,
+                                           uintptr_t public_key_length,
+                                           const uint8_t *message,
+                                           uintptr_t message_length,
+                                           const uint8_t *signature,
+                                           uintptr_t signature_length);
+
+/**
+ * Services the engine provides to the updater, so the updater uses the
+ * engine's TLS stack and certificate store rather than carrying its own.
+ */
+typedef struct ShorebirdEngineCallbacks {
+  ShorebirdHttpRequestFn http_request;
+  ShorebirdVerifySignatureFn verify_signature;
+} ShorebirdEngineCallbacks;
+
+/**
  * Struct containing configuration parameters for the updater.
  * Passed to `shorebird_init`.
  * NOTE: If this struct is changed all language bindings must be updated.
@@ -82,6 +201,21 @@ extern "C" {
  * returned by the updater library.
  */
 SHOREBIRD_EXPORT void shorebird_free_string(const char *c_string);
+
+/**
+ * Registers the engine's network and signature services. Call before
+ * `shorebird_init`: until this is called, network requests fail as if the
+ * device were offline and signed patches fail verification. A later call
+ * replaces the earlier callbacks.
+ *
+ * # Safety
+ *
+ * `callbacks` must be null (ignored) or point to a valid `EngineCallbacks`.
+ * The updater copies the struct; the functions it names must stay callable
+ * for the life of the process.
+ */
+SHOREBIRD_EXPORT
+void shorebird_set_engine_callbacks(const struct ShorebirdEngineCallbacks *callbacks);
 
 /**
  * Configures the updater. First parameter is a struct containing
