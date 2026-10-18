@@ -53,15 +53,20 @@ A runner:
    queued exchange has been served (up to 10 s; some requests come from
    background threads after the call returns), then check `expect_files` and
    `expect_tree`.
-7. After the last step, waits briefly and fails on any request nobody
-   expected.
+7. After the last step, waits 200 ms and fails on any request nobody
+   expected. The server keeps listening for the rest of the run: a request
+   that reaches it after its case has finished (a background thread that
+   started late) fails the run too, after a final 1 s wait.
+
+The runner rejects a case that uses a key this document does not define, or
+an `expect` on a call with no result, so a typo cannot quietly turn an
+assertion off. A port's runner should be as strict.
 
 ## Case file
 
 ```json
 {
   "description": "What this pins down, in one or two sentences.",
-  "release_version": "1.0.0+1",
   "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\n",
   "base": {"file": "bipatch/text_edit/base.bin"},
   "files": { "<path>": <file spec>, ... },
@@ -69,8 +74,9 @@ A runner:
 }
 ```
 
-`release_version` and `yaml` are the defaults for `init` steps; the values
-shown are the defaults when they are omitted.
+`yaml` is the default for `init` steps; the value shown is the default when it
+is omitted. `init` uses release version `1.0.0+1` unless the step says
+otherwise.
 
 ### Steps
 
@@ -132,7 +138,6 @@ the case (and is answered 500).
     "body": <file spec>,
     "headers": {"Content-Range": "bytes 20-62/63"},
     "close_after_bytes": 20,
-    "omit_content_length": false,
     "drop_connection": false
   }
 }
@@ -145,7 +150,8 @@ the body parsed as JSON.
 
 Response: the body is `json` (sent with `Content-Type: application/json`),
 `text`, or the bytes of a `body` file spec, else empty. `Content-Length` is
-the full body length unless `omit_content_length`. Extra `headers` are added.
+always the full body length (a case may not set it). Extra `headers` are
+added.
 The connection is always closed after the response. `close_after_bytes` sends
 the headers for the full body but only the first N body bytes, then closes (an
 interrupted download). `drop_connection` closes without sending anything.
@@ -157,7 +163,6 @@ interrupted download). `drop_connection` closes without sending anything.
 | `{"json": <value>}` | the value as pretty-printed JSON |
 | `{"text": "..."}` | the UTF-8 string |
 | `{"file": "<path under fixtures/>", "offset": n, "length": n}` | that file, or a slice of it |
-| `{"dir": true}` | an empty directory |
 | `{"delete": true}` | removes the file or directory |
 
 ### File expectations (what to check)
@@ -173,8 +178,9 @@ All keys present must hold:
 | `"size": n` | the file is n bytes |
 | `"same_as": <file spec>` | the file is exactly those bytes |
 
-`expect_tree` lists every regular file under the case root, sorted, with `/`
-separators, and must match exactly. Cases use it only where leftover files are
+`expect_tree` lists every regular file under the case root, plus every empty
+directory with a trailing `/`, sorted, with `/` separators, and must match
+exactly. Cases use it only where leftover files are
 the point (cleanup, wipes).
 
 ### Matchers
@@ -203,11 +209,34 @@ matched on their stable prefix.
 
 Each `bipatch/<name>/` holds `base.bin`, `patch.bin` (zstd-compressed bipatch,
 as the `patch` tool in this repo writes them) and `new.bin`. Applying
-`patch.bin` to `base.bin` must give exactly `new.bin`. The Rust runner replays
-each one through the C API: base release `base.bin`, the server offers
-`patch.bin` with hash `sha256(new.bin)`, `update` must install it and
-`storage/patches/1/dlc.vmcode` must equal `new.bin`. A port can also feed them
-straight to its patch-apply code.
+`patch.bin` to `base.bin` must give exactly `new.bin`. The runner replays
+each one as this case (with `NAME` and `HASH` = hex `sha256(new.bin)` filled
+in):
+
+```json
+{
+  "base": {"file": "bipatch/NAME/base.bin"},
+  "files": {"storage/state.json": {"json": {
+    "client_id": "00000000-0000-4000-8000-000000000001",
+    "release_version": "1.0.0+1", "queued_events": []}}},
+  "steps": [
+    {"call": "init", "expect": true},
+    {"call": "update",
+     "http": [
+       {"request": {"method": "POST", "path": "/api/v1/patches/check"},
+        "response": {"status": 200, "json": {"patch_available": true,
+          "patch": {"number": 1, "hash": "HASH", "download_url": "{{server}}/patch.bin"}}}},
+       {"request": {"method": "GET", "path": "/patch.bin"},
+        "response": {"status": 200, "body": {"file": "bipatch/NAME/patch.bin"}}},
+       {"request": {"method": "POST", "path": "/api/v1/patches/events"},
+        "response": {"status": 200, "text": ""}}],
+     "expect": {"status": 1, "message": "Update installed"},
+     "expect_files": {"storage/patches/1/dlc.vmcode": {"same_as": {"file": "bipatch/NAME/new.bin"}}}}
+  ]
+}
+```
+
+A port can also feed the goldens straight to its patch-apply code.
 
 | golden | what it covers |
 |---|---|
@@ -221,7 +250,7 @@ straight to its patch-apply code.
 `fixtures/.gitattributes` turns off line-ending conversion: several goldens are
 text, and a CRLF checkout would change their hashes.
 
-Regenerate one with `cargo run -p patch --release -- base.bin new.bin patch.bin`.
+Regenerate one with `cargo run -p patch --bin patch --release -- base.bin new.bin patch.bin`.
 The `patch` tool cannot diff against an empty base, so there is no
 empty-base golden.
 
@@ -240,8 +269,20 @@ printf '%s' "$HASH" | openssl dgst -sha256 -sign keys/fixture_private_key.pem | 
 
 These files are the contract the C++ port is held to, so a change here is a
 behavior change: say so in the PR. Add a case for every bug fixed in the
-updater's state handling. Not yet covered: `patch_verification: install_only`
-does not check the signature at install time today (fix in progress), so
-there is no install-time signature case yet; Android's split-APK base lookup
-(the runner uses the desktop path); concurrent `update` calls
-(`UpdateInProgress`).
+updater's state handling.
+
+Some of what the corpus pins down is current behavior rather than a choice
+anyone would defend. A port must match it; changing it is its own PR that
+edits the case:
+
+- `patch_check/queued_events_sent_before_check`: only the first 3 queued
+  events are sent, but the whole queue is cleared.
+- `patch_check/event_send_failure_does_not_block_check`: an event that fails
+  to send is dropped, not re-queued.
+- `state_load/state_json_missing_field_resets`: a `state.json` that fails to
+  parse for any reason resets, including its `client_id`.
+
+Not covered: install-time signature checks under
+`patch_verification: install_only` (the updater does not make them today);
+Android's split-APK base lookup (the runner uses the desktop path); concurrent
+`update` calls (`UpdateInProgress`).

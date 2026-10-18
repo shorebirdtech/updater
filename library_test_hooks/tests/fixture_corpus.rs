@@ -28,8 +28,17 @@ const DEFAULT_YAML: &str = "app_id: fixture-app-id\nbase_url: {{server}}\n";
 /// Some requests (event reports) are sent from a background thread after the
 /// C call returns.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long to listen for stray requests once a case has finished.
+/// How long to listen for stray requests once a case has finished. Requests
+/// that arrive after that are still caught: see `LATE_REQUESTS`.
 const QUIET_PERIOD: Duration = Duration::from_millis(200);
+/// How long to wait, after the last case, for requests to closed servers.
+const LATE_REQUEST_GRACE: Duration = Duration::from_secs(1);
+
+/// Requests that reached a case's server after the case had finished (for
+/// example an event report from a background thread that started late). Each
+/// case's server keeps listening for the rest of the run so these are never
+/// lost; the corpus fails if any arrive.
+static LATE_REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -170,6 +179,8 @@ struct ServerState {
     /// Requests currently being handled; a step is not done until these are.
     in_flight: usize,
     errors: Vec<String>,
+    /// Set when the case has finished; later requests go to `LATE_REQUESTS`.
+    closed: bool,
 }
 
 struct FakeServer {
@@ -301,9 +312,7 @@ fn write_response(stream: &mut TcpStream, response: &Value) -> std::io::Result<(
             headers.push((name.clone(), value.as_str().unwrap_or_default().to_string()));
         }
     }
-    if response["omit_content_length"].as_bool() != Some(true) {
-        headers.push(("Content-Length".into(), body.len().to_string()));
-    }
+    headers.push(("Content-Length".into(), body.len().to_string()));
     headers.push(("Connection".into(), "close".into()));
     let mut head = format!("HTTP/1.1 {status} {}\r\n", reason_phrase(status));
     for (name, value) in headers {
@@ -319,15 +328,17 @@ fn write_response(stream: &mut TcpStream, response: &Value) -> std::io::Result<(
 }
 
 impl FakeServer {
-    fn start() -> FakeServer {
+    fn start(name: &str) -> FakeServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let state = Arc::new((Mutex::new(ServerState::default()), Condvar::new()));
         let thread_state = state.clone();
+        let case_name = name.to_string();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
                 let state = thread_state.clone();
+                let case_name = case_name.clone();
                 // Taking `in_flight` before the request is parsed would race
                 // with `wait_idle`; take it once a connection exists.
                 state.0.lock().unwrap().in_flight += 1;
@@ -335,6 +346,14 @@ impl FakeServer {
                     let response = match read_request(&mut stream) {
                         Ok(request) => {
                             let mut guard = state.0.lock().unwrap();
+                            if guard.closed {
+                                LATE_REQUESTS.lock().unwrap().push(format!(
+                                    "{case_name}: request after the case finished: {} {} {}",
+                                    request.method,
+                                    request.path,
+                                    String::from_utf8_lossy(&request.body)
+                                ));
+                            }
                             match guard.queue.pop_front() {
                                 Some(exchange) => {
                                     match match_request(&exchange.request, &request) {
@@ -370,6 +389,12 @@ impl FakeServer {
             }
         });
         FakeServer { port, state }
+    }
+
+    /// Marks the case finished. The listener stays up so a late request is
+    /// recorded instead of refused.
+    fn close(&self) {
+        self.state.0.lock().unwrap().closed = true;
     }
 
     fn base_url(&self) -> String {
@@ -448,10 +473,6 @@ fn write_files(root: &Path, files: &Map<String, Value>) {
             }
             continue;
         }
-        if spec["dir"].as_bool() == Some(true) {
-            std::fs::create_dir_all(&path).unwrap();
-            continue;
-        }
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, read_file_spec(spec)).unwrap();
     }
@@ -515,7 +536,8 @@ fn check_files(root: &Path, files: &Map<String, Value>) -> Vec<String> {
     errors
 }
 
-/// Every regular file under `root`, as sorted `/`-separated relative paths.
+/// Every regular file under `root`, plus every empty directory (with a
+/// trailing `/`), as sorted `/`-separated relative paths.
 fn list_tree(root: &Path) -> Vec<String> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -523,15 +545,20 @@ fn list_tree(root: &Path) -> Vec<String> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            let rel = path.strip_prefix(root).unwrap();
+            let parts: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            let rel = parts.join("/");
             if path.is_dir() {
+                let before = out.len();
                 walk(&path, root, out);
+                if out.len() == before {
+                    out.push(format!("{rel}/"));
+                }
             } else {
-                let rel = path.strip_prefix(root).unwrap();
-                let parts: Vec<String> = rel
-                    .components()
-                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                    .collect();
-                out.push(parts.join("/"));
+                out.push(rel);
             }
         }
     }
@@ -564,9 +591,10 @@ extern "C" fn base_read(handle: *mut libc::c_void, buffer: *mut u8, count: usize
 extern "C" fn base_seek(handle: *mut libc::c_void, offset: i64, whence: i32) -> i64 {
     let cursor = unsafe { &mut *(handle as *mut std::io::Cursor<Vec<u8>>) };
     let pos = match whence {
-        libc::SEEK_SET => SeekFrom::Start(offset as u64),
+        libc::SEEK_SET if offset >= 0 => SeekFrom::Start(offset as u64),
         libc::SEEK_CUR => SeekFrom::Current(offset),
-        _ => SeekFrom::End(offset),
+        libc::SEEK_END => SeekFrom::End(offset),
+        _ => return -1,
     };
     cursor.seek(pos).map(|p| p as i64).unwrap_or(-1)
 }
@@ -596,7 +624,6 @@ struct CaseEnv {
 fn call_init(env: &CaseEnv, step: &Value, case: &Value) -> Value {
     let release_version = step["release_version"]
         .as_str()
-        .or(case["release_version"].as_str())
         .unwrap_or(DEFAULT_RELEASE_VERSION);
     let yaml = step["yaml"]
         .as_str()
@@ -699,14 +726,166 @@ fn run_call(env: &CaseEnv, step: &Value, case: &Value) -> Result<Option<Value>, 
     })
 }
 
-fn run_case(case_path: &Path) -> Result<(), Vec<String>> {
-    let raw = std::fs::read_to_string(case_path).unwrap();
-    let mut case: Value = serde_json::from_str(&raw)
-        .map_err(|e| vec![format!("{}: invalid JSON: {e}", case_path.display())])?;
+// ---------------------------------------------------------------------------
+// Case validation: every key must be one the format defines, so a typo fails
+// the case instead of silently skipping an assertion.
+// ---------------------------------------------------------------------------
+
+/// Calls whose result can be compared with `expect`.
+const CALLS_WITH_RESULT: &[&str] = &[
+    "init",
+    "should_auto_update",
+    "next_boot_patch_number",
+    "current_boot_patch_number",
+    "next_boot_patch_path",
+    "check_for_downloadable_update",
+    "update",
+];
+const CALLS_WITHOUT_RESULT: &[&str] = &[
+    "restart",
+    "report_launch_start",
+    "report_launch_success",
+    "report_launch_failure",
+    "validate_next_boot_patch",
+];
+
+fn check_keys(value: &Value, allowed: &[&str], at: &str, problems: &mut Vec<String>) {
+    match value.as_object() {
+        Some(map) => {
+            for key in map.keys() {
+                if !allowed.contains(&key.as_str()) {
+                    problems.push(format!(
+                        "{at}: unknown key \"{key}\" (allowed: {allowed:?})"
+                    ));
+                }
+            }
+        }
+        None => problems.push(format!("{at}: expected an object, got {value}")),
+    }
+}
+
+fn check_file_spec(spec: &Value, at: &str, problems: &mut Vec<String>) {
+    check_keys(
+        spec,
+        &["json", "text", "file", "offset", "length", "delete"],
+        at,
+        problems,
+    );
+}
+
+fn validate_case(case: &Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    let p = &mut problems;
+    check_keys(
+        case,
+        &["description", "yaml", "base", "files", "steps"],
+        "case",
+        p,
+    );
+    if let Some(base) = case.get("base") {
+        check_file_spec(base, "base", p);
+    }
+    for (path, spec) in case["files"].as_object().into_iter().flatten() {
+        check_file_spec(spec, &format!("files.{path}"), p);
+    }
+    let Some(steps) = case["steps"].as_array() else {
+        p.push("case: steps must be a list".to_string());
+        return problems;
+    };
+    for (i, step) in steps.iter().enumerate() {
+        let at = format!("step {i}");
+        check_keys(
+            step,
+            &[
+                "call",
+                "channel",
+                "release_version",
+                "yaml",
+                "write_files",
+                "http",
+                "expect",
+                "expect_files",
+                "expect_tree",
+            ],
+            &at,
+            p,
+        );
+        let call = step["call"].as_str().unwrap_or_default();
+        let has_result = CALLS_WITH_RESULT.contains(&call);
+        if !has_result && !CALLS_WITHOUT_RESULT.contains(&call) && !call.is_empty() {
+            p.push(format!("{at}: unknown call \"{call}\""));
+        }
+        if step.get("expect").is_some() && !has_result {
+            p.push(format!("{at}: \"{call}\" has no result to expect"));
+        }
+        for (path, spec) in step["write_files"].as_object().into_iter().flatten() {
+            check_file_spec(spec, &format!("{at}.write_files.{path}"), p);
+        }
+        for (j, exchange) in step["http"].as_array().into_iter().flatten().enumerate() {
+            let at = format!("{at}.http[{j}]");
+            check_keys(exchange, &["request", "response"], &at, p);
+            check_keys(
+                &exchange["request"],
+                &["method", "path", "headers", "json"],
+                &format!("{at}.request"),
+                p,
+            );
+            let response = &exchange["response"];
+            check_keys(
+                response,
+                &[
+                    "status",
+                    "json",
+                    "text",
+                    "body",
+                    "headers",
+                    "close_after_bytes",
+                    "drop_connection",
+                ],
+                &format!("{at}.response"),
+                p,
+            );
+            if let Some(body) = response.get("body") {
+                check_file_spec(body, &format!("{at}.response.body"), p);
+            }
+            for name in response["headers"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|h| h.0)
+            {
+                if name.eq_ignore_ascii_case("content-length") {
+                    p.push(format!(
+                        "{at}.response: Content-Length is set by the server"
+                    ));
+                }
+            }
+        }
+        for (path, spec) in step["expect_files"].as_object().into_iter().flatten() {
+            let at = format!("{at}.expect_files.{path}");
+            check_keys(
+                spec,
+                &["absent", "exists", "json", "text", "size", "same_as"],
+                &at,
+                p,
+            );
+            if let Some(same_as) = spec.get("same_as") {
+                check_file_spec(same_as, &format!("{at}.same_as"), p);
+            }
+        }
+    }
+    problems
+}
+
+fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
+    let problems = validate_case(&case);
+    if !problems.is_empty() {
+        return Err(problems);
+    }
 
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    let server = FakeServer::start();
+    let server = FakeServer::start(name);
     let public_key = std::fs::read_to_string(fixtures_root().join("keys/fixture_public_key.b64"))
         .unwrap()
         .trim()
@@ -781,6 +960,7 @@ fn run_case(case_path: &Path) -> Result<(), Vec<String>> {
     for e in server.wait_idle(Duration::ZERO) {
         errors.push(format!("after last step: {e}"));
     }
+    server.close();
     updater::testing_reset_config();
     if errors.is_empty() {
         Ok(())
@@ -877,7 +1057,12 @@ fn fixture_corpus() {
             continue;
         }
         ran += 1;
-        if let Err(errors) = run_case(&path) {
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let result = match serde_json::from_str(&raw) {
+            Ok(case) => run_case(&name, case),
+            Err(e) => Err(vec![format!("invalid JSON: {e}")]),
+        };
+        if let Err(errors) = result {
             failures.push(format!("{name}:\n    {}", errors.join("\n    ")));
         }
     }
@@ -895,12 +1080,13 @@ fn fixture_corpus() {
             continue;
         }
         ran += 1;
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), bipatch_case(&dir).to_string()).unwrap();
-        if let Err(errors) = run_case(tmp.path()) {
+        if let Err(errors) = run_case(&name, bipatch_case(&dir)) {
             failures.push(format!("{name}:\n    {}", errors.join("\n    ")));
         }
     }
+
+    std::thread::sleep(LATE_REQUEST_GRACE);
+    failures.extend(LATE_REQUESTS.lock().unwrap().drain(..));
 
     assert!(ran > 0, "no fixture cases matched filter {filter:?}");
     assert!(
