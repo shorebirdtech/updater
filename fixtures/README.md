@@ -218,6 +218,9 @@ straight to its patch-apply code.
 | `binary_edits` | 64 KiB random base with an overwrite, an insertion, a deletion and a longer tail |
 | `unrelated` | base and new share nothing |
 
+`fixtures/.gitattributes` turns off line-ending conversion: several goldens are
+text, and a CRLF checkout would change their hashes.
+
 Regenerate one with `cargo run -p patch --release -- base.bin new.bin patch.bin`.
 The `patch` tool cannot diff against an empty base, so there is no
 empty-base golden.
