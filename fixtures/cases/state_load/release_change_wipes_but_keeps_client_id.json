@@ -79,6 +79,7 @@
       },
       "expect_tree": [
         "app/libapp.so",
+        "cache/",
         "storage/not_ours.txt",
         "storage/state.json"
       ]
