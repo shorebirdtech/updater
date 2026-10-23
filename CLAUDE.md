@@ -46,3 +46,7 @@ Design principle: "fail open" — always fall back to the currently installed ve
 - Library builds as three crate types: `lib` (Rust tests), `cdylib` (Dart FFI testing), `staticlib` (engine linking).
 - Boot state machine docs: `docs/boot_state_machine.md`.
 - CI requires semantic PR titles (conventional commits style).
+
+## Landing PRs
+
+There is no review bot. A maintainer's `lgtm` (a PR comment, or Eric's LGTM in the app) is the review. The default-branch ruleset requires one approving GitHub review, which a maintainer can't give on their own PR. So once the PR is LGTM'd and CI is green, land it with the admin bypass: `gh pr merge <N> --admin --squash --match-head-commit <sha>`.
