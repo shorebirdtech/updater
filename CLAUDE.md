@@ -46,3 +46,13 @@ Design principle: "fail open" — always fall back to the currently installed ve
 - Library builds as three crate types: `lib` (Rust tests), `cdylib` (Dart FFI testing), `staticlib` (engine linking).
 - Boot state machine docs: `docs/boot_state_machine.md`.
 - CI requires semantic PR titles (conventional commits style).
+- Issues for this repo (the Rust updater, the C API and `shorebird_code_push`) live in `shorebirdtech/shorebird`, labels `updater` and `package_code_push`; this repo has issues disabled. Search and file there. PRs still come here.
+
+## FFI compatibility
+
+The Dart `shorebird_code_push` package and the Rust library ship independently: the Rust side is built into the Shorebird engine, while the Dart package is a pub dependency the app picks its own version of. Both skews happen (new Dart on an old engine, old Dart on a new engine), and nothing pins or negotiates versions between them yet. So every change crossing the FFI boundary must state its fallback for both:
+
+- New C symbols are looked up with a fallback when missing; new `UpdateResult` fields can't be assumed present.
+- `UpdateResult`'s layout is frozen. Status codes are append-only and never renumbered.
+- A new *error* code degrades safely (old Dart maps it to `unknown`). A new *success or benign* code doesn't: old Dart checks success against a fixed allowlist, so it reports the new code as a failure. Don't add more.
+- Keep failure categorization below the boundary: `FailureCategory` / `classify_failure` in `library/src/updater.rs` feed the server-bound diagnostic event, not new status codes. Exposing categories to Dart waits for a new structured-result C symbol rather than overloading the status `i32`.
