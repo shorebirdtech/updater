@@ -1,0 +1,14 @@
+{
+  "description": "auto_update: false in shorebird.yaml is reported by should_auto_update.",
+  "steps": [
+    {
+      "call": "init",
+      "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nauto_update: false\n",
+      "expect": true
+    },
+    {
+      "call": "should_auto_update",
+      "expect": false
+    }
+  ]
+}
