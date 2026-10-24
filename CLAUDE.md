@@ -46,3 +46,13 @@ Design principle: "fail open" — always fall back to the currently installed ve
 - Library builds as three crate types: `lib` (Rust tests), `cdylib` (Dart FFI testing), `staticlib` (engine linking).
 - Boot state machine docs: `docs/boot_state_machine.md`.
 - CI requires semantic PR titles (conventional commits style).
+- Issues for this repo (the Rust updater, the C API and `shorebird_code_push`) live in `shorebirdtech/shorebird`, labels `updater` and `package_code_push`; this repo has issues disabled. Search and file there. PRs still come here.
+
+## FFI compatibility
+
+The Dart `shorebird_code_push` package and the Rust library ship independently: the Rust side is built into the Shorebird engine, while the Dart package is a pub dependency the app picks its own version of. Both skews happen (new Dart on an old engine, old Dart on a new engine). Beyond the package's Flutter SDK floor in `shorebird_code_push/pubspec.yaml`, which only bounds the oldest engine, nothing pins or negotiates versions between them. So every change to the Dart-stable surface (`library/src/c_api/dart.rs`, which generates `include/updater_dart.h`) must state its fallback for both skews. The engine surface (`c_api/engine.rs`, `include/updater_engine.h`) ships with the engine and isn't bound by these rules.
+
+- New C symbols may be missing on an older engine. The ffigen bindings (`UpdaterBindings(DynamicLibrary.process())`) throw on first use of a missing symbol, so Dart must probe a new symbol before calling it (`DynamicLibrary.providesSymbol`, or a guarded lookup) and fall back when it's absent.
+- Existing structs, including `UpdateResult`, have a frozen layout. New data goes in a new struct returned by a new symbol, not in new fields.
+- Status codes are append-only and never renumbered. A new *error* code degrades safely (old Dart maps it to `unknown`). A new *success or benign* code doesn't: old Dart checks success against a fixed allowlist and reports the new code as a failure. `SHOREBIRD_UPDATE_IN_PROGRESS` (4) already does this on packages older than #335. Don't add more.
+- Failure categories stay below the boundary until a structured-result symbol exposes them; see the doc comments on `FailureCategory` (`library/src/updater.rs`) and `NetworkError` (`library/src/network.rs`).

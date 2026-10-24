@@ -3,7 +3,8 @@
 //! These symbols are consumed by `package:shorebird_code_push` via FFI. The
 //! header generated for this module (`include/updater_dart.h`) is the input
 //! to ffigen, so anything declared here is part of the package's public ABI.
-//! Do not break changes here without bumping the package version.
+//! Never break it: older packages run against newer engines and vice versa.
+//! See "FFI compatibility" in the repo's `CLAUDE.md`.
 //!
 //! cbindgen reads this file directly (see `build.rs`) and emits exactly the
 //! `pub extern "C"` items found here plus the types they reference. Adding
