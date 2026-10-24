@@ -637,7 +637,14 @@ fn relativize_paths(msg: &str, config: &UpdateConfig) -> String {
     if let Some(code_cache_dir) = config.download_dir.parent() {
         roots.push((code_cache_dir, "<code_cache>"));
     }
-    if let Some(app_dir) = config.libapp_path.parent() {
+    // On Android `libapp_path` is already the APK directory (see
+    // `libapp_path_from_settings`); elsewhere it is the libapp file.
+    let app_dir = if cfg!(target_os = "android") {
+        Some(config.libapp_path.as_path())
+    } else {
+        config.libapp_path.parent()
+    };
+    if let Some(app_dir) = app_dir {
         roots.push((app_dir, "<app>"));
     }
     // Longest first, so a directory nested in another is replaced whole.
@@ -645,15 +652,19 @@ fn relativize_paths(msg: &str, config: &UpdateConfig) -> String {
 
     let mut msg = msg.to_string();
     for (root, placeholder) in roots {
-        // A filesystem root (or an empty path) prefixes everything.
-        if root.parent().is_none() {
+        // A filesystem root prefixes everything, and a relative path (".")
+        // can match text that isn't a path at all.
+        if !root.is_absolute() || root.parent().is_none() {
             continue;
         }
         // Paths reach messages both through Display and through Debug, which
         // escapes (e.g. Windows backslashes become `\\`).
         let displayed = root.display().to_string();
         let debugged = format!("{:?}", root);
-        let debugged = debugged.trim_matches('"');
+        let debugged = debugged
+            .strip_prefix('"')
+            .and_then(|d| d.strip_suffix('"'))
+            .unwrap_or(&debugged);
         msg = msg.replace(&displayed, placeholder);
         if debugged != displayed {
             msg = msg.replace(debugged, placeholder);
@@ -2472,10 +2483,10 @@ patch_verification: bogus_mode
     #[test]
     fn truncate_error_message_cuts_on_char_boundary() {
         // 'é' is two bytes, so byte 253 falls inside a character.
-        let long = format!("x{}", "é".repeat(200));
+        let long = "é".repeat(200);
+        assert!(!long.is_char_boundary(253));
         let msg = super::truncate_error_message(&long);
-        assert!(msg.len() <= 256);
-        assert!(msg.ends_with("..."));
+        assert_eq!(msg, format!("{}...", "é".repeat(126)));
     }
 
     fn config_with_dirs(
@@ -2514,19 +2525,35 @@ patch_verification: bogus_mode
         assert!(!relative.contains("EF56-7890"));
     }
 
+    // Windows paths are only absolute on Windows, which CI runs.
+    #[cfg(windows)]
     #[serial]
     #[test]
-    fn relativize_paths_replaces_debug_escaped_paths() {
+    fn relativize_paths_replaces_windows_paths() {
         let config = config_with_dirs(
             r"C:\Users\jane.doe\AppData\Roaming\com.example",
             r"C:\Users\jane.doe\AppData\Local\com.example",
             r"C:\Program Files\Example\data\app.so",
         );
-        let msg = r#"failed to deserialize from "C:\\Users\\jane.doe\\AppData\\Roaming\\com.example\\state.json""#;
+        let msg = r#"failed to deserialize from "C:\\Users\\jane.doe\\AppData\\Roaming\\com.example\\state.json"; Failed to read file 'C:\Users\jane.doe\AppData\Local\com.example\downloads\1'; Failed to read file 'C:\Program Files\Example\data\app.so'"#;
         let relative = super::relativize_paths(msg, &config);
         assert_eq!(
             relative,
-            r#"failed to deserialize from "<storage>\\state.json""#
+            r#"failed to deserialize from "<storage>\\state.json"; Failed to read file '<code_cache>\downloads\1'; Failed to read file '<app>\app.so'"#
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[serial]
+    #[test]
+    fn relativize_paths_replaces_debug_escaped_paths() {
+        // Debug escapes a backslash, so the Debug form differs from Display.
+        let config = config_with_dirs(r"/home/jane\doe/storage", "/cache", "/app/libapp.so");
+        let msg = r#"failed to deserialize from "/home/jane\\doe/storage/state.json"; Failed to read file '/home/jane\doe/storage/patches/1'"#;
+        let relative = super::relativize_paths(msg, &config);
+        assert_eq!(
+            relative,
+            r#"failed to deserialize from "<storage>/state.json"; Failed to read file '<storage>/patches/1'"#
         );
     }
 
@@ -2535,6 +2562,14 @@ patch_verification: bogus_mode
     fn relativize_paths_skips_filesystem_root() {
         let config = config_with_dirs("/", "/", "/libapp.so");
         let msg = "Failed to read file '/patches/1': denied";
+        assert_eq!(super::relativize_paths(msg, &config), msg);
+    }
+
+    #[serial]
+    #[test]
+    fn relativize_paths_skips_relative_directories() {
+        let config = config_with_dirs(".", "cache", "./libapp.so");
+        let msg = "Failed to read file '/data/app.so': x.y";
         assert_eq!(super::relativize_paths(msg, &config), msg);
     }
 
