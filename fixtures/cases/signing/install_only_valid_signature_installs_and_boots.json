@@ -1,9 +1,9 @@
 {
-  "description": "A signed patch keeps its signature in Installed and passes strict validation at the next boot.",
+  "description": "patch_verification: install_only. An offer signed with the app's key downloads, installs with its signature recorded, and boots.",
   "base": {
     "file": "bipatch/text_edit/base.bin"
   },
-  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\n",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\npatch_verification: install_only\n",
   "files": {
     "storage/state.json": {
       "json": {
@@ -16,6 +16,38 @@
   "steps": [
     {
       "call": "init",
+      "expect": true
+    },
+    {
+      "call": "check_for_downloadable_update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin",
+                "hash_signature": "er2Cx8D0WyNo+yF96djLnLB6gopN9Xb24fUCRFgnpQkb4lxUqs/YBglcSf8JLbeb9Gp/OCnmNy47RPvO1KDNc/x27WsP0MB2co1ilA9/zQcMl+kM84Yi9XQG/2VvcEHSzZTmpjCx+8FTz5Xgs8E/QpRTvR3bIUrqcQKHcPpLi3mMfBLtAhzetm6BemwdvXCzQRv0XR4/Oe8hY2v8GUUlr8/JO7Yd06PnBGAKEliH8w8Qvq3ApNl18Q8E+OgD3W/nFPOibGNVfcX0AQk1qNHlYZmuNuFTPOL6GrB+bFsJDyBHCp1mwpb+p6sRNYBT1ypi2wG3UT4cV5+pwnGEzKwCtQ=="
+              }
+            }
+          }
+        }
+      ],
       "expect": true
     },
     {
@@ -97,6 +129,19 @@
             "signature": "er2Cx8D0WyNo+yF96djLnLB6gopN9Xb24fUCRFgnpQkb4lxUqs/YBglcSf8JLbeb9Gp/OCnmNy47RPvO1KDNc/x27WsP0MB2co1ilA9/zQcMl+kM84Yi9XQG/2VvcEHSzZTmpjCx+8FTz5Xgs8E/QpRTvR3bIUrqcQKHcPpLi3mMfBLtAhzetm6BemwdvXCzQRv0XR4/Oe8hY2v8GUUlr8/JO7Yd06PnBGAKEliH8w8Qvq3ApNl18Q8E+OgD3W/nFPOibGNVfcX0AQk1qNHlYZmuNuFTPOL6GrB+bFsJDyBHCp1mwpb+p6sRNYBT1ypi2wG3UT4cV5+pwnGEzKwCtQ==",
             "size": 10695
           }
+        },
+        "storage/patches/1/dlc.vmcode": {
+          "same_as": {
+            "file": "bipatch/text_edit/new.bin"
+          }
+        },
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
         }
       }
     },
@@ -112,6 +157,13 @@
     },
     {
       "call": "next_boot_patch_number",
+      "expect": 1
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "current_boot_patch_number",
       "expect": 1
     }
   ]
