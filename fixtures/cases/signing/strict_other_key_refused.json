@@ -1,0 +1,252 @@
+{
+  "description": "patch_verification: strict. An offer signed with a key other than the app's is refused before download: update fails, nothing is fetched or installed, the refused (hash, signature) pair is tombstoned InvalidSignature, and one invalid_signature failure is reported. The next boot runs the base release, and the same offer again is skipped (UpdateIsBadPatch) without a new failure.",
+  "base": {
+    "file": "bipatch/text_edit/base.bin"
+  },
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\npatch_verification: strict\n",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "check_for_downloadable_update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin",
+                "hash_signature": "ywB7vPH2uK9rUWrJQGgYn+eQU01gvWRWKY0jrZd+ZewmoYmrddOR9IQWsCYwmI1cXf8nqsIlgcSuE+ED354/d1fxXe57czNuwDvxE1HdyRoqcmGIhZzn/IYauMMzlZ6g8hMRxLmTy3jYKNTGl6C5DqeqidoAkro8xXYxFHIATyMb5BwdfM69msdi8TO0owuWirlihr8MekVKJHHJOwOhq05PwJvj1RUeX1XD69O+KIgU4sbz9m8FtJILWq8mjDo+uPisQDEzPvi1W9kHj/qivRM/2xe2KAXJ7n1n8hOWmp47+nd3cJWDnGjY9SZVe0dfxZsEjyYkZMWXSCe0OjJShw=="
+              }
+            }
+          }
+        }
+      ],
+      "expect": true
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin",
+                "hash_signature": "ywB7vPH2uK9rUWrJQGgYn+eQU01gvWRWKY0jrZd+ZewmoYmrddOR9IQWsCYwmI1cXf8nqsIlgcSuE+ED354/d1fxXe57czNuwDvxE1HdyRoqcmGIhZzn/IYauMMzlZ6g8hMRxLmTy3jYKNTGl6C5DqeqidoAkro8xXYxFHIATyMb5BwdfM69msdi8TO0owuWirlihr8MekVKJHHJOwOhq05PwJvj1RUeX1XD69O+KIgU4sbz9m8FtJILWq8mjDo+uPisQDEzPvi1W9kHj/qivRM/2xe2KAXJ7n1n8hOWmp47+nd3cJWDnGjY9SZVe0dfxZsEjyYkZMWXSCe0OjJShw=="
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": -1,
+        "message": "<any>"
+      },
+      "expect_files": {
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Bad",
+            "reason": "InvalidSignature",
+            "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+            "signature": "ywB7vPH2uK9rUWrJQGgYn+eQU01gvWRWKY0jrZd+ZewmoYmrddOR9IQWsCYwmI1cXf8nqsIlgcSuE+ED354/d1fxXe57czNuwDvxE1HdyRoqcmGIhZzn/IYauMMzlZ6g8hMRxLmTy3jYKNTGl6C5DqeqidoAkro8xXYxFHIATyMb5BwdfM69msdi8TO0owuWirlihr8MekVKJHHJOwOhq05PwJvj1RUeX1XD69O+KIgU4sbz9m8FtJILWq8mjDo+uPisQDEzPvi1W9kHj/qivRM/2xe2KAXJ7n1n8hOWmp47+nd3cJWDnGjY9SZVe0dfxZsEjyYkZMWXSCe0OjJShw==",
+            "size": null
+          }
+        },
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": [
+              {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_update_failure__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": "<prefix:update_failure: patch 1 failed (>",
+                "failure_category": "invalid_signature"
+              }
+            ]
+          }
+        }
+      },
+      "expect_tree": [
+        "app/libapp.so",
+        "storage/patches/1/state.json",
+        "storage/state.json"
+      ]
+    },
+    {
+      "call": "restart"
+    },
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": null
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_update_failure__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": "<prefix:update_failure: patch 1 failed (>",
+                "failure_category": "invalid_signature"
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin",
+                "hash_signature": "ywB7vPH2uK9rUWrJQGgYn+eQU01gvWRWKY0jrZd+ZewmoYmrddOR9IQWsCYwmI1cXf8nqsIlgcSuE+ED354/d1fxXe57czNuwDvxE1HdyRoqcmGIhZzn/IYauMMzlZ6g8hMRxLmTy3jYKNTGl6C5DqeqidoAkro8xXYxFHIATyMb5BwdfM69msdi8TO0owuWirlihr8MekVKJHHJOwOhq05PwJvj1RUeX1XD69O+KIgU4sbz9m8FtJILWq8mjDo+uPisQDEzPvi1W9kHj/qivRM/2xe2KAXJ7n1n8hOWmp47+nd3cJWDnGjY9SZVe0dfxZsEjyYkZMWXSCe0OjJShw=="
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": 3,
+        "message": "Update available but previously failed to install. Not installing."
+      },
+      "expect_files": {
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Bad",
+            "reason": "InvalidSignature",
+            "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+            "signature": "ywB7vPH2uK9rUWrJQGgYn+eQU01gvWRWKY0jrZd+ZewmoYmrddOR9IQWsCYwmI1cXf8nqsIlgcSuE+ED354/d1fxXe57czNuwDvxE1HdyRoqcmGIhZzn/IYauMMzlZ6g8hMRxLmTy3jYKNTGl6C5DqeqidoAkro8xXYxFHIATyMb5BwdfM69msdi8TO0owuWirlihr8MekVKJHHJOwOhq05PwJvj1RUeX1XD69O+KIgU4sbz9m8FtJILWq8mjDo+uPisQDEzPvi1W9kHj/qivRM/2xe2KAXJ7n1n8hOWmp47+nd3cJWDnGjY9SZVe0dfxZsEjyYkZMWXSCe0OjJShw==",
+            "size": null
+          }
+        },
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": []
+          }
+        }
+      }
+    },
+    {
+      "call": "check_for_downloadable_update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin",
+                "hash_signature": "ywB7vPH2uK9rUWrJQGgYn+eQU01gvWRWKY0jrZd+ZewmoYmrddOR9IQWsCYwmI1cXf8nqsIlgcSuE+ED354/d1fxXe57czNuwDvxE1HdyRoqcmGIhZzn/IYauMMzlZ6g8hMRxLmTy3jYKNTGl6C5DqeqidoAkro8xXYxFHIATyMb5BwdfM69msdi8TO0owuWirlihr8MekVKJHHJOwOhq05PwJvj1RUeX1XD69O+KIgU4sbz9m8FtJILWq8mjDo+uPisQDEzPvi1W9kHj/qivRM/2xe2KAXJ7n1n8hOWmp47+nd3cJWDnGjY9SZVe0dfxZsEjyYkZMWXSCe0OjJShw=="
+              }
+            }
+          }
+        }
+      ],
+      "expect": false
+    }
+  ]
+}
