@@ -2503,6 +2503,8 @@ patch_verification: bogus_mode
         config
     }
 
+    // Unix paths are only absolute off Windows.
+    #[cfg(not(windows))]
     #[serial]
     #[test]
     fn relativize_paths_replaces_updater_directories() {
