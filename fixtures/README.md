@@ -287,7 +287,5 @@ edits the case:
 - `state_load/state_json_missing_field_resets`: a `state.json` that fails to
   parse for any reason resets, including its `client_id`.
 
-Not covered: refusing an offer at install time when its signature is missing
-or made with another key (the updater does not refuse it there today);
-Android's split-APK base lookup (the runner uses the desktop path); concurrent
+Not covered: Android's split-APK base lookup (the runner uses the desktop path); concurrent
 `update` calls (`UpdateInProgress`).
