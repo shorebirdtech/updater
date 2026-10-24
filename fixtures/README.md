@@ -20,7 +20,9 @@ fixtures/
 Groups: `state_load` (reading and migrating on-disk state at init),
 `boot` (launch start/success/failure, crash recovery, boot-time validation),
 `patch_check` (requests, responses, errors, rollbacks, event queue),
-`update` (download, resume, inflate, install, failures).
+`update` (download, resume, inflate, install, failures),
+`signing` (`patch_public_key` and `patch_verification`, from check through
+the next boot).
 
 Run one subset: `FIXTURE_FILTER=boot/ cargo test --test fixture_corpus`.
 
@@ -265,6 +267,9 @@ sign fixtures; they protect nothing. The public key is the base64 DER
 printf '%s' "$HASH" | openssl dgst -sha256 -sign keys/fixture_private_key.pem | base64
 ```
 
+Cases that need a signature from another key use one made the same way with
+a throwaway key (`openssl genrsa 2048`) that was then discarded.
+
 ## Changing the corpus
 
 These files are the contract the C++ port is held to, so a change here is a
@@ -282,7 +287,7 @@ edits the case:
 - `state_load/state_json_missing_field_resets`: a `state.json` that fails to
   parse for any reason resets, including its `client_id`.
 
-Not covered: install-time signature checks under
-`patch_verification: install_only` (the updater does not make them today);
+Not covered: refusing an offer at install time when its signature is missing
+or made with another key (the updater does not refuse it there today);
 Android's split-APK base lookup (the runner uses the desktop path); concurrent
 `update` calls (`UpdateInProgress`).
