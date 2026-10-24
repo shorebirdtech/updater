@@ -50,9 +50,9 @@ Design principle: "fail open" — always fall back to the currently installed ve
 
 ## FFI compatibility
 
-The Dart `shorebird_code_push` package and the Rust library ship independently: the Rust side is built into the Shorebird engine, while the Dart package is a pub dependency the app picks its own version of. Both skews happen (new Dart on an old engine, old Dart on a new engine), and nothing pins or negotiates versions between them yet. So every change crossing the FFI boundary must state its fallback for both:
+The Dart `shorebird_code_push` package and the Rust library ship independently: the Rust side is built into the Shorebird engine, while the Dart package is a pub dependency the app picks its own version of. Both skews happen (new Dart on an old engine, old Dart on a new engine). Beyond the package's Flutter SDK floor in `shorebird_code_push/pubspec.yaml`, which only bounds the oldest engine, nothing pins or negotiates versions between them. So every change to the Dart-stable surface (`library/src/c_api/dart.rs`, which generates `include/updater_dart.h`) must state its fallback for both skews. The engine surface (`c_api/engine.rs`, `include/updater_engine.h`) ships with the engine and isn't bound by these rules.
 
-- New C symbols are looked up with a fallback when missing; new `UpdateResult` fields can't be assumed present.
-- `UpdateResult`'s layout is frozen. Status codes are append-only and never renumbered.
-- A new *error* code degrades safely (old Dart maps it to `unknown`). A new *success or benign* code doesn't: old Dart checks success against a fixed allowlist, so it reports the new code as a failure. Don't add more.
-- Keep failure categorization below the boundary: `FailureCategory` / `classify_failure` in `library/src/updater.rs` feed the server-bound diagnostic event, not new status codes. Exposing categories to Dart waits for a new structured-result C symbol rather than overloading the status `i32`.
+- New C symbols may be missing on an older engine. The ffigen bindings (`UpdaterBindings(DynamicLibrary.process())`) throw on first use of a missing symbol, so Dart must probe a new symbol before calling it (`DynamicLibrary.providesSymbol`, or a guarded lookup) and fall back when it's absent.
+- Existing structs, including `UpdateResult`, have a frozen layout. New data goes in a new struct returned by a new symbol, not in new fields.
+- Status codes are append-only and never renumbered. A new *error* code degrades safely (old Dart maps it to `unknown`). A new *success or benign* code doesn't: old Dart checks success against a fixed allowlist and reports the new code as a failure. `SHOREBIRD_UPDATE_IN_PROGRESS` (4) already does this on packages older than #335. Don't add more.
+- Failure categories stay below the boundary until a structured-result symbol exposes them; see the doc comments on `FailureCategory` (`library/src/updater.rs`) and `NetworkError` (`library/src/network.rs`).
