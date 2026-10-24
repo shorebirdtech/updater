@@ -600,7 +600,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         let message = format!(
             "update_failure: patch {} failed ({})",
             patch_number,
-            truncate_error_message(err)
+            event_error_message(err, &config)
         );
         let queue_result = with_mut_state(|state| {
             let mut event = PatchEvent::new(
@@ -621,15 +621,60 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     result
 }
 
+/// Formats an error for an event's message: paths under the updater's own
+/// directories are made relative to them, then the result is truncated.
+fn event_error_message(err: &anyhow::Error, config: &UpdateConfig) -> String {
+    truncate_error_message(&relativize_paths(&format!("{:#}", err), config))
+}
+
+/// Replaces the absolute directories the updater works in with placeholders,
+/// so `/var/mobile/Containers/Data/Application/<uuid>/Library/.../patches/1`
+/// is reported as `<storage>/patches/1`. Those prefixes carry the Windows
+/// user name and the iOS container id, which are identifying and say nothing
+/// about why the update failed.
+fn relativize_paths(msg: &str, config: &UpdateConfig) -> String {
+    let mut roots: Vec<(&Path, &str)> = vec![(config.storage_dir.as_path(), "<storage>")];
+    if let Some(code_cache_dir) = config.download_dir.parent() {
+        roots.push((code_cache_dir, "<code_cache>"));
+    }
+    if let Some(app_dir) = config.libapp_path.parent() {
+        roots.push((app_dir, "<app>"));
+    }
+    // Longest first, so a directory nested in another is replaced whole.
+    roots.sort_by_key(|(root, _)| std::cmp::Reverse(root.as_os_str().len()));
+
+    let mut msg = msg.to_string();
+    for (root, placeholder) in roots {
+        // A filesystem root (or an empty path) prefixes everything.
+        if root.parent().is_none() {
+            continue;
+        }
+        // Paths reach messages both through Display and through Debug, which
+        // escapes (e.g. Windows backslashes become `\\`).
+        let displayed = root.display().to_string();
+        let debugged = format!("{:?}", root);
+        let debugged = debugged.trim_matches('"');
+        msg = msg.replace(&displayed, placeholder);
+        if debugged != displayed {
+            msg = msg.replace(debugged, placeholder);
+        }
+    }
+    msg
+}
+
 /// Truncates an error message to a reasonable length for the event payload.
 /// Avoids sending excessively long messages while preserving the root cause.
-fn truncate_error_message(err: &anyhow::Error) -> String {
-    let msg = format!("{:#}", err);
-    if msg.len() > 256 {
-        format!("{}...", &msg[..253])
-    } else {
-        msg
+fn truncate_error_message(msg: &str) -> String {
+    const MAX_LEN: usize = 256;
+    if msg.len() <= MAX_LEN {
+        return msg.to_string();
     }
+    // Cut on a char boundary: slicing inside a multi-byte character panics.
+    let mut end = MAX_LEN - 3;
+    while !msg.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &msg[..end])
 }
 
 fn download_and_install_patch(
@@ -2412,18 +2457,85 @@ patch_verification: bogus_mode
 
     #[test]
     fn truncate_error_message_short() {
-        let err = anyhow::anyhow!("short error");
-        let msg = super::truncate_error_message(&err);
+        let msg = super::truncate_error_message("short error");
         assert_eq!(msg, "short error");
     }
 
     #[test]
     fn truncate_error_message_long() {
         let long = "x".repeat(300);
-        let err = anyhow::anyhow!("{}", long);
-        let msg = super::truncate_error_message(&err);
+        let msg = super::truncate_error_message(&long);
         assert_eq!(msg.len(), 256);
         assert!(msg.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_error_message_cuts_on_char_boundary() {
+        // 'é' is two bytes, so byte 253 falls inside a character.
+        let long = format!("x{}", "é".repeat(200));
+        let msg = super::truncate_error_message(&long);
+        assert!(msg.len() <= 256);
+        assert!(msg.ends_with("..."));
+    }
+
+    fn config_with_dirs(
+        storage: &str,
+        code_cache: &str,
+        libapp: &str,
+    ) -> crate::config::UpdateConfig {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        let mut config = with_config(|config| Ok(config.clone())).unwrap();
+        config.storage_dir = std::path::PathBuf::from(storage);
+        config.download_dir = std::path::PathBuf::from(code_cache).join("downloads");
+        config.libapp_path = std::path::PathBuf::from(libapp);
+        config
+    }
+
+    #[serial]
+    #[test]
+    fn relativize_paths_replaces_updater_directories() {
+        let config = config_with_dirs(
+            "/var/mobile/Containers/Data/Application/ABCD-1234/Library/Application Support/shorebird",
+            "/var/mobile/Containers/Data/Application/ABCD-1234/Library/Caches",
+            "/private/var/containers/Bundle/Application/EF56-7890/Runner.app/Frameworks/App.framework/App",
+        );
+        let msg = "Failed to read file '/var/mobile/Containers/Data/Application/ABCD-1234/Library/Application Support/shorebird/patches/1/dlc.vmcode': denied; \
+            Failed to write to file '/var/mobile/Containers/Data/Application/ABCD-1234/Library/Caches/downloads/1': full; \
+            Path: \"/private/var/containers/Bundle/Application/EF56-7890/Runner.app/Frameworks/App.framework/App\"";
+        let relative = super::relativize_paths(msg, &config);
+        assert_eq!(
+            relative,
+            "Failed to read file '<storage>/patches/1/dlc.vmcode': denied; \
+            Failed to write to file '<code_cache>/downloads/1': full; \
+            Path: \"<app>/App\""
+        );
+        assert!(!relative.contains("ABCD-1234"));
+        assert!(!relative.contains("EF56-7890"));
+    }
+
+    #[serial]
+    #[test]
+    fn relativize_paths_replaces_debug_escaped_paths() {
+        let config = config_with_dirs(
+            r"C:\Users\jane.doe\AppData\Roaming\com.example",
+            r"C:\Users\jane.doe\AppData\Local\com.example",
+            r"C:\Program Files\Example\data\app.so",
+        );
+        let msg = r#"failed to deserialize from "C:\\Users\\jane.doe\\AppData\\Roaming\\com.example\\state.json""#;
+        let relative = super::relativize_paths(msg, &config);
+        assert_eq!(
+            relative,
+            r#"failed to deserialize from "<storage>\\state.json""#
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn relativize_paths_skips_filesystem_root() {
+        let config = config_with_dirs("/", "/", "/libapp.so");
+        let msg = "Failed to read file '/patches/1': denied";
+        assert_eq!(super::relativize_paths(msg, &config), msg);
     }
 
     #[serial]
