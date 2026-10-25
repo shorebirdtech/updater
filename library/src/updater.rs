@@ -2808,6 +2808,37 @@ patch_verification: bogus_mode
 
     #[serial]
     #[test]
+    fn boot_validation_categorizes_other_failures_apart_from_signatures() -> anyhow::Result<()> {
+        // A valid patch boots without an event; a truncated one is dropped
+        // and reported, but not as a signature refusal.
+        let tmp_dir = TempDir::new().unwrap();
+        init_offering_signature(
+            &tmp_dir,
+            &signing_yaml("strict"),
+            Some(HELLO_TESTS_SIGNATURE),
+        );
+        assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
+        super::with_mut_state(|state| state.clear_events())?;
+        super::validate_next_boot_patch()?;
+        super::with_state(|state| {
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })?;
+
+        let artifact = tmp_dir.path().join("patches/1/dlc.vmcode");
+        let bytes = std::fs::read(&artifact)?;
+        std::fs::write(&artifact, &bytes[..bytes.len() - 1])?;
+        assert!(super::validate_next_boot_patch().is_err());
+        super::with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(events[0].failure_category.as_deref(), Some("unknown"));
+            Ok(())
+        })
+    }
+
+    #[serial]
+    #[test]
     fn refused_signature_does_not_block_a_genuine_patch() -> anyhow::Result<()> {
         // Only the refused (hash, signature) pair is tombstoned: the genuine
         // patch 1 offered afterwards installs.
