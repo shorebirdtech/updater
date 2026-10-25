@@ -3,7 +3,7 @@ pub mod lifecycle;
 mod signing;
 pub mod updater_state;
 
-pub use signing::hash_file;
+pub use signing::{check_patch_signature, hash_file};
 pub use updater_state::UpdaterState;
 
 /// The public interface for talking about patches to the Cache.

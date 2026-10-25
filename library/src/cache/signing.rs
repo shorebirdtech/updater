@@ -22,6 +22,21 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
     Ok(hex::encode(hash))
 }
 
+/// Verifies `signature` over a patch's `hash` against `public_key`, the
+/// app's configured `patch_public_key`. With no `public_key`, signing is off
+/// and this always succeeds; with one, a missing signature is an error.
+pub fn check_patch_signature(
+    hash: &str,
+    signature: Option<&str>,
+    public_key: Option<&str>,
+) -> Result<()> {
+    let Some(public_key) = public_key else {
+        return Ok(());
+    };
+    let signature = signature.context("Patch signature is missing")?;
+    check_signature(hash, signature, public_key)
+}
+
 /// `public_key` is a DER base64-encoded RSA public key.
 ///
 /// Given a public_key.pem file, this can be generated with the following command:
@@ -83,6 +98,27 @@ mod tests {
 
     use anyhow::Result;
     use tempfile::TempDir;
+
+    #[test]
+    fn check_patch_signature_skips_when_signing_is_off() {
+        // No public key: any signature, or none, is accepted.
+        assert!(super::check_patch_signature(MESSAGE, Some("garbage"), None).is_ok());
+        assert!(super::check_patch_signature(MESSAGE, None, None).is_ok());
+    }
+
+    #[test]
+    fn check_patch_signature_verifies_when_signing_is_on() {
+        assert!(super::check_patch_signature(MESSAGE, Some(SIGNATURE), Some(PUBLIC_KEY)).is_ok());
+        let missing = super::check_patch_signature(MESSAGE, None, Some(PUBLIC_KEY));
+        assert_eq!(
+            missing.unwrap_err().to_string(),
+            "Patch signature is missing"
+        );
+        let other_hash = "0".repeat(64);
+        assert!(
+            super::check_patch_signature(&other_hash, Some(SIGNATURE), Some(PUBLIC_KEY)).is_err()
+        );
+    }
 
     #[test]
     fn errs_if_file_does_not_exist() {
