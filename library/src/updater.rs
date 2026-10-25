@@ -877,14 +877,21 @@ fn install_downloaded_patch(
             patch.number
         );
 
-        let event = PatchEvent::new(
-            config,
-            EventType::PatchDownload,
-            patch.number,
-            state.client_id(),
-            None,
-        );
-        report_patch_event_in_background(event, config.clone(), "patch download");
+        let client_id = state.client_id();
+        let config_clone = config.clone();
+        let patch_number = patch.number;
+        std::thread::spawn(move || {
+            let event = PatchEvent::new(
+                &config_clone,
+                EventType::PatchDownload,
+                patch_number,
+                client_id,
+                None,
+            );
+            if let Err(err) = crate::network::send_patch_event(event, &config_clone) {
+                shorebird_error!("Failed to report patch download: {:?}", err);
+            }
+        });
 
         Ok(UpdateStatus::UpdateInstalled)
     })
@@ -1466,58 +1473,24 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             }
         }
 
-        let event = PatchEvent::new(
-            config,
-            EventType::PatchInstallSuccess,
-            booting_patch.number,
-            state.client_id(),
-            None,
-        );
-        report_patch_event_in_background(event, config.clone(), "successful patch install");
+        let config_copy = config.clone();
+        let client_id = state.client_id();
+        std::thread::spawn(move || {
+            let event = PatchEvent::new(
+                &config_copy,
+                EventType::PatchInstallSuccess,
+                booting_patch.number,
+                client_id,
+                None,
+            );
+            let report_result = crate::network::send_patch_event(event, &config_copy);
+            if let Err(err) = report_result {
+                shorebird_error!("Failed to report successful patch install: {:?}", err);
+            }
+        });
 
         Ok(())
     })
-}
-
-/// Sends `event` on a detached thread, so a slow or unreachable server never
-/// holds up the update or the boot that produced it. `what` names the event in
-/// the error log if sending fails.
-fn report_patch_event_in_background(event: PatchEvent, config: UpdateConfig, what: &'static str) {
-    let handle = std::thread::spawn(move || {
-        if let Err(err) = crate::network::send_patch_event(event, &config) {
-            shorebird_error!("Failed to report {}: {:?}", what, err);
-        }
-    });
-    #[cfg(test)]
-    PENDING_EVENT_REPORTS.lock().unwrap().push(handle);
-    #[cfg(not(test))]
-    drop(handle);
-}
-
-/// Reports started by [`report_patch_event_in_background`] that a test hasn't
-/// waited for yet.
-#[cfg(test)]
-static PENDING_EVENT_REPORTS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> =
-    std::sync::Mutex::new(Vec::new());
-
-/// Blocks until every event report started since the last config reset has
-/// been sent (or failed). Panics if a report thread panicked.
-#[cfg(test)]
-pub(crate) fn wait_for_event_reports() {
-    let handles = std::mem::take(&mut *PENDING_EVENT_REPORTS.lock().unwrap());
-    for handle in handles {
-        handle.join().unwrap();
-    }
-}
-
-/// Lets reports left behind by an earlier test finish, so they can't reach the
-/// next test's mock server, without failing the next test if one panicked.
-#[cfg(test)]
-pub(crate) fn finish_earlier_event_reports() {
-    let handles = std::mem::take(&mut *PENDING_EVENT_REPORTS.lock().unwrap());
-    for handle in handles {
-        let _ = handle.join();
-    }
 }
 
 /// This does not return status.  The only output is the change to the saved
@@ -1540,15 +1513,19 @@ pub fn start_update_thread() {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
-    use std::fs;
     use std::path::Path;
+    use std::sync::{mpsc, Mutex};
+    use std::{fs, time::Duration};
     use tempfile::TempDir;
 
     use crate::{
         cache::UpdaterState,
         config::{testing_reset_config, with_config},
         events::EventType,
-        network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
+        network::{
+            report_event_default, testing_set_network_hooks, CreatePatchEventRequest, NetworkHooks,
+            PatchCheckResponse,
+        },
         test_utils::{install_fake_patch, write_fake_apk},
         time, with_state, ExternalFileProvider, Patch,
     };
@@ -1559,6 +1536,32 @@ mod tests {
         fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))
         }
+    }
+
+    /// The channel [`report_and_signal`] signals. A static because network
+    /// hooks are `fn` pointers, which can't capture one.
+    static EVENT_REPORTED: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+
+    fn report_and_signal(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
+        let result = report_event_default(url, request);
+        if let Some(sender) = EVENT_REPORTED.lock().unwrap().as_ref() {
+            let _ = sender.send(());
+        }
+        result
+    }
+
+    /// Keeps the default network hooks, but signals the returned receiver
+    /// each time an event report finishes, whether it was sent or failed.
+    fn report_events_to_channel() -> mpsc::Receiver<()> {
+        let (sender, receiver) = mpsc::channel();
+        *EVENT_REPORTED.lock().unwrap() = Some(sender);
+        let defaults = NetworkHooks::default();
+        testing_set_network_hooks(
+            defaults.patch_check_request_fn,
+            defaults.download_to_path_fn,
+            report_and_signal,
+        );
+        receiver
     }
 
     pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
@@ -1908,6 +1911,7 @@ patch_verification: bogus_mode
             .create();
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
+        let event_reported = report_events_to_channel();
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
@@ -1918,7 +1922,9 @@ patch_verification: bogus_mode
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
         // The download event is reported on a background thread.
-        super::wait_for_event_reports();
+        event_reported
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the patch download event was never reported");
 
         // Assert that the patch download event was sent.
         event_mock.expect(1).assert();
@@ -1966,6 +1972,7 @@ patch_verification: bogus_mode
             .create();
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
+        let event_reported = report_events_to_channel();
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
@@ -1976,7 +1983,9 @@ patch_verification: bogus_mode
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
         // The download event is reported on a background thread.
-        super::wait_for_event_reports();
+        event_reported
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the patch download event was never reported");
 
         // Assert that the patch download event was sent.
         event_mock.expect(1).assert();

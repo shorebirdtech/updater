@@ -65,8 +65,6 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
-    #[cfg(test)]
-    crate::updater::finish_earlier_event_reports();
 }
 
 pub fn check_initialized_and_call<F, R>(
