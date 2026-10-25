@@ -1514,14 +1514,18 @@ pub fn start_update_thread() {
 mod tests {
     use serial_test::serial;
     use std::path::Path;
-    use std::{fs, thread, time::Duration};
+    use std::sync::{mpsc, Mutex};
+    use std::{fs, time::Duration};
     use tempfile::TempDir;
 
     use crate::{
         cache::UpdaterState,
         config::{testing_reset_config, with_config},
         events::EventType,
-        network::{testing_set_network_hooks, NetworkHooks, PatchCheckResponse},
+        network::{
+            report_event_default, testing_set_network_hooks, CreatePatchEventRequest, NetworkHooks,
+            PatchCheckResponse,
+        },
         test_utils::{install_fake_patch, write_fake_apk},
         time, with_state, ExternalFileProvider, Patch,
     };
@@ -1532,6 +1536,32 @@ mod tests {
         fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))
         }
+    }
+
+    /// The channel [`report_and_signal`] signals. A static because network
+    /// hooks are `fn` pointers, which can't capture one.
+    static EVENT_REPORTED: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+
+    fn report_and_signal(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
+        let result = report_event_default(url, request);
+        if let Some(sender) = EVENT_REPORTED.lock().unwrap().as_ref() {
+            let _ = sender.send(());
+        }
+        result
+    }
+
+    /// Keeps the default network hooks, but signals the returned receiver
+    /// each time an event report finishes, whether it was sent or failed.
+    fn report_events_to_channel() -> mpsc::Receiver<()> {
+        let (sender, receiver) = mpsc::channel();
+        *EVENT_REPORTED.lock().unwrap() = Some(sender);
+        let defaults = NetworkHooks::default();
+        testing_set_network_hooks(
+            defaults.patch_check_request_fn,
+            defaults.download_to_path_fn,
+            report_and_signal,
+        );
+        receiver
     }
 
     pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
@@ -1881,6 +1911,7 @@ patch_verification: bogus_mode
             .create();
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
+        let event_reported = report_events_to_channel();
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
@@ -1890,12 +1921,10 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // This is gross.
-        // Because we spawn a thread to report the patch download event, we need to give it time
-        // to run before we can assert that the event was sent. The more correct way to do this
-        // would be to obtain the join handle from the thread and wait for it to finish, but that
-        // would require a change to the API of the `update` function, which seems worse.
-        thread::sleep(Duration::from_millis(10));
+        // The download event is reported on a background thread.
+        event_reported
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the patch download event was never reported");
 
         // Assert that the patch download event was sent.
         event_mock.expect(1).assert();
@@ -1943,6 +1972,7 @@ patch_verification: bogus_mode
             .create();
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
+        let event_reported = report_events_to_channel();
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
@@ -1952,12 +1982,10 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // This is gross.
-        // Because we spawn a thread to report the patch download event, we need to give it time
-        // to run before we can assert that the event was sent. The more correct way to do this
-        // would be to obtain the join handle from the thread and wait for it to finish, but that
-        // would require a change to the API of the `update` function, which seems worse.
-        thread::sleep(Duration::from_millis(10));
+        // The download event is reported on a background thread.
+        event_reported
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the patch download event was never reported");
 
         // Assert that the patch download event was sent.
         event_mock.expect(1).assert();
