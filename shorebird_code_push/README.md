@@ -9,7 +9,7 @@
 [![codecov](https://codecov.io/gh/shorebirdtech/updater/branch/main/graph/badge.svg)](https://codecov.io/gh/shorebirdtech/updater)
 [![License: MIT][license_badge]][license_link]
 
-<p align=center> Instantly push updates directly to users of your Flutter app. </p>
+<p align=center> Push updates directly to users of your Flutter app. </p>
 
 [Website](https://shorebird.dev?utm_source=pubdev) • [Docs](https://docs.shorebird.dev?utm_source=pubdev) • [X](https://x.com/shorebirddev)• [YouTube](https://www.youtube.com/@shorebird) 
  </div>
@@ -26,7 +26,7 @@ Explore this [interactive demo](https://docs.shorebird.dev/code-push/?utm_source
 ## Getting Started
 
 If your Flutter app does not already use Shorebird, follow our
-[Getting Started Guide]([https://docs.shorebird.dev/getting-started/?utm_source=pubdev]) to add code push to your
+[Getting Started Guide](https://docs.shorebird.dev/getting-started/?utm_source=pubdev) to add code push to your
 app.
 
 ## Installation
