@@ -9,7 +9,7 @@
 [![codecov](https://codecov.io/gh/shorebirdtech/updater/branch/main/graph/badge.svg)](https://codecov.io/gh/shorebirdtech/updater)
 [![License: MIT][license_badge]][license_link]
 
-<p align=center> Instantly push updates to your Flutter app without lengthy app store review cycles. </p>
+<p align=center> Instantly push updates directly to users of your Flutter app. </p>
 
 [Website](https://shorebird.dev?utm_source=pubdev) • [Docs](https://docs.shorebird.dev?utm_source=pubdev) • [X](https://x.com/shorebirddev)• [YouTube](https://www.youtube.com/@shorebird) 
  </div>
