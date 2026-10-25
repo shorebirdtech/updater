@@ -860,21 +860,14 @@ fn install_downloaded_patch(
             patch.number
         );
 
-        let client_id = state.client_id();
-        let config_clone = config.clone();
-        let patch_number = patch.number;
-        std::thread::spawn(move || {
-            let event = PatchEvent::new(
-                &config_clone,
-                EventType::PatchDownload,
-                patch_number,
-                client_id,
-                None,
-            );
-            if let Err(err) = crate::network::send_patch_event(event, &config_clone) {
-                shorebird_error!("Failed to report patch download: {:?}", err);
-            }
-        });
+        let event = PatchEvent::new(
+            config,
+            EventType::PatchDownload,
+            patch.number,
+            state.client_id(),
+            None,
+        );
+        report_patch_event_in_background(event, config.clone(), "patch download");
 
         Ok(UpdateStatus::UpdateInstalled)
     })
@@ -1428,24 +1421,47 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             }
         }
 
-        let config_copy = config.clone();
-        let client_id = state.client_id();
-        std::thread::spawn(move || {
-            let event = PatchEvent::new(
-                &config_copy,
-                EventType::PatchInstallSuccess,
-                booting_patch.number,
-                client_id,
-                None,
-            );
-            let report_result = crate::network::send_patch_event(event, &config_copy);
-            if let Err(err) = report_result {
-                shorebird_error!("Failed to report successful patch install: {:?}", err);
-            }
-        });
+        let event = PatchEvent::new(
+            config,
+            EventType::PatchInstallSuccess,
+            booting_patch.number,
+            state.client_id(),
+            None,
+        );
+        report_patch_event_in_background(event, config.clone(), "successful patch install");
 
         Ok(())
     })
+}
+
+/// Sends `event` on a detached thread, so a slow or unreachable server never
+/// holds up the update or the boot that produced it. `what` names the event in
+/// the error log if sending fails.
+fn report_patch_event_in_background(event: PatchEvent, config: UpdateConfig, what: &'static str) {
+    let handle = std::thread::spawn(move || {
+        if let Err(err) = crate::network::send_patch_event(event, &config) {
+            shorebird_error!("Failed to report {}: {:?}", what, err);
+        }
+    });
+    #[cfg(test)]
+    PENDING_EVENT_REPORTS.lock().unwrap().push(handle);
+    #[cfg(not(test))]
+    drop(handle);
+}
+
+/// Reports started by [`report_patch_event_in_background`] that a test hasn't
+/// waited for yet.
+#[cfg(test)]
+static PENDING_EVENT_REPORTS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Blocks until every event report started so far has been sent (or failed).
+#[cfg(test)]
+pub(crate) fn wait_for_event_reports() {
+    let handles = std::mem::take(&mut *PENDING_EVENT_REPORTS.lock().unwrap());
+    for handle in handles {
+        handle.join().unwrap();
+    }
 }
 
 /// This does not return status.  The only output is the change to the saved
@@ -1468,8 +1484,8 @@ pub fn start_update_thread() {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
+    use std::fs;
     use std::path::Path;
-    use std::{fs, thread, time::Duration};
     use tempfile::TempDir;
 
     use crate::{
@@ -1845,12 +1861,8 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // This is gross.
-        // Because we spawn a thread to report the patch download event, we need to give it time
-        // to run before we can assert that the event was sent. The more correct way to do this
-        // would be to obtain the join handle from the thread and wait for it to finish, but that
-        // would require a change to the API of the `update` function, which seems worse.
-        thread::sleep(Duration::from_millis(10));
+        // The download event is reported on a background thread.
+        super::wait_for_event_reports();
 
         // Assert that the patch download event was sent.
         event_mock.expect(1).assert();
@@ -1907,12 +1919,8 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // This is gross.
-        // Because we spawn a thread to report the patch download event, we need to give it time
-        // to run before we can assert that the event was sent. The more correct way to do this
-        // would be to obtain the join handle from the thread and wait for it to finish, but that
-        // would require a change to the API of the `update` function, which seems worse.
-        thread::sleep(Duration::from_millis(10));
+        // The download event is reported on a background thread.
+        super::wait_for_event_reports();
 
         // Assert that the patch download event was sent.
         event_mock.expect(1).assert();
