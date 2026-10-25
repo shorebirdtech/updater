@@ -103,6 +103,9 @@ pub enum UpdateError {
     /// the expected hash. Distinct from a transient download failure — this is
     /// deterministic for the given patch on this device.
     CorruptPatch,
+    /// The offered patch's signature was missing or did not verify against
+    /// the app's configured `patch_public_key`.
+    InvalidSignature,
 }
 
 impl std::error::Error for UpdateError {}
@@ -118,6 +121,7 @@ impl Display for UpdateError {
                 write!(f, "Update already in progress")
             }
             UpdateError::CorruptPatch => write!(f, "Downloaded patch was invalid"),
+            UpdateError::InvalidSignature => write!(f, "Patch signature could not be verified"),
         }
     }
 }
@@ -147,6 +151,8 @@ pub enum FailureCategory {
     Filesystem,
     /// A downloaded patch failed to decompress or did not match its hash.
     CorruptPatch,
+    /// The offered patch's signature was missing or did not verify.
+    InvalidSignature,
     /// Not yet classified.
     Unknown,
 }
@@ -162,6 +168,7 @@ impl FailureCategory {
             FailureCategory::PermissionDenied => "permission_denied",
             FailureCategory::Filesystem => "filesystem",
             FailureCategory::CorruptPatch => "corrupt_patch",
+            FailureCategory::InvalidSignature => "invalid_signature",
             FailureCategory::Unknown => "unknown",
         }
     }
@@ -176,7 +183,8 @@ impl FailureCategory {
             FailureCategory::OutOfSpace
             | FailureCategory::PermissionDenied
             | FailureCategory::Filesystem
-            | FailureCategory::CorruptPatch => false,
+            | FailureCategory::CorruptPatch
+            | FailureCategory::InvalidSignature => false,
             // Be conservative: an unclassified failure might be transient. A
             // genuinely permanent one will simply fail again and re-report.
             FailureCategory::Unknown => true,
@@ -208,6 +216,7 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
         return match update_err {
             UpdateError::BadServerResponse => FailureCategory::Server,
             UpdateError::CorruptPatch => FailureCategory::CorruptPatch,
+            UpdateError::InvalidSignature => FailureCategory::InvalidSignature,
             _ => FailureCategory::Unknown,
         };
     }
@@ -411,9 +420,12 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
 
     if let Some(patch) = response.patch {
         let action = with_state(|state| {
-            Ok(state
-                .lifecycle()
-                .decide_start(patch.number, &patch.download_url, &patch.hash))
+            Ok(state.lifecycle().decide_start(
+                patch.number,
+                &patch.download_url,
+                &patch.hash,
+                patch.hash_signature.as_deref(),
+            ))
         })?;
         Ok(matches!(
             action,
@@ -569,9 +581,12 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
 
     let action = with_state(|state| {
-        Ok(state
-            .lifecycle()
-            .decide_start(patch.number, &patch.download_url, &patch.hash))
+        Ok(state.lifecycle().decide_start(
+            patch.number,
+            &patch.download_url,
+            &patch.hash,
+            patch.hash_signature.as_deref(),
+        ))
     })?;
     match action {
         DownloadAction::Skip(SkipReason::KnownBad) => {
@@ -693,6 +708,34 @@ fn download_and_install_patch(
     patch: &crate::network::Patch,
     action: DownloadAction,
 ) -> anyhow::Result<UpdateStatus> {
+    // Verify the signature before anything is fetched, in every mode: it
+    // covers `patch.hash`, and the post-inflate hash check ties the
+    // installed bytes to that hash, so an unverifiable offer never reaches
+    // the network, the inflater or the lifecycle's install path. Strict
+    // mode re-verifies the installed artifact on every boot as well. The
+    // refused pair is tombstoned so later checks skip it quietly rather
+    // than re-reporting it on every launch.
+    if let Err(e) = crate::cache::check_patch_signature(
+        &patch.hash,
+        patch.hash_signature.as_deref(),
+        config.patch_public_key.as_deref(),
+    ) {
+        if let Err(state_err) = with_mut_state(|state| {
+            state.lifecycle_mut().record_signature_refused(
+                patch.number,
+                &patch.hash,
+                patch.hash_signature.as_deref(),
+            )
+        }) {
+            shorebird_error!(
+                "Failed to record signature refusal for patch {}: {:?}",
+                patch.number,
+                state_err
+            );
+        }
+        return Err(e.context(UpdateError::InvalidSignature));
+    }
+
     shorebird_info!(
         "Downloading patch {} for app {} (version {})",
         patch.number,
@@ -1447,12 +1490,19 @@ mod tests {
     }
 
     pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
+        init_for_testing_with_yaml(tmp_dir, base_url, "");
+    }
+
+    /// Like [`init_for_testing`], with `extra_yaml` appended to the
+    /// shorebird.yaml (e.g. `patch_public_key` / `patch_verification`).
+    pub fn init_for_testing_with_yaml(tmp_dir: &TempDir, base_url: Option<&str>, extra_yaml: &str) {
         testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         let mut yaml = "app_id: 1234".to_string();
         if let Some(url) = base_url {
             yaml += &format!("\nbase_url: {}", url);
         }
+        yaml += extra_yaml;
 
         let libapp_path = tmp_dir
             .path()
@@ -2464,6 +2514,216 @@ patch_verification: bogus_mode
         })?;
 
         Ok(())
+    }
+
+    // cspell:ignore outform dgst
+    // A throwaway RSA key pair made for these tests (only the public half is
+    // kept), as `patch_public_key` expects it: base64 DER `RSAPublicKey`.
+    //   openssl genrsa -out k.pem 2048
+    //   openssl rsa -in k.pem -RSAPublicKey_out -outform DER | base64
+    const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEArCQP+TK07V2b/Oux0AlNIQQ+A4j3dY2A8ITpjrQ+g2x0uv1vTLnX/ykLPwD8LFyS2PupJYUVtG6Djm+UCdoeNCX35+Layveax1dv0p4N/R2Xnhm9DYx/WSbI5HE6hZ4okduTWlkHZXS63WK56vQFHzXkzuQqiMQmcFFv2oDF2lQ/kwHCPqhDYPH5Oy0hILBmu88xQhZUs5DqV/vJz0T+r9PYvYaAvrS1g3v+kwTG7vKUJ1HAm6mZekrUVrdNogbBtPPBVvnhnSWFDPzCZ4mQbWyQfKQVszUOCLS84QPZFgAkAzmeouYfuJnT2sIk6syEk9eVaiYhIdds5nNNZsopYwIDAQAB";
+    // Hash of "hello tests", the result of applying `HELLO_TESTS_PATCH`
+    // to the base "hello world".
+    const HELLO_TESTS_HASH: &str =
+        "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
+    // `printf %s $HELLO_TESTS_HASH | openssl dgst -sha256 -sign k.pem | base64`
+    const HELLO_TESTS_SIGNATURE: &str = "lzJx8h1RT9lgHU+whC15OwDVRRjPNxomt0YwNTAil69J8+SNHzrU204827GzdYy81PZMVvKLLoW6FHlHmz/fzZ+0QkXpPyg+Lln7vBn6rM2BM6F5rwacg9TPCwmQwZC0eF5g3o9of9HdIb/1M69QM8z05JcdohaV42Um7BdHNQZt9W5Td7LuYbBEfyX6q0bO8YlbXNzzyANFudD/OCJLRCiDBkSHHO6+SmQZtUlapRMf2q1/4FAVGclAtc0yfD5pdD0EURECW30UATMGRXluPn+5vf8kqn8o2whu6pvqC0PMQqBLF7MGcz3hdB+wWqERB+NLx+HqpYTpgfhlzAb/pg==";
+    // The same key's signature over a different hash (64 zeros), so it fails
+    // to verify for `HELLO_TESTS_HASH`.
+    const WRONG_MESSAGE_SIGNATURE: &str = "iybpSSyEEpwJ7ta5Tma1R/caW1bnLcijYaVpIBUdH9I7dv75M0ekPXFMpdv3NfYcptOFRhz3Ht9+qd+nCy0+9isOGHyK6piiu9VGv5ScRuk2oP5ZiSRWZTtwzbIKOQ5LysSqFsD1/+GMkzRWCAwpSQu9bD57/uPtZgs6fy0qFp7pZ+1lkXCI/d9MX7657MhdQYlrrPImBUwCTztzyJ9nDVt23xZfSBBteseXCXXhGQ8nS9CYycQSQkLwrG6hTLixO0kOAVDGN9P5mKb1EXKaEao+lSET8nBysmEqTlt40xjOHN19ymtWw5Xr2Gw2yTNDH6AIQNs7mziMDiLX+Jg7CA==";
+    // Generated by `string_patch "hello world" "hello tests"`.
+    const HELLO_TESTS_PATCH: [u8; 31] = [
+        40, 181, 47, 253, 0, 128, 177, 0, 0, 223, 177, 0, 0, 0, 16, 0, 0, 6, 0, 0, 0, 0, 0, 0, 5,
+        116, 101, 115, 116, 115, 0,
+    ];
+
+    // Network hooks are plain `fn`s, so the tests reach them through statics
+    // (these tests are `#[serial]`).
+    static OFFERED_SIGNATURE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    static DOWNLOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// Initializes the updater with `extra_yaml` and a server offering patch
+    /// 1 ("hello world" → "hello tests") signed with `hash_signature`.
+    fn init_offering_signature(tmp_dir: &TempDir, extra_yaml: &str, hash_signature: Option<&str>) {
+        init_for_testing_with_yaml(tmp_dir, None, extra_yaml);
+        let apk_path = tmp_dir.path().join("base.apk");
+        crate::test_utils::write_fake_apk(apk_path.to_str().unwrap(), b"hello world");
+
+        *OFFERED_SIGNATURE.lock().unwrap() = hash_signature.map(String::from);
+        DOWNLOADS.store(0, std::sync::atomic::Ordering::SeqCst);
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: true,
+                    patch: Some(Patch {
+                        number: 1,
+                        hash: HELLO_TESTS_HASH.to_string(),
+                        download_url: "http://example.com/patch/1".to_string(),
+                        hash_signature: OFFERED_SIGNATURE.lock().unwrap().clone(),
+                    }),
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            |_url, dest: &Path, _resume_from: u64| {
+                DOWNLOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::fs::write(dest, HELLO_TESTS_PATCH)?;
+                Ok(crate::network::DownloadResult {
+                    total_bytes: HELLO_TESTS_PATCH.len() as u64,
+                    content_length: Some(HELLO_TESTS_PATCH.len() as u64),
+                })
+            },
+            |_url, _event| Ok(()),
+        );
+    }
+
+    fn signing_yaml(mode: &str) -> String {
+        format!("\npatch_public_key: {TEST_PUBLIC_KEY}\npatch_verification: {mode}")
+    }
+
+    fn assert_installed_and_bootable() -> anyhow::Result<()> {
+        super::validate_next_boot_patch()?;
+        super::with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })
+    }
+
+    /// An unverifiable offer is refused before download, the refused pair is
+    /// tombstoned, one `invalid_signature` event is queued, and the next
+    /// check skips the same offer quietly.
+    fn assert_refused(
+        tmp_dir: &TempDir,
+        result: anyhow::Result<crate::UpdateStatus>,
+        offered: Option<&str>,
+        expected_cause: &str,
+    ) -> anyhow::Result<()> {
+        let err = result.expect_err("an unverifiable patch must not install");
+        assert_eq!(
+            super::classify_failure(&err),
+            super::FailureCategory::InvalidSignature
+        );
+        assert!(
+            format!("{err:#}").contains(expected_cause),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(DOWNLOADS.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(!tmp_dir.path().join("patches/1/download").exists());
+        assert!(!tmp_dir.path().join("patches/1/dlc.vmcode").exists());
+        super::with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch(), None);
+            assert_eq!(
+                state.lifecycle_mut().read_state(1),
+                Some(crate::cache::lifecycle::PatchState::Bad {
+                    reason: super::BadReason::InvalidSignature,
+                    hash: Some(HELLO_TESTS_HASH.to_string()),
+                    signature: offered.map(String::from),
+                    size: None,
+                })
+            );
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(
+                events[0].failure_category.as_deref(),
+                Some("invalid_signature")
+            );
+            Ok(())
+        })?;
+
+        // The same offer again is skipped without a new failure event.
+        assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateIsBadPatch);
+        assert_eq!(DOWNLOADS.load(std::sync::atomic::Ordering::SeqCst), 0);
+        super::with_state(|state| {
+            assert!(state
+                .copy_events(10)
+                .iter()
+                .all(|e| e.failure_category.is_none()));
+            Ok(())
+        })
+    }
+
+    #[serial]
+    #[test]
+    fn signature_is_checked_at_install_in_every_mode() -> anyhow::Result<()> {
+        for mode in ["install_only", "strict"] {
+            // A valid signature installs, and boots (Strict re-verifies).
+            let tmp_dir = TempDir::new().unwrap();
+            init_offering_signature(&tmp_dir, &signing_yaml(mode), Some(HELLO_TESTS_SIGNATURE));
+            assert_eq!(
+                super::update(None)?,
+                crate::UpdateStatus::UpdateInstalled,
+                "{mode}"
+            );
+            assert_installed_and_bootable()?;
+
+            for (offered, cause) in [
+                (Some(WRONG_MESSAGE_SIGNATURE), "Patch signature is invalid"),
+                (None, "Patch signature is missing"),
+            ] {
+                let tmp_dir = TempDir::new().unwrap();
+                init_offering_signature(&tmp_dir, &signing_yaml(mode), offered);
+                let result = super::update(None);
+                assert_refused(&tmp_dir, result, offered, cause)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn signature_is_ignored_when_signing_is_off() -> anyhow::Result<()> {
+        // No `patch_public_key`: whatever the server sends is not checked.
+        let tmp_dir = TempDir::new().unwrap();
+        init_offering_signature(&tmp_dir, "", Some(WRONG_MESSAGE_SIGNATURE));
+        assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
+        assert_installed_and_bootable()
+    }
+
+    #[serial]
+    #[test]
+    fn refusal_discards_an_earlier_download_of_the_patch() -> anyhow::Result<()> {
+        // A partial download recorded under the genuine signature is on disk
+        // when a re-offer arrives with a bad one; the refusal removes it.
+        let tmp_dir = TempDir::new().unwrap();
+        init_offering_signature(
+            &tmp_dir,
+            &signing_yaml("install_only"),
+            Some(WRONG_MESSAGE_SIGNATURE),
+        );
+        super::with_mut_state(|state| {
+            state.lifecycle_mut().record_download_started(
+                1,
+                "http://example.com/patch/1",
+                HELLO_TESTS_HASH,
+                Some(HELLO_TESTS_SIGNATURE),
+            )
+        })?;
+        let partial = tmp_dir.path().join("patches/1/download");
+        std::fs::write(&partial, &HELLO_TESTS_PATCH[..10])?;
+
+        let result = super::update(None);
+        assert_refused(
+            &tmp_dir,
+            result,
+            Some(WRONG_MESSAGE_SIGNATURE),
+            "Patch signature is invalid",
+        )
+    }
+
+    #[serial]
+    #[test]
+    fn refused_signature_does_not_block_a_genuine_patch() -> anyhow::Result<()> {
+        // Only the refused (hash, signature) pair is tombstoned: the genuine
+        // patch 1 offered afterwards installs.
+        let tmp_dir = TempDir::new().unwrap();
+        init_offering_signature(
+            &tmp_dir,
+            &signing_yaml("install_only"),
+            Some(WRONG_MESSAGE_SIGNATURE),
+        );
+        assert!(super::update(None).is_err());
+        *OFFERED_SIGNATURE.lock().unwrap() = Some(HELLO_TESTS_SIGNATURE.to_string());
+        assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
+        assert_installed_and_bootable()
     }
 
     #[test]
@@ -4620,6 +4880,7 @@ mod failure_classification_tests {
             (PermissionDenied, "permission_denied", false),
             (Filesystem, "filesystem", false),
             (CorruptPatch, "corrupt_patch", false),
+            (InvalidSignature, "invalid_signature", false),
             (Unknown, "unknown", true),
         ];
         for (category, code, retryable) in cases {

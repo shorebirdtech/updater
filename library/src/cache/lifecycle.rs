@@ -117,6 +117,10 @@ pub enum BadReason {
     InvalidPatchBytes,
     /// Inflated bytes' hash didn't match the server-claimed hash.
     InstallHashMismatch,
+    /// The offered signature was missing or did not verify against the
+    /// app's `patch_public_key`. Unlike the other reasons, this condemns
+    /// only the recorded (hash, signature) pair; see `decide_start`.
+    InvalidSignature,
     /// `validate_patch_is_bootable` failed at boot time (size mismatch
     /// vs Installed.size, or signature failed in Strict mode).
     ValidationFailed,
@@ -419,19 +423,31 @@ impl PatchLifecycle {
     /// was deleted and re-uploaded with the same number, or routed
     /// through a different CDN URL, and the prior bytes can't be
     /// trusted.
-    pub fn decide_start(&self, n: usize, url: &str, hash: &str) -> DownloadAction {
+    pub fn decide_start(
+        &self,
+        n: usize,
+        url: &str,
+        hash: &str,
+        signature: Option<&str>,
+    ) -> DownloadAction {
         // For Downloading/Downloaded, the on-disk file is the source
         // of truth for "how many bytes do we have." The state itself
         // just records the url/hash/signature so we can detect a
-        // server change since the prior attempt.
+        // server change since the prior attempt. The signature is part
+        // of the offer: it is checked against this offer before download
+        // and carried into `Installed`, so a prior attempt recorded under
+        // a different signature starts over.
         let download_path = self.download_artifact_path(n);
+        let same_offer = |prior_url: &str, prior_hash: &str, prior_sig: Option<&str>| {
+            prior_url == url && prior_hash == hash && prior_sig == signature
+        };
         match self.read_state(n) {
             None => DownloadAction::Fresh,
             Some(PatchState::Downloading {
                 url: prior_url,
                 hash: prior_hash,
-                ..
-            }) if prior_url == url && prior_hash == hash => {
+                signature: prior_sig,
+            }) if same_offer(&prior_url, &prior_hash, prior_sig.as_deref()) => {
                 match std::fs::metadata(&download_path) {
                     Ok(meta) => DownloadAction::Resume { offset: meta.len() },
                     Err(_) => DownloadAction::Fresh,
@@ -441,8 +457,9 @@ impl PatchLifecycle {
             Some(PatchState::Downloaded {
                 url: prior_url,
                 hash: prior_hash,
+                signature: prior_sig,
                 ..
-            }) if prior_url == url && prior_hash == hash => {
+            }) if same_offer(&prior_url, &prior_hash, prior_sig.as_deref()) => {
                 if download_path.exists() {
                     DownloadAction::Complete
                 } else {
@@ -453,8 +470,43 @@ impl PatchLifecycle {
             Some(PatchState::Installed { .. }) => {
                 DownloadAction::Skip(SkipReason::AlreadyInstalled)
             }
+            // A signature refusal condemns only the exact (hash, signature)
+            // pair refused, not the patch number: anyone able to send a bad
+            // offer could otherwise block the genuine patch N on this device.
+            Some(PatchState::Bad {
+                reason: BadReason::InvalidSignature,
+                hash: bad_hash,
+                signature: bad_sig,
+                ..
+            }) if bad_hash.as_deref() != Some(hash) || bad_sig.as_deref() != signature => {
+                DownloadAction::Fresh
+            }
             Some(PatchState::Bad { .. }) => DownloadAction::Skip(SkipReason::KnownBad),
         }
+    }
+
+    /// Records that the offer (`hash`, `signature`) for patch `n` failed
+    /// signature verification: writes a `Bad{InvalidSignature}` tombstone
+    /// carrying the refused pair (so `decide_start` skips only that pair)
+    /// and removes any partial or complete download left by an earlier
+    /// offer. `n` is never `Installed` here, since `decide_start` skips
+    /// installed patches before the check.
+    pub fn record_signature_refused(
+        &self,
+        n: usize,
+        hash: &str,
+        signature: Option<&str>,
+    ) -> Result<()> {
+        self.write_state(
+            n,
+            &PatchState::Bad {
+                reason: BadReason::InvalidSignature,
+                hash: Some(hash.to_string()),
+                signature: signature.map(String::from),
+                size: None,
+            },
+        )?;
+        self.cleanup(n)
     }
 
     /// Records that a download is starting (or restarting). The actual
@@ -1160,7 +1212,7 @@ mod tests {
     fn decide_start_unknown_patch_is_fresh() {
         let (_tmp, lifecycle) = fixture();
         assert_eq!(
-            lifecycle.decide_start(1, "https://example/p", "h"),
+            lifecycle.decide_start(1, "https://example/p", "h", None),
             DownloadAction::Fresh
         );
     }
@@ -1182,7 +1234,7 @@ mod tests {
         std::fs::create_dir_all(dl.parent().unwrap()).unwrap();
         std::fs::write(&dl, vec![0u8; 250]).unwrap();
         assert_eq!(
-            lifecycle.decide_start(1, "https://example/p", "h"),
+            lifecycle.decide_start(1, "https://example/p", "h", None),
             DownloadAction::Resume { offset: 250 }
         );
     }
@@ -1203,7 +1255,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            lifecycle.decide_start(1, "https://example/p", "h"),
+            lifecycle.decide_start(1, "https://example/p", "h", None),
             DownloadAction::Fresh
         );
     }
@@ -1222,7 +1274,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            lifecycle.decide_start(1, "https://new.example/p", "h"),
+            lifecycle.decide_start(1, "https://new.example/p", "h", None),
             DownloadAction::Fresh
         );
     }
@@ -1241,7 +1293,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(lifecycle.decide_start(1, "u", "new"), DownloadAction::Fresh);
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "new", None),
+            DownloadAction::Fresh
+        );
     }
 
     #[test]
@@ -1262,8 +1317,69 @@ mod tests {
         std::fs::create_dir_all(dl.parent().unwrap()).unwrap();
         std::fs::write(&dl, vec![0u8; 1000]).unwrap();
         assert_eq!(
-            lifecycle.decide_start(1, "u", "h"),
+            lifecycle.decide_start(1, "u", "h", None),
             DownloadAction::Complete
+        );
+    }
+
+    #[test]
+    fn decide_start_signature_change_starts_fresh() {
+        // The verified signature must be the one carried into `Installed`,
+        // so bytes recorded under another signature are not reused.
+        let (_tmp, lifecycle) = fixture();
+        lifecycle
+            .write_state(
+                1,
+                &PatchState::Downloaded {
+                    url: "u".into(),
+                    hash: "h".into(),
+                    signature: Some("old".into()),
+                    size: 1000,
+                },
+            )
+            .unwrap();
+        let dl = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(dl.parent().unwrap()).unwrap();
+        std::fs::write(&dl, vec![0u8; 1000]).unwrap();
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", Some("new")),
+            DownloadAction::Fresh
+        );
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", Some("old")),
+            DownloadAction::Complete
+        );
+    }
+
+    #[test]
+    fn signature_refusal_skips_only_the_refused_pair() {
+        let (_tmp, lifecycle) = fixture();
+        lifecycle
+            .record_download_started(1, "u", "h", Some("good"))
+            .unwrap();
+        let dl = lifecycle.download_artifact_path(1);
+        std::fs::create_dir_all(dl.parent().unwrap()).unwrap();
+        std::fs::write(&dl, b"partial").unwrap();
+
+        lifecycle
+            .record_signature_refused(1, "h", Some("bad"))
+            .unwrap();
+        assert!(!dl.exists(), "refusal removes the earlier download");
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", Some("bad")),
+            DownloadAction::Skip(SkipReason::KnownBad)
+        );
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", Some("good")),
+            DownloadAction::Fresh
+        );
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", None),
+            DownloadAction::Fresh
+        );
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "other", Some("bad")),
+            DownloadAction::Fresh
         );
     }
 
@@ -1281,7 +1397,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(lifecycle.decide_start(1, "u", "h"), DownloadAction::Fresh);
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", None),
+            DownloadAction::Fresh
+        );
     }
 
     #[test]
@@ -1297,7 +1416,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            lifecycle.decide_start(1, "u", "h"),
+            lifecycle.decide_start(1, "u", "h", None),
             DownloadAction::Skip(SkipReason::AlreadyInstalled)
         );
     }
@@ -1317,7 +1436,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            lifecycle.decide_start(1, "u", "h"),
+            lifecycle.decide_start(1, "u", "h", None),
             DownloadAction::Skip(SkipReason::KnownBad)
         );
     }

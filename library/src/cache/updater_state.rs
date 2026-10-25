@@ -3,16 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-#[cfg(test)]
-use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::events::PatchEvent;
 use crate::yaml::PatchVerificationMode;
 
 use super::lifecycle::{PatchLifecycle, PatchState};
-#[cfg(test)]
-use super::signing;
 use super::{disk_io, PatchInfo};
 
 const STATE_FILE_NAME: &str = "state.json";
@@ -332,65 +328,6 @@ impl UpdaterState {
             .validate_next_boot_patch(self.patch_public_key.as_deref(), self.verification_mode)
     }
 
-    /// Moves the inflated artifact at `patch.path` into the lifecycle's
-    /// installed location, validates the signature in `InstallOnly`
-    /// mode, transitions the patch to `Installed`, and promotes it to
-    /// `next_boot_patch`.
-    ///
-    /// Test-only entry point. The production update flow inflates
-    /// directly into the lifecycle's installed location and transitions
-    /// `Downloaded → Installed` via `lifecycle::record_install_complete`,
-    /// so no production caller goes through this function. Gated to
-    /// `#[cfg(test)]` so a future refactor can't accidentally
-    /// reintroduce the divergence — direct lifecycle calls are the
-    /// canonical path. Used by `test_utils::install_fake_patch` and
-    /// the tests below.
-    #[cfg(test)]
-    pub fn install_patch(
-        &mut self,
-        patch: &PatchInfo,
-        hash: &str,
-        signature: Option<&str>,
-    ) -> Result<()> {
-        if !patch.path.exists() {
-            bail!("Patch file {} does not exist", patch.path.display());
-        }
-        // InstallOnly mode verifies the signature here; Strict mode
-        // verifies it again at boot time via validate_next_boot_patch.
-        if self.verification_mode == PatchVerificationMode::InstallOnly {
-            if let Some(public_key) = &self.patch_public_key {
-                let sig = signature.context("Patch signature is missing")?;
-                signing::check_signature(hash, sig, public_key)?;
-            }
-        }
-        let installed_path = self.lifecycle.installed_artifact_path(patch.number);
-        if let Some(parent) = installed_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::rename(&patch.path, &installed_path)?;
-        // Mirror `record_install_complete`'s cleanup of the now-stale
-        // compressed download bytes if any are sitting in the patch dir.
-        let download = self.lifecycle.download_artifact_path(patch.number);
-        if download.exists() {
-            if let Err(e) = std::fs::remove_file(&download) {
-                shorebird_error!(
-                    "Failed to remove stale download for patch {}: {:?}",
-                    patch.number,
-                    e
-                );
-            }
-        }
-        let installed_size = std::fs::metadata(&installed_path)?.len();
-        self.lifecycle.write_state(
-            patch.number,
-            &PatchState::Installed {
-                signature: signature.map(String::from),
-                size: installed_size,
-            },
-        )?;
-        self.lifecycle.promote_to_next_boot(patch.number)
-    }
-
     /// Removes the artifacts for `patch_number` and recomputes pointers.
     /// Used today for server-driven rollbacks.
     pub fn uninstall_patch(&mut self, patch_number: usize) -> Result<()> {
@@ -441,13 +378,8 @@ impl UpdaterState {
 mod tests {
     use super::*;
     use crate::cache::lifecycle::BadReason;
+    use crate::test_utils::install_fake_patch_into;
     use tempfile::TempDir;
-
-    fn fake_artifact(tmp: &TempDir, number: usize) -> PatchInfo {
-        let path = tmp.path().join(format!("patch{}.full", number));
-        std::fs::write(&path, format!("patch_{}_bytes", number)).unwrap();
-        PatchInfo { number, path }
-    }
 
     fn load(tmp: &TempDir, release_version: &str) -> UpdaterState {
         UpdaterState::load_or_new_on_error(
@@ -464,8 +396,7 @@ mod tests {
         // Ports `patch_manager.rs::reset_tests::deletes_patches_dir_and_resets_patches_state`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        let p = fake_artifact(&tmp, 1);
-        state.install_patch(&p, "hash", None).unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         state.save().unwrap();
         assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
 
@@ -533,8 +464,7 @@ mod tests {
     fn corrupt_state_file_creates_new_state() {
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        let p = fake_artifact(&tmp, 1);
-        state.install_patch(&p, "hash", None).unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         state.save().unwrap();
 
         std::fs::write(tmp.path().join(STATE_FILE_NAME), "garbage").unwrap();
@@ -544,115 +474,15 @@ mod tests {
     }
 
     #[test]
-    fn install_patch_renames_into_lifecycle_dir_and_sets_next_boot() {
-        // Ports `patch_manager.rs::add_patch_tests::adds_patch_successfully`.
-        let tmp = TempDir::new().unwrap();
-        let mut state = load(&tmp, "1.0.0+1");
-        let p = fake_artifact(&tmp, 1);
-        state.install_patch(&p, "hash", None).unwrap();
-        let next = state.next_boot_patch().unwrap();
-        assert_eq!(next.number, 1);
-        assert!(next.path.exists());
-        assert!(!tmp.path().join("patch1.full").exists(), "source moved");
-    }
-
-    #[test]
-    fn install_patch_replaces_unbooted_predecessor() {
+    fn installing_replaces_unbooted_predecessor() {
         // Ports
         // `patch_manager.rs::next_boot_patch_tests::adding_patch_deletes_unbooted_patch_not_last_booted`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        state
-            .install_patch(&fake_artifact(&tmp, 1), "h1", None)
-            .unwrap();
-        state
-            .install_patch(&fake_artifact(&tmp, 2), "h2", None)
-            .unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
+        install_fake_patch_into(&mut state, 2).unwrap();
         assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
         assert!(!state.lifecycle.installed_artifact_path(1).exists());
-    }
-
-    #[test]
-    fn install_patch_errors_when_file_missing() {
-        // Ports `patch_manager.rs::add_patch_tests::errs_if_file_path_does_not_exist`.
-        let tmp = TempDir::new().unwrap();
-        let mut state = load(&tmp, "1.0.0+1");
-        let bogus = PatchInfo {
-            number: 1,
-            path: tmp.path().join("nope"),
-        };
-        assert!(state.install_patch(&bogus, "h", None).is_err());
-    }
-
-    // The base64-encoded RSA key + matching signature were generated for
-    // signing.rs's tests; reused here to exercise the InstallOnly path
-    // without standing up our own keypair fixture.
-    const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEA2wdpEGbuvlPsb9i0qYrfMefJnEw1BHTi8SYZTKrXOvJWmEpPE1hWfbkvYzXu5a96gV1yocF3DMwn04VmRlKhC4AhsD0NL0UNhYhotbKG91Kwi1vAXpHhCdz5gQEBw0K1uB4Jz+zK6WK+31PryYpwLwbyXNqXoY8IAAUQ4STsHYV5w+BMSi8pepWMRd7DR9RHcbNOZlJvdBQ5NxvB4JN4dRMq8cC73ez1P9d7Dfwv3TWY+he9EmuXLT2UivZSlHIrGBa7MFfqyUe2ro0F7Te/B0si12itBbWIqycvqcXjeOPNn6WEpqN7IWjb9LUh162JyYaz5Lb/VeeJX8LKtElccwIDAQAB";
-    const TEST_HASH: &str = "404e5caa5b906f6d03c97657e8c4d604d759f9cfba1a8bba9d5b49a5ebc174f9";
-    const TEST_SIGNATURE: &str = "2ixSo5LpaWUSLg2GJEV+D+uyLeLjp0c3vNXnl0yb1iJjAdpn10BFlbcwCcjaJW9PNky2HU2hKOBe62PkFHOU8DDYOfxf2LGg/ToLGPHin85WrwFAceAUYDs7JpQr43dRTbrXcT8k5tuCQOTwXecGwuWcOFFvh0GbXFnyAmi7fLfN9CtTsG2GIOle/LyYLwoviTrXn/fZTZEYrqxD/wZ4QzoWOWLWNvrPbILhqWELkBLhdZeK0+nC2CIxFRYd3bUeOi1AGtPyHKBfdwuf4VO3+HbwJVaAEiD7HU2Bj+Zp1xeSdbznmYgBV86oizrLFd23D+lBfTlmDGgdfNE9J4Z2/g==";
-
-    fn load_with_verification(
-        tmp: &TempDir,
-        public_key: Option<&str>,
-        mode: PatchVerificationMode,
-    ) -> UpdaterState {
-        UpdaterState::load_or_new_on_error(
-            tmp.path(),
-            &tmp.path().join("downloads"),
-            "1.0.0+1",
-            public_key,
-            mode,
-        )
-    }
-
-    #[test]
-    fn install_patch_install_only_accepts_valid_signature() {
-        // Ports `patch_manager.rs::add_patch_tests::install_only_succeeds_with_valid_signature`.
-        let tmp = TempDir::new().unwrap();
-        let mut state = load_with_verification(
-            &tmp,
-            Some(TEST_PUBLIC_KEY),
-            PatchVerificationMode::InstallOnly,
-        );
-        let p = fake_artifact(&tmp, 1);
-        state
-            .install_patch(&p, TEST_HASH, Some(TEST_SIGNATURE))
-            .unwrap();
-        assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
-    }
-
-    #[test]
-    fn install_patch_install_only_rejects_missing_signature() {
-        // Ports
-        // `patch_manager.rs::add_patch_tests::install_only_errs_if_signature_is_missing_when_public_key_configured`.
-        let tmp = TempDir::new().unwrap();
-        let mut state = load_with_verification(
-            &tmp,
-            Some(TEST_PUBLIC_KEY),
-            PatchVerificationMode::InstallOnly,
-        );
-        let p = fake_artifact(&tmp, 1);
-        assert!(state.install_patch(&p, TEST_HASH, None).is_err());
-        // Failure leaves no Installed state.
-        assert!(state.next_boot_patch().is_none());
-    }
-
-    #[test]
-    fn install_patch_install_only_rejects_bad_signature() {
-        // Ports
-        // `patch_manager.rs::add_patch_tests::install_only_errs_if_signature_is_invalid`
-        // and (same code path)
-        // `patch_manager.rs::add_patch_tests::install_only_errs_if_public_key_is_invalid`.
-        let tmp = TempDir::new().unwrap();
-        let mut state = load_with_verification(
-            &tmp,
-            Some(TEST_PUBLIC_KEY),
-            PatchVerificationMode::InstallOnly,
-        );
-        let p = fake_artifact(&tmp, 1);
-        assert!(state
-            .install_patch(&p, TEST_HASH, Some("not_a_real_signature"))
-            .is_err());
     }
 
     #[test]
@@ -663,9 +493,7 @@ mod tests {
         // `patch_manager.rs::record_boot_success_for_patch_tests::succeeds_when_provided_next_boot_patch_number`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        state
-            .install_patch(&fake_artifact(&tmp, 1), "h", None)
-            .unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         state.record_boot_start_for_patch(1).unwrap();
         assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
         state.record_boot_success().unwrap();
@@ -684,9 +512,7 @@ mod tests {
         // `patch_manager.rs::record_boot_failure_for_patch_tests::deletes_failed_patch_artifacts`.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        state
-            .install_patch(&fake_artifact(&tmp, 1), "h", None)
-            .unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         state.record_boot_start_for_patch(1).unwrap();
         state.record_boot_failure_for_patch(1).unwrap();
         assert!(state.is_known_bad_patch(1));
@@ -700,9 +526,7 @@ mod tests {
         // patch bad and recomputes pointers.
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        state
-            .install_patch(&fake_artifact(&tmp, 1), "h", None)
-            .unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         state.record_boot_failure_for_patch(1).unwrap();
         assert!(state.is_known_bad_patch(1));
         assert!(state.next_boot_patch().is_none());
@@ -712,9 +536,7 @@ mod tests {
     fn uninstall_patch_clears_artifacts_and_recomputes_pointers() {
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        state
-            .install_patch(&fake_artifact(&tmp, 1), "h", None)
-            .unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
         state.uninstall_patch(1).unwrap();
         assert!(state.next_boot_patch().is_none());
@@ -725,28 +547,11 @@ mod tests {
     fn is_known_bad_patch_after_mark_bad() {
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
-        state
-            .install_patch(&fake_artifact(&tmp, 1), "h", None)
-            .unwrap();
+        install_fake_patch_into(&mut state, 1).unwrap();
         state
             .lifecycle
             .mark_bad(1, BadReason::InstallHashMismatch)
             .unwrap();
         assert!(state.is_known_bad_patch(1));
-    }
-
-    #[test]
-    fn install_patch_install_only_skips_verification_when_no_public_key() {
-        // Ports
-        // `patch_manager.rs::add_patch_tests::install_only_succeeds_with_any_signature_if_no_public_key`.
-        // InstallOnly + no public_key configured → signature is never
-        // checked, so any value (including garbage) is accepted.
-        let tmp = TempDir::new().unwrap();
-        let mut state = load_with_verification(&tmp, None, PatchVerificationMode::InstallOnly);
-        let p = fake_artifact(&tmp, 1);
-        state
-            .install_patch(&p, "any-hash", Some("garbage-signature"))
-            .unwrap();
-        assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
     }
 }

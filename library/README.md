@@ -222,13 +222,21 @@ The updater supports two patch verification modes, configured via
 `patch_verification` in `shorebird.yaml`. Both modes require a
 `patch_public_key` to be configured for signature verification to occur.
 
+In both modes the updater verifies the offered patch's signature over its
+server-provided hash **before downloading it**. An offer whose signature is
+missing or invalid is refused: nothing is downloaded, a failure event with
+category `invalid_signature` is reported, and that exact (hash, signature)
+offer is not retried for the rest of the release. A differently signed offer
+of the same patch number is still considered. The modes differ only in
+whether the installed patch is verified again on every boot.
+
 #### Strict Mode (default)
 
 ```yaml
 patch_verification: strict
 ```
 
-In Strict mode, patch signature verification happens at **boot time**. This
+In Strict mode, the patch signature is verified again at **boot time**. This
 provides the strongest security guarantee because it detects any potential
 on-disk tampering to the patch file _after_ installation (e.g., if an attacker
 were to modify the patch file on disk between app launches). However the
@@ -249,10 +257,11 @@ was showing up on profiles from older devices.
 
 **Install flow:**
 
-1. Download patch from server
-2. Inflate patch (apply bidiff to base release)
-3. `check_hash()`: Compute SHA256 of inflated file, verify it matches server-provided hash
-4. Store patch file, hash, and signature to disk
+1. `check_signature()`: Verify the server-provided hash has a valid signature using the public key
+2. Download patch from server
+3. Inflate patch (apply bidiff to base release)
+4. `check_hash()`: Compute SHA256 of inflated file, verify it matches server-provided hash
+5. Store patch file and signature to disk
 
 **Boot flow:**
 
@@ -276,11 +285,11 @@ patch files within such.
 
 **Install flow:**
 
-1. Download patch from server
-2. Inflate patch (apply bidiff to base release)
-3. `check_hash()`: Compute SHA256 of inflated file, verify it matches server-provided hash
-4. `check_signature()`: Verify the server-provided hash has a valid signature using the public key
-5. Store patch file, hash, and signature to disk
+1. `check_signature()`: Verify the server-provided hash has a valid signature using the public key
+2. Download patch from server
+3. Inflate patch (apply bidiff to base release)
+4. `check_hash()`: Compute SHA256 of inflated file, verify it matches server-provided hash
+5. Store patch file and signature to disk
 
 **Boot flow:**
 

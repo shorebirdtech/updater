@@ -1,19 +1,13 @@
 /// Helper methods for tests.
 use std::fs;
 
-use crate::{
-    cache::{PatchInfo, UpdaterState},
-    config::with_config,
-};
+use crate::{cache::UpdaterState, config::with_config};
 
-/// Writes a fake patch to the patches directory and sets it as the next boot patch.
+/// Installs a fake patch and makes it the next boot patch, through the
+/// same lifecycle transitions as a real update (see
+/// [`install_fake_patch_into`]).
 pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
     with_config(|config| {
-        let download_dir = std::path::PathBuf::from(&config.download_dir);
-        let artifact_path = download_dir.join(patch_number.to_string());
-        fs::create_dir_all(&download_dir)?;
-        fs::write(&artifact_path, "hello")?;
-
         let mut state = UpdaterState::load_or_new_on_error(
             &config.storage_dir,
             &config.download_dir,
@@ -21,16 +15,39 @@ pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
             config.patch_public_key.as_deref(),
             config.patch_verification,
         );
-        state.install_patch(
-            &PatchInfo {
-                path: artifact_path,
-                number: patch_number,
-            },
-            "hash",
-            None,
-        )?;
+        install_fake_patch_into(&mut state, patch_number)?;
         state.save()
     })
+}
+
+/// Installs patch `patch_number` into `state` by running the lifecycle
+/// transitions `download_and_install_patch` and `install_downloaded_patch`
+/// run in production: `Downloading` → `Downloaded` → `Installed`, then
+/// promotion to `next_boot_patch`. Only the network fetch, the inflate
+/// and the hash check are skipped; the installed artifact is written
+/// directly. Tests that need those steps should drive `update()` with
+/// network hooks instead.
+pub fn install_fake_patch_into(
+    state: &mut UpdaterState,
+    patch_number: usize,
+) -> anyhow::Result<()> {
+    let lifecycle = state.lifecycle_mut();
+    lifecycle.record_download_started(
+        patch_number,
+        &format!("https://example.com/patch/{patch_number}"),
+        "hash",
+        None,
+    )?;
+    let download = lifecycle.download_artifact_path(patch_number);
+    fs::create_dir_all(download.parent().unwrap())?;
+    fs::write(&download, "compressed")?;
+    lifecycle.record_download_complete(patch_number, fs::metadata(&download)?.len())?;
+
+    let installed = lifecycle.installed_artifact_path(patch_number);
+    fs::create_dir_all(installed.parent().unwrap())?;
+    fs::write(&installed, "hello")?;
+    lifecycle.record_install_complete(patch_number, fs::metadata(&installed)?.len())?;
+    lifecycle.promote_to_next_boot(patch_number)
 }
 
 /// Creates a fake APK at `apk_path` and writes `libapp_contents` to its relative `libapp.so` path.
