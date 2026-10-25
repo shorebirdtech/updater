@@ -181,7 +181,8 @@ pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
 /// Start a thread to download an update if one is available.
 #[no_mangle]
 pub extern "C" fn shorebird_start_update_thread() {
-    updater::start_update_thread();
+    // The thread runs detached; nothing waits for it.
+    drop(updater::start_update_thread());
 }
 
 /// Tell the updater that we're launching from what it told us was the
