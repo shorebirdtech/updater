@@ -51,6 +51,7 @@ release.
        │
        ▼
     Engine validates and gets next_boot_patch path
+       │   └─► If invalid: mark patch Bad, fall back, queue failure event
        │
        ▼
     ResolveIsolateData() resolves the isolate snapshot

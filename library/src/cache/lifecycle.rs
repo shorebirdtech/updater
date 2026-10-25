@@ -766,9 +766,13 @@ impl PatchLifecycle {
         }
         if mode == PatchVerificationMode::Strict {
             if let Some(public_key) = public_key {
-                let signature = signature.context("Patch signature is missing")?;
                 let actual_hash = signing::hash_file(&path)?;
-                signing::check_signature(&actual_hash, &signature, public_key)?;
+                signing::check_patch_signature(
+                    &actual_hash,
+                    signature.as_deref(),
+                    Some(public_key),
+                )
+                .context(crate::updater::UpdateError::InvalidSignature)?;
             } else {
                 shorebird_info!("No public key configured; skipping signature verification");
             }
