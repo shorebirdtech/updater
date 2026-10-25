@@ -1455,12 +1455,23 @@ fn report_patch_event_in_background(event: PatchEvent, config: UpdateConfig, wha
 static PENDING_EVENT_REPORTS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> =
     std::sync::Mutex::new(Vec::new());
 
-/// Blocks until every event report started so far has been sent (or failed).
+/// Blocks until every event report started since the last config reset has
+/// been sent (or failed). Panics if a report thread panicked.
 #[cfg(test)]
 pub(crate) fn wait_for_event_reports() {
     let handles = std::mem::take(&mut *PENDING_EVENT_REPORTS.lock().unwrap());
     for handle in handles {
         handle.join().unwrap();
+    }
+}
+
+/// Lets reports left behind by an earlier test finish, so they can't reach the
+/// next test's mock server, without failing the next test if one panicked.
+#[cfg(test)]
+pub(crate) fn finish_earlier_event_reports() {
+    let handles = std::mem::take(&mut *PENDING_EVENT_REPORTS.lock().unwrap());
+    for handle in handles {
+        let _ = handle.join();
     }
 }
 
