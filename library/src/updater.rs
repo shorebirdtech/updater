@@ -611,22 +611,14 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         // message string) so the server can consume it directly; it is derived
         // here rather than over the FFI, so we get categorized failure
         // reporting with no C ABI change.
-        let category = classify_failure(err);
-        let message = format!(
-            "update_failure: patch {} failed ({})",
-            patch_number,
-            event_error_message(err, &config)
-        );
         let queue_result = with_mut_state(|state| {
-            let mut event = PatchEvent::new(
+            state.queue_event(update_failure_event(
                 &config,
-                EventType::PatchUpdateFailure,
-                patch_number,
                 state.client_id(),
-                Some(&message),
-            );
-            event.failure_category = Some(category.code().to_string());
-            state.queue_event(event)
+                "update_failure",
+                patch_number,
+                err,
+            ))
         });
         if let Err(queue_err) = queue_result {
             shorebird_error!("Failed to queue update failure event: {:?}", queue_err);
@@ -634,6 +626,31 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     result
+}
+
+/// A `PatchUpdateFailure` event for `err`, its message prefixed with
+/// `context` (`update_failure`, `boot_validation`) and its category from
+/// [`classify_failure`].
+fn update_failure_event(
+    config: &UpdateConfig,
+    client_id: String,
+    context: &str,
+    patch_number: usize,
+    err: &anyhow::Error,
+) -> PatchEvent {
+    let message = format!(
+        "{context}: patch {patch_number} failed ({})",
+        event_error_message(err, config)
+    );
+    let mut event = PatchEvent::new(
+        config,
+        EventType::PatchUpdateFailure,
+        patch_number,
+        client_id,
+        Some(&message),
+    );
+    event.failure_category = Some(classify_failure(err).code().to_string());
+    event
 }
 
 /// Formats an error for an event's message: paths under the updater's own
@@ -1308,9 +1325,37 @@ where
 /// will be deleted and the next boot patch will be set to the last successfully booted patch or
 /// the base release if there is no last successfully booted patch.
 ///
-/// Returns an error if the patch fails integrity checks.
+/// Returns an error if the patch fails integrity checks, after queueing a
+/// `PatchUpdateFailure` event for it (`invalid_signature` when Strict mode's
+/// signature check refused it), since the engine then boots without it and
+/// nothing else would report why.
 pub fn validate_next_boot_patch() -> anyhow::Result<()> {
-    with_mut_state(|state| state.validate_next_boot_patch())
+    with_config(|config| {
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.download_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+            config.patch_verification,
+        );
+        let Some(patch_number) = state.next_boot_patch().map(|p| p.number) else {
+            return Ok(());
+        };
+        let result = state.validate_next_boot_patch();
+        if let Err(ref err) = result {
+            let event = update_failure_event(
+                config,
+                state.client_id(),
+                "boot_validation",
+                patch_number,
+                err,
+            );
+            if let Err(queue_err) = state.queue_event(event) {
+                shorebird_error!("Failed to queue boot validation event: {:?}", queue_err);
+            }
+        }
+        result
+    })
 }
 
 /// The patch which will be run on next boot (which may still be the same
@@ -2707,6 +2752,58 @@ patch_verification: bogus_mode
             Some(WRONG_MESSAGE_SIGNATURE),
             "Patch signature is invalid",
         )
+    }
+
+    #[serial]
+    #[test]
+    fn boot_validation_reports_a_signature_refusal() -> anyhow::Result<()> {
+        // Strict mode re-verifies the installed bytes at boot. Bytes changed
+        // on disk after install fail it: the patch is dropped and one
+        // `invalid_signature` event says why, where before nothing did.
+        let tmp_dir = TempDir::new().unwrap();
+        init_offering_signature(
+            &tmp_dir,
+            &signing_yaml("strict"),
+            Some(HELLO_TESTS_SIGNATURE),
+        );
+        assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
+        let artifact = tmp_dir.path().join("patches/1/dlc.vmcode");
+        let mut bytes = std::fs::read(&artifact)?;
+        bytes[0] ^= 0xff;
+        std::fs::write(&artifact, bytes)?;
+        super::with_mut_state(|state| state.clear_events())?;
+
+        let err = super::validate_next_boot_patch().expect_err("tampered patch must not boot");
+        assert_eq!(
+            super::classify_failure(&err),
+            super::FailureCategory::InvalidSignature
+        );
+        super::with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch(), None);
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(events[0].identifier, EventType::PatchUpdateFailure);
+            assert_eq!(events[0].patch_number, 1);
+            assert_eq!(
+                events[0].failure_category.as_deref(),
+                Some("invalid_signature")
+            );
+            let message = events[0].message.as_deref().unwrap_or_default();
+            assert!(
+                message.starts_with("boot_validation: patch 1 failed"),
+                "{message}"
+            );
+            Ok(())
+        })?;
+
+        // The patch is now known bad, so the next boot validates nothing
+        // and reports nothing more.
+        super::with_mut_state(|state| state.clear_events())?;
+        super::validate_next_boot_patch()?;
+        super::with_state(|state| {
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })
     }
 
     #[serial]
