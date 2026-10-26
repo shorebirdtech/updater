@@ -1105,13 +1105,20 @@ mod test {
         free_c_string(c_yaml);
         free_parameters(c_params);
 
-        use std::sync::Mutex;
+        use std::sync::{Condvar, Mutex};
         static CALLBACK_MUTEX: Mutex<u32> = Mutex::new(0);
-        // static WAIT_PAIR: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+        // Set once the update thread is inside the patch check, and so holds
+        // the update lock.
+        static IN_PATCH_CHECK: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
         // set up the network hooks to return a patch.
         testing_set_network_hooks(
             |_url: &str, _request| {
+                {
+                    let (entered, cvar) = &IN_PATCH_CHECK;
+                    *entered.lock().unwrap() = true;
+                    cvar.notify_all();
+                }
                 // Hang until we have the lock.
                 let _lock = CALLBACK_MUTEX.lock().unwrap();
                 Ok(PatchCheckResponse {
@@ -1128,13 +1135,17 @@ mod test {
             UNEXPECTED_DOWNLOAD,
             |_url, _event| Ok(()),
         );
-        {
+        let update_thread = {
             // Lock the mutex before starting the thread.
             let _lock = CALLBACK_MUTEX.lock().unwrap();
             // Start our thread, which should hang on that lock.
-            shorebird_start_update_thread();
-            // Wait for the thread to start.
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            let update_thread = updater::start_update_thread();
+            // Wait for the thread to reach the patch check.
+            let (entered, cvar) = &IN_PATCH_CHECK;
+            drop(
+                cvar.wait_while(entered.lock().unwrap(), |entered| !*entered)
+                    .unwrap(),
+            );
             // When another update is already in progress, `update()` returns
             // `UpdateStatus::UpdateInProgress` rather than surfacing an error.
             // The in-flight update continues on its own.
@@ -1142,10 +1153,14 @@ mod test {
                 updater::update(None).unwrap(),
                 crate::UpdateStatus::UpdateInProgress
             );
-        }
+            update_thread
+        };
         // Unlock the lock, and wait for the thread to finish.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        update_thread.join().unwrap();
         // Now we should be able to call into shorebird again.
-        // assert!(updater::update().is_ok());
+        assert_eq!(
+            updater::update(None).unwrap(),
+            crate::UpdateStatus::NoUpdate
+        );
     }
 }

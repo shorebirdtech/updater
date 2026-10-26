@@ -1495,8 +1495,9 @@ pub fn report_launch_success() -> anyhow::Result<()> {
 
 /// This does not return status.  The only output is the change to the saved
 /// cache. The Engine calls this during boot and it will check for an update
-/// and install it if available.
-pub fn start_update_thread() {
+/// and install it if available. Returns the thread's handle, which the engine
+/// drops and tests join.
+pub fn start_update_thread() -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let result = update(None);
         let status = match result {
@@ -1507,7 +1508,7 @@ pub fn start_update_thread() {
             }
         };
         shorebird_info!("Update thread finished with status: {}", status);
-    });
+    })
 }
 
 #[cfg(test)]
