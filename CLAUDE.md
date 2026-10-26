@@ -56,3 +56,15 @@ The Dart `shorebird_code_push` package and the Rust library ship independently: 
 - Existing structs, including `UpdateResult`, have a frozen layout. New data goes in a new struct returned by a new symbol, not in new fields.
 - Status codes are append-only and never renumbered. A new *error* code degrades safely (old Dart maps it to `unknown`). A new *success or benign* code doesn't: old Dart checks success against a fixed allowlist and reports the new code as a failure. `SHOREBIRD_UPDATE_IN_PROGRESS` (4) already does this on packages older than #335. Don't add more.
 - Failure categories stay below the boundary until a structured-result symbol exposes them; see the doc comments on `FailureCategory` (`library/src/updater.rs`) and `NetworkError` (`library/src/network.rs`).
+
+## Landing a PR
+
+No review bot runs here, so a PR lands with `--admin` once these hold at its head commit:
+
+- a separate agent's adversarial review of the full diff is posted as a PR comment, and its blockers are fixed or answered;
+- a maintainer has LGTM'd (a `lgtm` comment, an approval, or they opened the PR). Agents never post `lgtm` or approve. Rebases and small fixes keep an LGTM; a change of scope needs a new one;
+- `gh pr checks <N> --required` is all green, nothing pending, and no review thread is open. `--admin` skips GitHub's gates, so check right before merging.
+
+```sh
+gh pr merge <N> --admin --squash --match-head-commit <full sha>
+```
