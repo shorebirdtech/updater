@@ -1,6 +1,11 @@
 # cspell:words dorny codecov
 name: ci
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded runs: a newer push's result covers the older one.
+  cancel-in-progress: true
+
 on:
   pull_request:
   push:
