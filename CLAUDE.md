@@ -56,3 +56,17 @@ The Dart `shorebird_code_push` package and the Rust library ship independently: 
 - Existing structs, including `UpdateResult`, have a frozen layout. New data goes in a new struct returned by a new symbol, not in new fields.
 - Status codes are append-only and never renumbered. A new *error* code degrades safely (old Dart maps it to `unknown`). A new *success or benign* code doesn't: old Dart checks success against a fixed allowlist and reports the new code as a failure. `SHOREBIRD_UPDATE_IN_PROGRESS` (4) already does this on packages older than #335. Don't add more.
 - Failure categories stay below the boundary until a structured-result symbol exposes them; see the doc comments on `FailureCategory` (`library/src/updater.rs`) and `NetworkError` (`library/src/network.rs`).
+
+## Landing a PR
+
+A PR can land when all of these hold at its current head commit:
+
+- The review bot used on Shorebird's private repos doesn't run here, so an agent-authored PR gets that same review run locally: a separate agent, not the one that wrote the change, reviews the full diff adversarially, looking for reasons it should not land, and its findings are posted as their own PR comment. Blockers are fixed or answered before asking for an LGTM.
+- A maintainer has LGTM'd: a `lgtm` comment, an approving review, or the maintainer opening the PR themselves. A PR an agent opened needs a maintainer's LGTM. Agents never post `lgtm` or approve, even when they act under a maintainer's account, so an `lgtm` is always a human's. An LGTM approves the direction, so small follow-up fixes, rebases and merges from `main` keep it. Ask again when the scope or approach changes.
+- Required checks pass on the head commit, with nothing pending (`gh pr checks <N> --required`), and review threads are resolved. Check again right before merging; `--admin` skips GitHub's own gates, so this check is the gate.
+
+Then squash-merge, pinned to the head you checked:
+
+```sh
+gh pr merge <N> --admin --squash --match-head-commit <full sha>
+```
