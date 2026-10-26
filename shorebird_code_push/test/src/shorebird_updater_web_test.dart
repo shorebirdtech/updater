@@ -73,5 +73,17 @@ void main() {
         }),
       );
     });
+
+    group('restartApp', () {
+      test(
+        'returns false',
+        overridePrint((_) async {
+          await expectLater(
+            shorebirdUpdater.restartApp(),
+            completion(isFalse),
+          );
+        }),
+      );
+    });
   });
 }

@@ -100,7 +100,7 @@ if (status == UpdateStatus.restartRequired) {
 ```
 
 Requires a Shorebird Flutter version with hot restart support on Android or
-iOS; on anything older `restartApp()` safely returns `false`.
+iOS. On anything older `restartApp()` safely returns `false`.
 
 ### Tracks
 

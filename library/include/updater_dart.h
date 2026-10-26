@@ -113,7 +113,7 @@ SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
  * how a downloaded patch is applied without the user relaunching the app.
  *
  * Returns true if the engine accepted the request and will restart
- * momentarily; Dart code continues running until the restart begins, so
+ * momentarily. Dart code continues running until the restart begins, so
  * callers should not assume execution stops at this call. Returns false if
  * restarting is not supported (engine too old, debug build, or an
  * unsupported engine configuration such as multiple concurrent engines).

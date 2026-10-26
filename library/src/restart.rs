@@ -1,7 +1,7 @@
 // Support for restarting the running app to boot a newly installed patch
 // without killing the host process ("hot restart" of production apps).
 //
-// The updater itself cannot restart the Dart VM — only the Flutter engine
+// The updater itself cannot restart the Dart VM: only the Flutter engine
 // can tear down and relaunch the root isolate. Instead, the engine registers
 // a restart handler at startup (via `shorebird_set_restart_handler` on the
 // engine C surface), and `package:shorebird_code_push` requests a restart
@@ -60,14 +60,14 @@ mod tests {
     }
 
     #[test]
-    #[serial(restart_handler)]
+    #[serial]
     fn request_restart_without_handler_returns_false() {
         super::set_restart_handler(None);
         assert!(!super::request_restart());
     }
 
     #[test]
-    #[serial(restart_handler)]
+    #[serial]
     fn request_restart_invokes_handler_and_relays_result() {
         CALL_COUNT.store(0, Ordering::SeqCst);
 

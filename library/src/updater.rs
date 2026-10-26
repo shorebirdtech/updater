@@ -5142,7 +5142,7 @@ mod hot_restart_tests {
         report_launch_success()?;
         assert_eq!(running_patch()?.map(|p| p.number), Some(1));
 
-        // Patch 2 arrives; hot restart into it fails.
+        // Patch 2 arrives. Hot restart into it fails.
         install_fake_patch(2)?;
         report_launch_start()?;
         assert_eq!(running_patch()?.map(|p| p.number), Some(2));

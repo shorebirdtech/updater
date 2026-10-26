@@ -192,7 +192,7 @@ void main() {
     // ShorebirdUpdater.restartApp() → shorebird_restart_app FFI →
     // the Rust relay → the engine-registered restart handler. In
     // production the handler tears down and relaunches the Dart
-    // isolate; here a fake handler records the request.
+    // isolate. Here a fake handler records the request.
     test('restartApp relays to the engine-registered restart handler',
         () async {
       final reason = skipReason;

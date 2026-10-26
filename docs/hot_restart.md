@@ -6,7 +6,7 @@ from the next boot patch, inside the same OS process.
 
 ## Who does what
 
-The updater cannot restart the Dart VM — only the engine can. The updater's
+The updater cannot restart the Dart VM: only the engine can. The updater's
 role is to relay the request and to keep its boot bookkeeping correct across
 more than one launch cycle per process.
 
@@ -30,7 +30,7 @@ ShorebirdUpdater.restartApp()
   it accepted and scheduled a restart.
 - `shorebird_restart_app` (Dart C surface, `c_api/dart.rs`): called by
   `package:shorebird_code_push`. Returns `false` when no handler is
-  registered — old engines, debug builds, or unsupported configurations.
+  registered: old engines, debug builds, or unsupported configurations.
 - `library/src/restart.rs`: the relay between the two.
 
 ## The second launch cycle
@@ -42,22 +42,22 @@ cycle in the same process:
 - `report_launch_start` re-reads `next_boot_patch`, updates the in-memory
   `running_patch`, and records `currently_booting_patch` on disk. If the
   process dies mid-restart, the next cold boot's crash recovery marks the
-  patch bad — the same protection cold boots get.
+  patch bad, the same protection cold boots get.
 - `report_launch_failure` marks the patch bad and falls back, so the
   engine's recovery relaunch boots something known-good.
 - `report_launch_success` records the patch as last booted and reports the
   install event.
 
 The once-per-process guarding of these calls lives in the *engine*
-(`shell/common/shorebird/updater.cc`), not in Rust; the engine's restart
+(`shell/common/shorebird/updater.cc`), not in Rust. The engine's restart
 host resets those guards when it intentionally starts a new launch cycle.
 See `hot_restart_tests` in `library/src/updater.rs` for the contract.
 
 ## Testing
 
-- `library/src/restart.rs` — relay unit tests.
-- `library/src/updater.rs` (`hot_restart_tests`) — second-launch-cycle
+- `library/src/restart.rs`: relay unit tests.
+- `library/src/updater.rs` (`hot_restart_tests`): second-launch-cycle
   contract.
-- `shorebird_code_push/test/integration/all_test.dart` — full FFI round
+- `shorebird_code_push/test/integration/all_test.dart`: full FFI round
   trip against the real Rust library via `library_test_hooks`' fake
   restart handler.

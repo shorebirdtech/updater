@@ -200,7 +200,7 @@ abstract class ShorebirdUpdater {
   /// activity/view controller and plugin registrations are preserved.
   ///
   /// Returns `true` if the engine accepted the restart request. When this
-  /// returns `true` the restart happens asynchronously — Dart code (including
+  /// returns `true` the restart happens asynchronously. Dart code (including
   /// code immediately after this call) may continue to run briefly before the
   /// isolate is torn down, so don't rely on execution stopping here.
   ///
@@ -211,12 +211,14 @@ abstract class ShorebirdUpdater {
   ///   restart support.
   /// * The engine configuration is unsupported (e.g. multiple Flutter engines
   ///   in one process, as with some add-to-app setups).
+  /// * The app is running on a desktop platform (Windows, macOS, or Linux).
+  ///   Hot restart is supported on Android and iOS only.
   ///
   /// When this returns `false`, the downloaded patch still takes effect on
   /// the next full app launch, so callers can fall back to prompting the user
   /// to restart the app.
   ///
-  /// Note: this restarts Dart code even if no new patch is waiting; check
+  /// Note: this restarts Dart code even if no new patch is waiting. Check
   /// [checkForUpdate] for [UpdateStatus.restartRequired] before calling this
   /// if you only want to restart when a patch is pending.
   Future<bool> restartApp();

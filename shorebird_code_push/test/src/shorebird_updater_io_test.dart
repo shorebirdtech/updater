@@ -689,7 +689,7 @@ void main() {
         setUp(() {
           when(updater.currentPatchNumber).thenReturn(0);
           // Engines that predate hot restart support don't export the
-          // symbol; the late-bound FFI lookup throws an ArgumentError.
+          // symbol. The late-bound FFI lookup throws an ArgumentError.
           when(updater.restartApp).thenThrow(
             ArgumentError('Failed to lookup symbol shorebird_restart_app'),
           );
