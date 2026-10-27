@@ -689,7 +689,8 @@ fn is_refused_event(err: &anyhow::Error) -> bool {
         matches!(
             cause.downcast_ref::<crate::network::NetworkError>(),
             Some(crate::network::NetworkError::Server {
-                status: 400 | 413 | 422
+                status: 400 | 413 | 422,
+                ..
             })
         )
     })
