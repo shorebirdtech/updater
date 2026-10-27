@@ -185,9 +185,12 @@ fn handle_network_result(
     match result {
         Ok(response) => Ok(response),
         Err(ureq::Error::StatusCode(code)) => Err(NetworkError::Server { status: code }.into()),
-        Err(ureq::Error::HostNotFound)
-        | Err(ureq::Error::ConnectionFailed)
-        | Err(ureq::Error::Io(_)) => Err(NetworkError::Transport.into()),
+        // Keep ureq's error as the cause, so logs and the failure event say
+        // why the server couldn't be reached (an untrusted certificate, a DNS
+        // failure, a refused connection) instead of only that it couldn't.
+        Err(
+            e @ (ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_)),
+        ) => Err(anyhow::Error::new(e).context(NetworkError::Transport)),
         Err(e) => bail!(e),
     }
 }
@@ -651,6 +654,27 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert_eq!(err.to_string(), "Request failed with status: 500");
+    }
+
+    #[test]
+    fn handle_network_result_keeps_transport_cause() {
+        // What ureq reports when a TLS-inspecting proxy presents a root that
+        // isn't in the updater's trust store.
+        let io = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid peer certificate: UnknownIssuer",
+        );
+        let err = super::handle_network_result(Err(ureq::Error::Io(io))).unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<super::NetworkError>(),
+            Some(&super::NetworkError::Transport)
+        );
+        assert_eq!(
+            format!("{err:#}"),
+            "Network request failed; the server could not be reached.: \
+             io: invalid peer certificate: UnknownIssuer"
+        );
     }
 
     #[test]
