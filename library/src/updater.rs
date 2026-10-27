@@ -193,10 +193,20 @@ impl FailureCategory {
 }
 
 /// Classifies an update failure by walking the `anyhow` error chain for the
-/// typed errors our origins attach. Unambiguous OS error kinds win regardless
-/// of which layer raised them, so e.g. a disk-full while inflating a patch is
-/// reported as `OutOfSpace` rather than `CorruptPatch`.
+/// typed errors our origins attach. A failed request is always `Network` or
+/// `Server`. Otherwise unambiguous OS error kinds win regardless of which
+/// layer raised them, so e.g. a disk-full while inflating a patch is reported
+/// as `OutOfSpace` rather than `CorruptPatch`.
 pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
+    // A failed request is a network failure, even when its cause is an OS
+    // error such as PermissionDenied (Android without the INTERNET
+    // permission), which step 1 would otherwise claim.
+    if let Some(net) = err.downcast_ref::<crate::network::NetworkError>() {
+        return match net {
+            crate::network::NetworkError::Server { .. } => FailureCategory::Server,
+            crate::network::NetworkError::Transport => FailureCategory::Network,
+        };
+    }
     // 1. Unambiguous OS error kinds, wherever in the chain they occurred.
     if let Some(io) = err.downcast_ref::<std::io::Error>() {
         match io.kind() {
@@ -206,12 +216,6 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
         }
     }
     // 2. Our own typed errors.
-    if let Some(net) = err.downcast_ref::<crate::network::NetworkError>() {
-        return match net {
-            crate::network::NetworkError::Server { .. } => FailureCategory::Server,
-            crate::network::NetworkError::Transport => FailureCategory::Network,
-        };
-    }
     if let Some(update_err) = err.downcast_ref::<UpdateError>() {
         return match update_err {
             UpdateError::BadServerResponse => FailureCategory::Server,
@@ -4978,6 +4982,13 @@ mod failure_classification_tests {
             classify_failure(&anyhow::Error::new(NetworkError::Server { status: 503 })),
             FailureCategory::Server
         );
+    }
+
+    #[test]
+    fn transport_error_with_an_os_cause_is_network() {
+        let io = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let err = anyhow::Error::new(io).context(NetworkError::Transport);
+        assert_eq!(classify_failure(&err), FailureCategory::Network);
     }
 
     #[test]
