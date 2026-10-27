@@ -681,7 +681,7 @@ fn send_queued_events(_flush: &std::sync::MutexGuard<'_, ()>) {
 
 /// True when the server refused the event itself (400, 413, 422), so sending
 /// it again gets the same answer. Other 4xx (401, 403, 404, 407) usually come
-/// from a proxy or a misdeployed server rather than the event, so the event
+/// from a proxy or a server deployed wrong rather than the event, so the event
 /// is kept.
 fn is_refused_event(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
