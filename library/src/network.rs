@@ -368,7 +368,7 @@ impl PatchCheckRequest {
 /// using something like <https://github.com/dtolnay/typetag>.
 #[derive(Debug, Serialize)]
 pub struct CreatePatchEventRequest {
-    event: PatchEvent,
+    pub(crate) event: PatchEvent,
 }
 
 /// A response from the server telling us the latest state of patches for this release.
@@ -513,6 +513,7 @@ mod tests {
             timestamp: 1234,
             message: None,
             failure_category: None,
+            event_id: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -537,6 +538,7 @@ mod tests {
             timestamp: 1234,
             message: Some("update_failure: patch 1 failed (...)".to_string()),
             failure_category: Some("network".to_string()),
+            event_id: None,
         };
         let json_string = serde_json::to_string(&event).unwrap();
         assert!(
@@ -558,6 +560,7 @@ mod tests {
             timestamp: 1234,
             message: Some("hello".to_string()),
             failure_category: None,
+            event_id: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -690,6 +693,7 @@ mod tests {
             timestamp: time::unix_timestamp(),
             message: None,
             failure_category: None,
+            event_id: None,
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -724,6 +728,7 @@ mod tests {
                     timestamp: time::unix_timestamp(),
                     message: None,
                     failure_category: None,
+                    event_id: None,
                 },
             },
         );

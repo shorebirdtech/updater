@@ -50,7 +50,7 @@ impl<'de> Deserialize<'de> for EventType {
 /// with our privacy policy:
 /// <https://docs.shorebird.dev/privacy>
 /// An event that is sent to the server when a patch is successfully installed.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PatchEvent {
     /// The Shorebird app_id built into the shorebird.yaml in the app.
     pub app_id: String,
@@ -88,6 +88,13 @@ pub struct PatchEvent {
     /// of `message`. Optional and ignored by servers that don't yet read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_category: Option<String>,
+
+    /// A random UUID made when the event is created, so the server can count
+    /// an event the device sent more than once (a retry after a lost
+    /// response) only once. `None` only for events queued by an updater
+    /// that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
 }
 
 impl PatchEvent {
@@ -110,6 +117,7 @@ impl PatchEvent {
             timestamp: time::unix_timestamp(),
             message: message.map(|s| s.to_string()),
             failure_category: None,
+            event_id: Some(uuid::Uuid::new_v4().to_string()),
         }
     }
 }
@@ -132,6 +140,20 @@ mod tests {
             let deserialized: EventType = serde_json::from_str(&json).unwrap();
             assert_eq!(&deserialized, event_type);
         }
+    }
+
+    #[test]
+    fn event_without_id_deserializes() {
+        let json = r#"{"app_id":"a","arch":"aarch64","client_id":"c",
+            "type":"__patch_install_failure__","patch_number":1,
+            "platform":"android","release_version":"1.0.0","timestamp":1,
+            "message":null}"#;
+        let event: PatchEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.event_id, None);
+        assert!(serde_json::to_value(&event)
+            .unwrap()
+            .get("event_id")
+            .is_none());
     }
 
     #[test]
