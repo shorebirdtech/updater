@@ -1,7 +1,6 @@
 // This file's job is to deal with the update_server and network side
 // of the updater library.
 
-use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
@@ -71,9 +70,16 @@ pub fn patch_check_request_default(
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
     shorebird_info!("Sending patch check request: {}", request.log_line());
-    let result = ureq::post(url).send_json(&request);
+    let result = ureq::post(url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(&request);
     let response = handle_network_result(result)?;
-    let parsed = response.into_body().read_json()?;
+    let parsed = response
+        .into_body()
+        .read_json()
+        .map_err(from_patch_check_body_error)?;
     shorebird_debug!("Patch check response: {:?}", parsed);
     Ok(parsed)
 }
@@ -85,7 +91,7 @@ pub fn download_to_path_default(
     dest: &Path,
     resume_from: u64,
 ) -> anyhow::Result<DownloadResult> {
-    let mut request = ureq::get(url);
+    let mut request = ureq::get(url).config().http_status_as_error(false).build();
     if resume_from > 0 {
         request = request.header("Range", &format!("bytes={resume_from}-"));
     }
@@ -141,6 +147,7 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
     let result = ureq::post(url)
         .config()
         .timeout_global(Some(REPORT_EVENT_TIMEOUT))
+        .http_status_as_error(false)
         .build()
         .send_json(&request);
     handle_network_result(result)?;
@@ -159,10 +166,25 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NetworkError {
     /// The server was reached but responded with a non-success HTTP status.
-    Server { status: u16 },
+    /// `error` is the server's own explanation, when the body was ours.
+    Server {
+        status: u16,
+        error: Option<ServerError>,
+    },
     /// The request never reached the server: offline, DNS failure, connection
     /// refused, or a transport-level IO error.
     Transport,
+    /// A success status whose body wasn't our JSON, so something other than
+    /// our server answered (a captive portal or a proxy).
+    UnexpectedResponse,
+}
+
+/// The `{code, message}` body our server sends with an error status, such as
+/// `patches_check_limit_exceeded` when an app is over its install limit.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct ServerError {
+    pub code: String,
+    pub message: String,
 }
 
 impl std::fmt::Display for NetworkError {
@@ -171,35 +193,111 @@ impl std::fmt::Display for NetworkError {
         // and the server-bound failure diagnostic event. They must stay generic
         // across all network operations (patch check, download, event report).
         match self {
-            NetworkError::Server { status } => write!(f, "Request failed with status: {status}"),
+            NetworkError::Server {
+                status,
+                error: Some(error),
+            } => write!(f, "{} (status {status}): {}", error.code, error.message),
+            // Nothing of ours answers 429; it comes from infrastructure in
+            // front of the server shedding load.
+            NetworkError::Server {
+                status: 429,
+                error: None,
+            } => write!(f, "The server is busy (status 429); try again later."),
+            NetworkError::Server {
+                status,
+                error: None,
+            } => write!(f, "Request failed with status: {status}"),
             NetworkError::Transport => {
                 write!(
                     f,
                     "Network request failed; the server could not be reached."
                 )
             }
+            NetworkError::UnexpectedResponse => write!(
+                f,
+                "The response was not from the Shorebird server; a captive portal or proxy may be answering in its place."
+            ),
         }
     }
 }
 
 impl std::error::Error for NetworkError {}
 
+/// Error bodies are a short JSON object; read no more than this of one.
+const MAX_ERROR_BODY_BYTES: u64 = 16 * 1024;
+
 /// Maps a raw `ureq` result into our typed [`NetworkError`] (or preserves the
 /// underlying `ureq` error for the uncommon cases), returning the response on
-/// success.
+/// success. Requests must set `http_status_as_error(false)`, so an error
+/// status arrives here with its body and the server's explanation is kept.
 fn handle_network_result(
     result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
 ) -> anyhow::Result<ureq::http::Response<ureq::Body>> {
-    match result {
-        Ok(response) => Ok(response),
-        Err(ureq::Error::StatusCode(code)) => Err(NetworkError::Server { status: code }.into()),
+    let response = result.map_err(from_ureq_error)?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    // Only our JSON body explains anything; skip reading any other (a load
+    // balancer's HTML page, a CDN's XML) rather than wait on it.
+    let is_json = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+    let error = if is_json {
+        response
+            .into_body()
+            .with_config()
+            .limit(MAX_ERROR_BODY_BYTES)
+            .read_json::<ServerError>()
+            .ok()
+    } else {
+        None
+    };
+    Err(NetworkError::Server {
+        status: status.as_u16(),
+        error,
+    }
+    .into())
+}
+
+/// Classifies a failure to read a 2xx patch check body.
+fn from_patch_check_body_error(error: ureq::Error) -> anyhow::Error {
+    let ureq::Error::Json(json) = &error else {
+        return from_ureq_error(error);
+    };
+    match json.classify() {
+        // Not JSON at all: something between the device and us (a captive
+        // portal, a filtering proxy) answered, not our server.
+        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+            anyhow::Error::new(error).context(NetworkError::UnexpectedResponse)
+        }
+        // JSON, but not the shape we expect: our server's bug, not the network.
+        serde_json::error::Category::Data => {
+            anyhow::Error::new(error).context(crate::updater::UpdateError::BadServerResponse)
+        }
+        // The connection failed partway through the body.
+        serde_json::error::Category::Io => {
+            anyhow::Error::new(error).context(NetworkError::Transport)
+        }
+    }
+}
+
+fn from_ureq_error(error: ureq::Error) -> anyhow::Error {
+    match error {
+        ureq::Error::StatusCode(status) => NetworkError::Server {
+            status,
+            error: None,
+        }
+        .into(),
         // Keep ureq's error as the cause, so logs and the failure event say
         // why the server couldn't be reached (an untrusted certificate, a DNS
         // failure, a refused connection) instead of only that it couldn't.
-        Err(
-            e @ (ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_)),
-        ) => Err(anyhow::Error::new(e).context(NetworkError::Transport)),
-        Err(e) => bail!(e),
+        e @ (ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_)) => {
+            anyhow::Error::new(e).context(NetworkError::Transport)
+        }
+        e => anyhow::Error::new(e),
     }
 }
 
@@ -665,6 +763,185 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert_eq!(err.to_string(), "Request failed with status: 500");
+    }
+
+    fn response(status: u16, mime_type: &str, body: &str) -> ureq::http::Response<ureq::Body> {
+        let body = ureq::Body::builder()
+            .mime_type(mime_type)
+            .data(body.to_string());
+        ureq::http::Response::builder()
+            .status(status)
+            .header("content-type", mime_type)
+            .body(body)
+            .unwrap()
+    }
+
+    #[test]
+    fn handle_network_result_keeps_the_servers_error() {
+        // What the patch check answers when an app is over its install limit.
+        let body = r#"{"code":"patches_check_limit_exceeded","message":"The number of installs for this app has exceeded the limit.","details":"app_id: abc"}"#;
+        let err =
+            super::handle_network_result(Ok(response(403, "application/json", body))).unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<super::NetworkError>(),
+            Some(&super::NetworkError::Server {
+                status: 403,
+                error: Some(super::ServerError {
+                    code: "patches_check_limit_exceeded".to_string(),
+                    message: "The number of installs for this app has exceeded the limit."
+                        .to_string(),
+                }),
+            })
+        );
+        assert_eq!(
+            err.to_string(),
+            "patches_check_limit_exceeded (status 403): \
+             The number of installs for this app has exceeded the limit."
+        );
+    }
+
+    #[test]
+    fn handle_network_result_ignores_an_error_body_that_is_not_ours() {
+        let err = super::handle_network_result(Ok(response(
+            502,
+            "text/html",
+            "<html>Bad Gateway</html>",
+        )))
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "Request failed with status: 502");
+    }
+
+    #[test]
+    fn handle_network_result_429_says_the_server_is_busy() {
+        let err =
+            super::handle_network_result(Ok(response(429, "text/plain", "Too Many Requests")))
+                .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "The server is busy (status 429); try again later."
+        );
+    }
+
+    /// Answers one HTTP request on localhost with `status` and `body`, and
+    /// returns the base URL to send it to.
+    fn serve_once(status: &str, content_type: &str, body: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // Read the request before answering, so the client's send finishes.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut buf) {
+                request.extend_from_slice(&buf[..n]);
+                if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = stream.write_all(response.as_bytes());
+            // Closing with request bytes unread resets the connection on
+            // Windows, discarding the response. Drain until the client hangs up.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            while matches!(stream.read(&mut buf), Ok(n) if n > 0) {}
+        });
+        url
+    }
+
+    fn check_request() -> super::PatchCheckRequest {
+        super::PatchCheckRequest {
+            app_id: "app_id".to_string(),
+            channel: "stable".to_string(),
+            release_version: "1.0.0+1".to_string(),
+            platform: "android".to_string(),
+            arch: "aarch64".to_string(),
+            client_id: "client_id".to_string(),
+            current_patch_number: None,
+        }
+    }
+
+    #[test]
+    fn patch_check_over_the_limit_says_so() {
+        let base_url = serve_once(
+            "403 Forbidden",
+            "application/json",
+            r#"{"code":"patches_check_limit_exceeded","message":"The number of installs for this app has exceeded the limit."}"#,
+        );
+
+        let err = super::patch_check_request_default(
+            &super::patches_check_url(&base_url),
+            check_request(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "patches_check_limit_exceeded (status 403): \
+             The number of installs for this app has exceeded the limit."
+        );
+    }
+
+    #[test]
+    fn patch_check_answered_by_a_captive_portal_is_unexpected_response() {
+        let base_url = serve_once("200 OK", "text/html", "<html>Sign in to Wi-Fi</html>");
+
+        let err = super::patch_check_request_default(
+            &super::patches_check_url(&base_url),
+            check_request(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<super::NetworkError>(),
+            Some(&super::NetworkError::UnexpectedResponse)
+        );
+    }
+
+    #[test]
+    fn patch_check_with_json_of_the_wrong_shape_is_a_bad_server_response() {
+        let base_url = serve_once("200 OK", "application/json", r#"{"patch":"not a patch"}"#);
+
+        let err = super::patch_check_request_default(
+            &super::patches_check_url(&base_url),
+            check_request(),
+        )
+        .unwrap_err();
+
+        assert!(err.downcast_ref::<super::NetworkError>().is_none());
+        assert_eq!(
+            crate::updater::classify_failure(&err),
+            crate::updater::FailureCategory::Server
+        );
+    }
+
+    #[test]
+    fn download_error_status_leaves_dest_untouched() {
+        let base_url = serve_once("416 Range Not Satisfiable", "text/plain", "");
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("patch");
+
+        let err = super::download_to_path_default(&base_url, &dest, 10).unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<super::NetworkError>(),
+            Some(&super::NetworkError::Server {
+                status: 416,
+                error: None
+            })
+        );
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn handle_network_result_passes_partial_content() {
+        assert!(super::handle_network_result(Ok(response(206, "text/plain", ""))).is_ok());
     }
 
     #[test]

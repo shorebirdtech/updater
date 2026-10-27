@@ -205,7 +205,8 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
     if let Some(net) = err.downcast_ref::<crate::network::NetworkError>() {
         return match net {
             crate::network::NetworkError::Server { .. } => FailureCategory::Server,
-            crate::network::NetworkError::Transport => FailureCategory::Network,
+            crate::network::NetworkError::Transport
+            | crate::network::NetworkError::UnexpectedResponse => FailureCategory::Network,
         };
     }
     // 1. Unambiguous OS error kinds, wherever in the chain they occurred.
@@ -688,7 +689,8 @@ fn is_refused_event(err: &anyhow::Error) -> bool {
         matches!(
             cause.downcast_ref::<crate::network::NetworkError>(),
             Some(crate::network::NetworkError::Server {
-                status: 400 | 413 | 422
+                status: 400 | 413 | 422,
+                ..
             })
         )
     })
@@ -5146,8 +5148,20 @@ mod failure_classification_tests {
             FailureCategory::Network
         );
         assert_eq!(
-            classify_failure(&anyhow::Error::new(NetworkError::Server { status: 503 })),
+            classify_failure(&anyhow::Error::new(NetworkError::Server {
+                status: 503,
+                error: None
+            })),
             FailureCategory::Server
+        );
+    }
+
+    #[test]
+    fn unexpected_response_is_network() {
+        // A captive portal's 200 page never reached our server.
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(NetworkError::UnexpectedResponse)),
+            FailureCategory::Network
         );
     }
 
@@ -5199,8 +5213,11 @@ mod failure_classification_tests {
     fn context_wrapping_preserves_classification() {
         // Extra `.context()` layers (as added at real origins) must not defeat
         // downcast-based classification.
-        let err = anyhow::Error::new(NetworkError::Server { status: 500 })
-            .context("while checking for a patch");
+        let err = anyhow::Error::new(NetworkError::Server {
+            status: 500,
+            error: None,
+        })
+        .context("while checking for a patch");
         assert_eq!(classify_failure(&err), FailureCategory::Server);
     }
 
