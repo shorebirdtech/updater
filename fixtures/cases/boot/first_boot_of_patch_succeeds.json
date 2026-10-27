@@ -1,0 +1,95 @@
+{
+  "description": "Booting a freshly installed patch: launch_start sets the breadcrumb, launch_success promotes it to last_booted_patch and reports __patch_install__.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": null,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "report_launch_start",
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": null,
+            "currently_booting_patch": 1,
+            "boot_started_at": "<number>"
+          }
+        }
+      }
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 1
+    },
+    {
+      "call": "report_launch_success",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": null
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        }
+      ],
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": 1,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 1
+    }
+  ]
+}

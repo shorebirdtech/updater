@@ -1,0 +1,32 @@
+{
+  "description": "With no patch, launch start/success touch nothing on disk and current_boot_patch_number stays 0.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "report_launch_success",
+      "expect_tree": [
+        "app/libapp.so",
+        "storage/state.json"
+      ]
+    }
+  ]
+}
