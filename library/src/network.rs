@@ -802,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_network_result_ignores_an_error_body_that_isnt_ours() {
+    fn handle_network_result_ignores_an_error_body_that_is_not_ours() {
         let err = super::handle_network_result(Ok(response(
             502,
             "text/html",
@@ -847,6 +847,10 @@ mod tests {
                 }
             }
             let _ = stream.write_all(response.as_bytes());
+            // Closing with request bytes unread resets the connection on
+            // Windows, discarding the response. Drain until the client hangs up.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            while matches!(stream.read(&mut buf), Ok(n) if n > 0) {}
         });
         url
     }
