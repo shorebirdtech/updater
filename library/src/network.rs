@@ -133,8 +133,16 @@ pub fn download_to_path_default(
     })
 }
 
+/// How long an event post may take. The flush that sends it holds a lock
+/// other flushes wait on, so one that never gets an answer must give up.
+const REPORT_EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    let result = ureq::post(url).send_json(&request);
+    let result = ureq::post(url)
+        .config()
+        .timeout_global(Some(REPORT_EVENT_TIMEOUT))
+        .build()
+        .send_json(&request);
     handle_network_result(result)?;
     Ok(())
 }

@@ -637,9 +637,9 @@ static EVENT_FLUSH_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new
 
 /// Sends queued events, oldest first, removing each once the server answers
 /// 2xx. Stops at the first event the server couldn't take (offline, 5xx,
-/// 408, 429), leaving it and the rest queued for the next flush. An event the
-/// server refuses with any other 4xx is dropped: sending it again gets the
-/// same answer, and keeping it would block every event behind it.
+/// most 4xx), leaving it and the rest queued for the next flush. An event the
+/// server refuses (see [`is_refused_event`]) is dropped: sending it again
+/// gets the same answer, and keeping it would block every event behind it.
 ///
 /// Must not be called with the config lock held: it takes it to read and
 /// write the queue, and releases it while sending.
@@ -679,13 +679,17 @@ fn send_queued_events(_flush: &std::sync::MutexGuard<'_, ()>) {
     }
 }
 
-/// True when the server answered `err` with a 4xx that retrying won't change.
+/// True when the server refused the event itself (400, 413, 422), so sending
+/// it again gets the same answer. Other 4xx (401, 403, 404, 407) usually come
+/// from a proxy or a misdeployed server rather than the event, so the event
+/// is kept.
 fn is_refused_event(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         matches!(
             cause.downcast_ref::<crate::network::NetworkError>(),
-            Some(crate::network::NetworkError::Server { status })
-                if (400..500).contains(status) && *status != 408 && *status != 429
+            Some(crate::network::NetworkError::Server {
+                status: 400 | 413 | 422
+            })
         )
     })
 }
@@ -698,14 +702,24 @@ fn spawn_event_flush() {
         flush_queued_events();
         return;
     }
-    let _handle = std::thread::spawn(flush_queued_events);
+    // Builder rather than thread::spawn, which panics (aborting the app)
+    // when the OS won't make a thread.
+    let handle = match std::thread::Builder::new().spawn(flush_queued_events) {
+        Ok(handle) => handle,
+        Err(err) => {
+            shorebird_error!("Failed to start event flush: {:?}", err);
+            return;
+        }
+    };
+    #[cfg(not(any(test, feature = "test-hooks")))]
+    drop(handle);
     #[cfg(any(test, feature = "test-hooks"))]
     {
         let mut threads = EVENT_FLUSH_THREADS
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         threads.retain(|thread| !thread.is_finished());
-        threads.push(_handle);
+        threads.push(handle);
     }
 }
 
@@ -716,11 +730,14 @@ fn queue_or_send_event(state: &mut UpdaterState, config: &UpdateConfig, event: P
     if let Err(err) = state.queue_event(event.clone()) {
         shorebird_error!("Failed to queue event, sending it once: {:?}", err);
         let config = config.clone();
-        std::thread::spawn(move || {
+        let spawned = std::thread::Builder::new().spawn(move || {
             if let Err(err) = crate::network::send_patch_event(event, &config) {
                 shorebird_error!("Failed to report event: {:?}", err);
             }
         });
+        if let Err(err) = spawned {
+            shorebird_error!("Failed to start event send: {:?}", err);
+        }
     }
 }
 
@@ -1604,9 +1621,9 @@ pub fn start_update_thread() -> std::thread::JoinHandle<()> {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
+    use std::fs;
     use std::path::Path;
-    use std::sync::{mpsc, Mutex};
-    use std::{fs, time::Duration};
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
     use crate::{
@@ -1614,8 +1631,7 @@ mod tests {
         config::{testing_reset_config, with_config},
         events::EventType,
         network::{
-            report_event_default, testing_set_network_hooks, CreatePatchEventRequest, NetworkHooks,
-            PatchCheckResponse,
+            testing_set_network_hooks, CreatePatchEventRequest, NetworkHooks, PatchCheckResponse,
         },
         test_utils::{install_fake_patch, write_fake_apk},
         with_state, ExternalFileProvider, Patch,
@@ -1627,32 +1643,6 @@ mod tests {
         fn open(&self) -> anyhow::Result<Box<dyn crate::ReadSeek>> {
             Ok(Box::new(std::io::Cursor::new(vec![])))
         }
-    }
-
-    /// The channel [`report_and_signal`] signals. A static because network
-    /// hooks are `fn` pointers, which can't capture one.
-    static EVENT_REPORTED: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
-
-    fn report_and_signal(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-        let result = report_event_default(url, request);
-        if let Some(sender) = EVENT_REPORTED.lock().unwrap().as_ref() {
-            let _ = sender.send(());
-        }
-        result
-    }
-
-    /// Keeps the default network hooks, but signals the returned receiver
-    /// each time an event report finishes, whether it was sent or failed.
-    fn report_events_to_channel() -> mpsc::Receiver<()> {
-        let (sender, receiver) = mpsc::channel();
-        *EVENT_REPORTED.lock().unwrap() = Some(sender);
-        let defaults = NetworkHooks::default();
-        testing_set_network_hooks(
-            defaults.patch_check_request_fn,
-            defaults.download_to_path_fn,
-            report_and_signal,
-        );
-        receiver
     }
 
     pub fn init_for_testing(tmp_dir: &TempDir, base_url: Option<&str>) {
@@ -2002,7 +1992,6 @@ patch_verification: bogus_mode
             .create();
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
-        let event_reported = report_events_to_channel();
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
@@ -2012,15 +2001,12 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // The download event is reported on a background thread.
-        event_reported
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the patch download event was never reported");
-
-        // Assert that the patch download event was sent.
+        // Assert that the patch download event was sent and left the queue.
         event_mock.expect(1).assert();
-
-        Ok(())
+        with_state(|state| {
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })
     }
 
     #[serial]
@@ -2063,7 +2049,6 @@ patch_verification: bogus_mode
             .create();
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, Some(&server.url()));
-        let event_reported = report_events_to_channel();
 
         // Install the base apk to allow the "downloaded" patch 1 to successfully inflate and install.
         let base = "hello world";
@@ -2073,15 +2058,14 @@ patch_verification: bogus_mode
         let result = super::update(None)?;
         assert_eq!(result, crate::UpdateStatus::UpdateInstalled);
 
-        // The download event is reported on a background thread.
-        event_reported
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the patch download event was never reported");
-
-        // Assert that the patch download event was sent.
+        // The download event was tried once and stays queued for a retry.
         event_mock.expect(1).assert();
-
-        Ok(())
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].identifier, EventType::PatchDownload);
+            Ok(())
+        })
     }
 
     #[serial]
@@ -2528,6 +2512,52 @@ patch_verification: bogus_mode
         // A 4xx gets the same answer every time, so the event is dropped
         // rather than blocking the queue.
         assert_eq!(update_with_queued_events(400, 2, 2), 0);
+    }
+
+    #[serial]
+    #[test]
+    fn only_refusals_of_the_event_itself_drop_it() {
+        // A proxy's 403 or a rate limit's 429 isn't about the event, so the
+        // event is kept for the next flush.
+        assert_eq!(update_with_queued_events(403, 2, 1), 2);
+        assert_eq!(update_with_queued_events(429, 2, 1), 2);
+        assert_eq!(update_with_queued_events(422, 2, 2), 0);
+    }
+
+    #[serial]
+    #[test]
+    fn offline_events_stay_queued() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            crate::network::UNEXPECTED_DOWNLOAD,
+            |_url, _event| Err(crate::network::NetworkError::Transport.into()),
+        );
+        install_fake_patch(1).unwrap();
+        crate::report_launch_start().unwrap();
+        crate::report_launch_success().unwrap();
+        super::update(None).unwrap();
+
+        let events = with_state(|state| Ok(state.copy_events(10))).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].identifier, EventType::PatchInstallSuccess);
+    }
+
+    #[serial]
+    #[test]
+    fn update_skips_its_flush_while_another_is_running() {
+        // A launch flush stuck on the network must not hold up the patch
+        // check; the running flush covers the queue. 0 sends: the mock
+        // asserts update() didn't post while the lock was held.
+        let _running = super::EVENT_FLUSH_LOCK.lock().unwrap();
+        assert_eq!(update_with_queued_events(201, 2, 0), 2);
     }
 
     /// Every event the updater sent, in order. A static because network hooks
