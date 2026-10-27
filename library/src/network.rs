@@ -76,12 +76,10 @@ pub fn patch_check_request_default(
         .build()
         .send_json(&request);
     let response = handle_network_result(result)?;
-    // A 2xx that isn't our JSON came from something between the device and
-    // us (a captive portal, a filtering proxy), not from our server.
-    let parsed = response.into_body().read_json().map_err(|e| match e {
-        e @ ureq::Error::Json(_) => anyhow::Error::new(e).context(NetworkError::UnexpectedResponse),
-        e => from_ureq_error(e),
-    })?;
+    let parsed = response
+        .into_body()
+        .read_json()
+        .map_err(from_patch_check_body_error)?;
     shorebird_debug!("Patch check response: {:?}", parsed);
     Ok(parsed)
 }
@@ -198,7 +196,7 @@ impl std::fmt::Display for NetworkError {
             NetworkError::Server {
                 status,
                 error: Some(error),
-            } => write!(f, "{} ({}, status {status})", error.message, error.code),
+            } => write!(f, "{} (status {status}): {}", error.code, error.message),
             // Nothing of ours answers 429; it comes from infrastructure in
             // front of the server shedding load.
             NetworkError::Server {
@@ -240,18 +238,50 @@ fn handle_network_result(
     if status.is_success() {
         return Ok(response);
     }
-    // A body that isn't ours (a load balancer's HTML page) is no explanation.
-    let error = response
-        .into_body()
-        .with_config()
-        .limit(MAX_ERROR_BODY_BYTES)
-        .read_json::<ServerError>()
-        .ok();
+    // Only our JSON body explains anything; skip reading any other (a load
+    // balancer's HTML page, a CDN's XML) rather than wait on it.
+    let is_json = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+    let error = if is_json {
+        response
+            .into_body()
+            .with_config()
+            .limit(MAX_ERROR_BODY_BYTES)
+            .read_json::<ServerError>()
+            .ok()
+    } else {
+        None
+    };
     Err(NetworkError::Server {
         status: status.as_u16(),
         error,
     }
     .into())
+}
+
+/// Classifies a failure to read a 2xx patch check body.
+fn from_patch_check_body_error(error: ureq::Error) -> anyhow::Error {
+    let ureq::Error::Json(json) = &error else {
+        return from_ureq_error(error);
+    };
+    match json.classify() {
+        // Not JSON at all: something between the device and us (a captive
+        // portal, a filtering proxy) answered, not our server.
+        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+            anyhow::Error::new(error).context(NetworkError::UnexpectedResponse)
+        }
+        // JSON, but not the shape we expect: our server's bug, not the network.
+        serde_json::error::Category::Data => {
+            anyhow::Error::new(error).context(crate::updater::UpdateError::BadServerResponse)
+        }
+        // The connection failed partway through the body.
+        serde_json::error::Category::Io => {
+            anyhow::Error::new(error).context(NetworkError::Transport)
+        }
+    }
 }
 
 fn from_ureq_error(error: ureq::Error) -> anyhow::Error {
@@ -741,6 +771,7 @@ mod tests {
             .data(body.to_string());
         ureq::http::Response::builder()
             .status(status)
+            .header("content-type", mime_type)
             .body(body)
             .unwrap()
     }
@@ -765,8 +796,8 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            "The number of installs for this app has exceeded the limit. \
-             (patches_check_limit_exceeded, status 403)"
+            "patches_check_limit_exceeded (status 403): \
+             The number of installs for this app has exceeded the limit."
         );
     }
 
@@ -848,8 +879,8 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "The number of installs for this app has exceeded the limit. \
-             (patches_check_limit_exceeded, status 403)"
+            "patches_check_limit_exceeded (status 403): \
+             The number of installs for this app has exceeded the limit."
         );
     }
 
@@ -867,6 +898,41 @@ mod tests {
             err.downcast_ref::<super::NetworkError>(),
             Some(&super::NetworkError::UnexpectedResponse)
         );
+    }
+
+    #[test]
+    fn patch_check_with_json_of_the_wrong_shape_is_a_bad_server_response() {
+        let base_url = serve_once("200 OK", "application/json", r#"{"patch":"not a patch"}"#);
+
+        let err = super::patch_check_request_default(
+            &super::patches_check_url(&base_url),
+            check_request(),
+        )
+        .unwrap_err();
+
+        assert!(err.downcast_ref::<super::NetworkError>().is_none());
+        assert_eq!(
+            crate::updater::classify_failure(&err),
+            crate::updater::FailureCategory::Server
+        );
+    }
+
+    #[test]
+    fn download_error_status_leaves_dest_untouched() {
+        let base_url = serve_once("416 Range Not Satisfiable", "text/plain", "");
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("patch");
+
+        let err = super::download_to_path_default(&base_url, &dest, 10).unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<super::NetworkError>(),
+            Some(&super::NetworkError::Server {
+                status: 416,
+                error: None
+            })
+        );
+        assert!(!dest.exists());
     }
 
     #[test]
