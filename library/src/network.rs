@@ -4,7 +4,7 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::string::ToString;
 
@@ -120,8 +120,7 @@ pub fn download_to_path_default(
         File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
     };
 
-    std::io::copy(&mut response.into_body().as_reader(), &mut file)
-        .with_file_context(FileOperation::WriteFile, dest)?;
+    copy_body_to_file(&mut response.into_body().as_reader(), &mut file, dest)?;
 
     let total_bytes = std::fs::metadata(dest)
         .with_file_context(FileOperation::ReadFile, dest)?
@@ -200,6 +199,29 @@ fn handle_network_result(
             e @ (ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_)),
         ) => Err(anyhow::Error::new(e).context(NetworkError::Transport)),
         Err(e) => bail!(e),
+    }
+}
+
+/// Streams a response body into `file`, keeping read and write failures
+/// apart: a body that stops mid-download (the peer disconnected, the
+/// connection timed out) is a network failure, and only a failed write is a
+/// file failure. `std::io::copy` returns both as one `io::Error`, which
+/// reported every dropped connection as "Failed to write to file".
+fn copy_body_to_file(
+    body: &mut impl Read,
+    file: &mut impl Write,
+    dest: &Path,
+) -> anyhow::Result<()> {
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = match body.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(anyhow::Error::new(e).context(NetworkError::Transport)),
+        };
+        file.write_all(&buf[..n])
+            .with_file_context(FileOperation::WriteFile, dest)?;
     }
 }
 
@@ -426,6 +448,7 @@ pub fn download_to_path(
 #[cfg(test)]
 mod tests {
     use crate::{network::PatchCheckResponse, time};
+    use std::path::Path;
 
     use super::{patches_events_url, PatchEvent};
     use crate::events::EventType;
@@ -686,6 +709,83 @@ mod tests {
             "Network request failed; the server could not be reached.: \
              io: invalid peer certificate: UnknownIssuer"
         );
+    }
+
+    /// A body that yields `data`, then fails the way ureq does when the
+    /// server drops the connection mid-download.
+    struct DroppedBody<'a> {
+        data: &'a [u8],
+    }
+
+    impl std::io::Read for DroppedBody<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.data.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "Peer disconnected",
+                ));
+            }
+            let n = self.data.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.data[..n]);
+            self.data = &self.data[n..];
+            Ok(n)
+        }
+    }
+
+    /// A file whose writes fail because the disk is full.
+    struct FullDisk;
+
+    impl std::io::Write for FullDisk {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn copy_body_to_file_copies_whole_body() {
+        let mut out = Vec::new();
+        super::copy_body_to_file(&mut &b"patch bytes"[..], &mut out, Path::new("dest")).unwrap();
+        assert_eq!(out, b"patch bytes");
+    }
+
+    #[test]
+    fn copy_body_to_file_dropped_connection_is_network() {
+        let mut out = Vec::new();
+        let err = super::copy_body_to_file(
+            &mut DroppedBody { data: b"partial" },
+            &mut out,
+            Path::new("dest"),
+        )
+        .unwrap_err();
+
+        // The bytes before the drop are kept, so the next attempt resumes.
+        assert_eq!(out, b"partial");
+        assert_eq!(
+            crate::updater::classify_failure(&err),
+            crate::updater::FailureCategory::Network
+        );
+        assert_eq!(
+            format!("{err:#}"),
+            "Network request failed; the server could not be reached.: Peer disconnected"
+        );
+    }
+
+    #[test]
+    fn copy_body_to_file_write_failure_is_file_error() {
+        let err =
+            super::copy_body_to_file(&mut &b"patch bytes"[..], &mut FullDisk, Path::new("dest"))
+                .unwrap_err();
+
+        assert_eq!(
+            crate::updater::classify_failure(&err),
+            crate::updater::FailureCategory::OutOfSpace
+        );
+        assert!(err
+            .to_string()
+            .starts_with("Failed to write to file 'dest'"));
     }
 
     #[test]
