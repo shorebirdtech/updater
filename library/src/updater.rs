@@ -4873,13 +4873,14 @@ mod patch_check_current_patch_number_tests {
         with_state,
     };
 
-    /// `current_patch_number` was `None` on the wire (the bug we're guarding).
+    /// `current_patch_number` was `None` on the wire: expected before launch
+    /// start, the bug when the process is running a patch.
     const FIELD_OMITTED: i64 = -1;
     /// The patch-check hook never ran.
     const HOOK_NOT_CALLED: i64 = i64::MIN;
 
     /// Last `current_patch_number` seen by the patch-check hook. Shared by
-    /// both tests; safe because they are `#[serial]` (only one runs at a
+    /// every test here; safe because they are `#[serial]` (only one runs at a
     /// time) and `arrange_capturing_hooks` resets it before each check.
     static CAPTURED: AtomicI64 = AtomicI64::new(HOOK_NOT_CALLED);
 
