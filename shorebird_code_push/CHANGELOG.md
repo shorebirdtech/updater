@@ -4,6 +4,9 @@
   code in place so a downloaded patch takes effect without the user
   relaunching the app. Requires an engine with hot restart support, returns
   `false` (patch still applies on next launch) on older engines.
+- note: `restartApp()` is a new member on `ShorebirdUpdater`. Code that
+  `implements ShorebirdUpdater` (hand-written test fakes, most often) has to
+  add it. Code that uses the updater is unaffected.
 
 # 2.0.7
 

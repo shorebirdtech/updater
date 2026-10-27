@@ -40,9 +40,23 @@ A hot restart is, from the updater's perspective, simply a second
 cycle in the same process:
 
 - `report_launch_start` re-reads `next_boot_patch`, updates the in-memory
-  `running_patch`, and records `currently_booting_patch` on disk. If the
-  process dies mid-restart, the next cold boot's crash recovery marks the
-  patch bad, the same protection cold boots get.
+  `running_patch`, and records `currently_booting_patch` on disk. It also
+  flags the breadcrumb as a repeat cycle when this live process already
+  reported a successful launch of that same patch. That evidence is a
+  session-scoped global set in `report_launch_success`, not the on-disk
+  `last_booted_patch`, which survives a reboot and so cannot say whether
+  the running process ever got the patch up. If the process then dies,
+  the next launch's crash recovery
+  (`handle_prior_boot_failure_if_necessary`) drops a repeat-cycle
+  breadcrumb and leaves the patch installed, rather than marking it bad.
+  A patch that has run is not condemned by a death nothing attributes to
+  it. A first boot in a fresh process carries no flag and is still rolled
+  back on a crash, so cold-boot protection is unchanged.
+- A spared breadcrumb queues no event. `PatchInstallFailure` would be a
+  false statement about a patch that booted, and there is no event type
+  for a launch cycle that died without implicating its patch. That is a
+  gap in field visibility, and closing it needs a server-side contract
+  change rather than a change here.
 - `report_launch_failure` marks the patch bad and falls back, so the
   engine's recovery relaunch boots something known-good.
 - `report_launch_success` records the patch as last booted and reports the

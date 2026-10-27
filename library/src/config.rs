@@ -55,6 +55,36 @@ pub fn set_running_patch_number(patch_number: Option<usize>) {
         .expect("Failed to acquire running_patch lock.") = patch_number;
 }
 
+/// The patch this process has booted all the way to a reported success,
+/// if any. Session-scoped for the same reason `running_patch` is, and
+/// deliberately separate from the on-disk `last_booted_patch`: that one
+/// survives a reboot, so it cannot say whether the *live* process ever
+/// got the patch running. Telling a hot restart from a fresh cold boot
+/// needs exactly that distinction, and getting it wrong in the
+/// permissive direction disables crash recovery on a patch that is
+/// killing the app.
+///
+/// Unlike `running_patch`, a later launch failure does not clear this.
+/// A patch that booted does not stop having booted because a subsequent
+/// cycle failed, and the engine's recovery relaunch back onto it is a
+/// repeat cycle, not a first boot.
+fn global_successfully_booted_patch() -> &'static Mutex<Option<usize>> {
+    static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
+    INSTANCE.get_or_init(|| Mutex::new(None))
+}
+
+pub fn successfully_booted_patch_number() -> Option<usize> {
+    *global_successfully_booted_patch()
+        .lock()
+        .expect("Failed to acquire successfully_booted_patch lock.")
+}
+
+pub fn set_successfully_booted_patch_number(patch_number: Option<usize>) {
+    *global_successfully_booted_patch()
+        .lock()
+        .expect("Failed to acquire successfully_booted_patch lock.") = patch_number;
+}
+
 /// Unit tests should call this to reset the config between tests.
 /// Also exposed (via the `test-hooks` Cargo feature) to the
 /// `library_test_hooks` cdylib so Dart-side integration tests can reset
@@ -65,6 +95,7 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
+    set_successfully_booted_patch_number(None);
     crate::restart::set_restart_handler(None);
 }
 

@@ -343,6 +343,22 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
+            // A breadcrumb left by a repeat launch cycle is not evidence
+            // against the patch: the same process had already booted it to
+            // a success, so whatever killed it is not something we can pin
+            // on the patch. Drop the breadcrumb and leave the patch
+            // installed. A restart that fails for the patch's own sake
+            // takes the explicit `report_launch_failure` path instead.
+            if state.boot_is_repeat_cycle() {
+                shorebird_info!(
+                    "crash_recovery: patch {} did not finish a repeat launch cycle, but had \
+                     already booted successfully; leaving it installed.",
+                    patch.number
+                );
+                state.clear_boot_breadcrumb()?;
+                return Ok(());
+            }
+
             let boot_time_info = state
                 .boot_started_at()
                 .map(|ts| format!(",boot_started_at={ts}"))
@@ -1381,13 +1397,30 @@ pub fn report_launch_start() -> anyhow::Result<()> {
 
     with_mut_state(|state| {
         let next_boot_patch = state.next_boot_patch();
+        // A repeat cycle is one where this live process already reported
+        // a successful launch of the same patch, which is what a hot
+        // restart does. The evidence has to be session-scoped: the
+        // on-disk `last_booted_patch` survives a reboot, so after one
+        // success every ordinary cold boot would also satisfy it and a
+        // patch that crashes the app on a later boot would stop being
+        // rolled back. `running_patch` is no better, since
+        // `report_launch_start` sets it itself, so a second start before
+        // any success would pass.
+        let is_repeat_cycle = match &next_boot_patch {
+            Some(next) => crate::config::successfully_booted_patch_number() == Some(next.number),
+            None => false,
+        };
         // Capture what this run is using. None means we're booting the base
         // release. Backed by a session-scoped global, not by PatchesState
         // on disk, so this is in-memory only — the record_boot_start_for_patch
         // call below is the only disk write on this path.
         state.set_running_patch(next_boot_patch.as_ref().map(|p| p.number));
         if let Some(next_boot_patch) = next_boot_patch {
-            state.record_boot_start_for_patch(next_boot_patch.number)?;
+            if is_repeat_cycle {
+                state.record_repeat_boot_start_for_patch(next_boot_patch.number)?;
+            } else {
+                state.record_boot_start_for_patch(next_boot_patch.number)?;
+            }
         }
         Ok(())
     })
@@ -1459,6 +1492,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         let maybe_previous_boot_patch = state.last_successfully_booted_patch();
 
         state.record_boot_success()?;
+        crate::config::set_successfully_booted_patch_number(Some(booting_patch.number));
 
         // Check whether last_successfully_booted_patch has changed. If so, we should report a
         // PatchInstallSuccess event.
@@ -4688,16 +4722,20 @@ mod multi_engine_tests {
     /// - The call happens right before the patched snapshot is actually loaded
     ///
     /// This test documents the Rust API behavior in isolation:
-    /// If report_launch_start() IS called multiple times (e.g., from tests or custom embedders):
+    /// A second launch cycle in one process must not get the patch rolled
+    /// back when that process later dies. This is the shape a hot restart
+    /// takes, and the shape a second FlutterEngine takes.
     ///
     /// Scenario:
     /// 1. Engine A: starts boot (sets currently_booting_patch)
     /// 2. Engine A: completes boot (clears currently_booting_patch)
-    /// 3. Engine B: starts boot (RE-SETS currently_booting_patch)
+    /// 3. Engine B: starts boot (re-arms currently_booting_patch, flagged
+    ///    as a repeat cycle because this process already booted the patch)
     /// 4. Process is killed before Engine B completes
-    /// 5. On restart, crash recovery sees currently_booting_patch set and marks patch as bad
+    /// 5. On the next init, crash recovery sees the repeat-cycle flag,
+    ///    drops the breadcrumb, and leaves the patch installed
     ///
-    /// This would be a FALSE POSITIVE - the patch didn't actually fail.
+    /// Rolling back here would be a false positive: the patch booted.
     #[serial]
     #[test]
     fn multi_engine_false_positive_rollback() -> Result<()> {
@@ -4748,9 +4786,11 @@ mod multi_engine_tests {
         report_launch_start()?;
 
         with_state(|state| {
-            // BUG: currently_booting_patch is now set AGAIN!
-            // This is the root cause - Engine B re-set the flag.
             assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            assert!(
+                state.boot_is_repeat_cycle(),
+                "Engine A's success makes Engine B's start a repeat cycle"
+            );
             Ok(())
         })?;
 
@@ -4763,27 +4803,155 @@ mod multi_engine_tests {
         init_for_testing(&tmp_dir, None);
         set_noop_network_hooks();
 
-        // The patch should NOT be marked as bad (Engine A booted successfully!)
-        // But when report_launch_start() is called multiple times at the Rust level,
-        // the second call re-sets currently_booting_patch, causing a false positive.
-        //
-        // NOTE: The C++ fix in TryLoadFromPatch() uses std::once_flag to prevent
-        // multiple calls, so this scenario cannot happen in production. This test
-        // documents the Rust API behavior when called directly without that guard.
         with_mut_state(|state| {
-            // When report_launch_start() is called multiple times without a guard,
-            // the patch is incorrectly marked as known bad.
+            assert!(
+                !state.is_known_bad_patch(1),
+                "a patch that already booted must survive an unfinished repeat cycle"
+            );
+            assert_eq!(
+                state.next_boot_patch().map(|p| p.number),
+                Some(1),
+                "the patch must still be the boot target"
+            );
+            assert!(
+                state.currently_booting_patch().is_none(),
+                "crash recovery must drop the breadcrumb it spared"
+            );
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// The mirror of `multi_engine_false_positive_rollback`, and the case
+    /// that rules out guarding on the two persisted patch pointers.
+    ///
+    /// A patch boots to a success, then the process exits normally. The
+    /// *next* cold boot crashes before reporting anything. On disk that
+    /// leaves `currently_booting_patch == last_booted_patch`, exactly as a
+    /// repeat cycle does, so a guard reading only those two would spare a
+    /// patch that is crashing the app and leave the device in a boot loop.
+    /// Only the repeat-cycle flag tells the two apart, and it is set from
+    /// `successfully_booted_patch_number`, the session-scoped global
+    /// `report_launch_success` writes.
+    #[serial]
+    #[test]
+    fn cold_boot_crash_after_an_earlier_success_still_rolls_back() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        install_fake_patch(1)?;
+
+        // Process 1: boots the patch all the way to a success.
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Process 2: a fresh process, so the session-scoped success
+        // global is clear. It starts booting the same patch and is killed.
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        report_launch_start()?;
+        with_state(|state| {
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            assert!(
+                !state.boot_is_repeat_cycle(),
+                "a first cycle in a new process is not a repeat cycle"
+            );
+            Ok(())
+        })?;
+
+        // Process 3: crash recovery has a first-cycle breadcrumb to act on.
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        with_mut_state(|state| {
             assert!(
                 state.is_known_bad_patch(1),
-                "Expected patch to be marked bad when report_launch_start() called twice"
+                "a crash on a fresh boot must still tombstone the patch"
             );
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
 
-            // The next_boot_patch is None because patch was marked as bad
+        Ok(())
+    }
+
+    /// Two `report_launch_start` calls with no success between them are
+    /// not a repeat cycle, even when a *previous* process booted the same
+    /// patch. Neither of the two weaker signals rules this out: the
+    /// on-disk `last_booted_patch` is set from the previous process, and
+    /// `running_patch` is set by `report_launch_start` itself. Only
+    /// `successfully_booted_patch_number`, written by
+    /// `report_launch_success`, is evidence this process got the patch
+    /// up. A patch that native-crashes before reporting success must
+    /// still be rolled back, or the device boot-loops with recovery off.
+    #[serial]
+    #[test]
+    fn two_starts_without_a_success_are_not_a_repeat_cycle() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        install_fake_patch(1)?;
+
+        // Process 1 boots the patch to a success, so last_booted_patch
+        // is 1 on disk from here on.
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Process 2 starts twice and never reports a success.
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        report_launch_start()?;
+        report_launch_start()?;
+        with_state(|state| {
             assert!(
-                state.next_boot_patch().is_none(),
-                "Expected next_boot_patch to be None after patch marked bad"
+                !state.boot_is_repeat_cycle(),
+                "no success in this process means no repeat cycle"
             );
+            Ok(())
+        })?;
 
+        // Process 3: recovery must still tombstone.
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// The escape hatch the sparing rule depends on. Crash recovery
+    /// declines to judge a repeat cycle precisely because a restart that
+    /// fails for the patch's own sake reports it, so that report has to
+    /// still mark the patch bad.
+    #[serial]
+    #[test]
+    fn an_explicit_failure_on_a_repeat_cycle_still_marks_the_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        install_fake_patch(1)?;
+
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // The hot restart cycle, onto the same patch.
+        report_launch_start()?;
+        with_state(|state| {
+            assert!(state.boot_is_repeat_cycle());
+            Ok(())
+        })?;
+
+        crate::report_launch_failure()?;
+
+        with_mut_state(|state| {
+            assert!(
+                state.is_known_bad_patch(1),
+                "an explicit failure is a judgement on the patch, repeat cycle or not"
+            );
+            assert!(state.next_boot_patch().is_none());
+            assert!(state.currently_booting_patch().is_none());
             Ok(())
         })?;
 
