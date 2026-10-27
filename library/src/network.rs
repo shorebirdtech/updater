@@ -133,8 +133,16 @@ pub fn download_to_path_default(
     })
 }
 
+/// How long an event post may take. The flush that sends it holds a lock
+/// other flushes wait on, so one that never gets an answer must give up.
+const REPORT_EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    let result = ureq::post(url).send_json(&request);
+    let result = ureq::post(url)
+        .config()
+        .timeout_global(Some(REPORT_EVENT_TIMEOUT))
+        .build()
+        .send_json(&request);
     handle_network_result(result)?;
     Ok(())
 }
@@ -368,7 +376,7 @@ impl PatchCheckRequest {
 /// using something like <https://github.com/dtolnay/typetag>.
 #[derive(Debug, Serialize)]
 pub struct CreatePatchEventRequest {
-    event: PatchEvent,
+    pub(crate) event: PatchEvent,
 }
 
 /// A response from the server telling us the latest state of patches for this release.
@@ -513,6 +521,7 @@ mod tests {
             timestamp: 1234,
             message: None,
             failure_category: None,
+            event_id: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -537,6 +546,7 @@ mod tests {
             timestamp: 1234,
             message: Some("update_failure: patch 1 failed (...)".to_string()),
             failure_category: Some("network".to_string()),
+            event_id: None,
         };
         let json_string = serde_json::to_string(&event).unwrap();
         assert!(
@@ -558,6 +568,7 @@ mod tests {
             timestamp: 1234,
             message: Some("hello".to_string()),
             failure_category: None,
+            event_id: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -690,6 +701,7 @@ mod tests {
             timestamp: time::unix_timestamp(),
             message: None,
             failure_category: None,
+            event_id: None,
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -724,6 +736,7 @@ mod tests {
                     timestamp: time::unix_timestamp(),
                     message: None,
                     failure_category: None,
+                    event_id: None,
                 },
             },
         );

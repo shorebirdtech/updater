@@ -13,6 +13,10 @@ use super::{disk_io, PatchInfo};
 
 const STATE_FILE_NAME: &str = "state.json";
 
+/// The most events kept waiting to be sent. A device offline for long enough
+/// to queue more drops the oldest, so the state file stays small.
+pub const MAX_QUEUED_EVENTS: usize = 50;
+
 /// Files and directories under `cache_dir` that shorebird has ever
 /// written. On a release-version change or unparseable state we wipe
 /// these and keep going. `state.json` is intentionally absent — it's
@@ -35,8 +39,8 @@ const SHOREBIRD_OWNED_PATHS: &[&str] = &["patches", "pointers.json", "patches_st
 ///
 /// Per-patch state lives inside [`PatchLifecycle`] (one document per
 /// patch number under `{cache}/patches/{N}/state.json`). UpdaterState
-/// itself only owns the per-install `client_id` and the per-release event
-/// queue; all other patch-related fields are pointers managed by the
+/// itself only owns the per-install `client_id` and the event queue; all
+/// other patch-related fields are pointers managed by the
 /// lifecycle.
 // TODO(eseidel): Split the per-release state from the per-install state
 // so per-install state isn't reset on release-version change.
@@ -56,9 +60,9 @@ pub struct UpdaterState {
 
 /// UpdaterState fields that are serialized to disk at `{cache}/state.json`.
 ///
-/// Every per-release field on disk (this struct, `pointers.json`, and the
-/// per-patch `state.json` files under `patches/`) is wiped when
-/// `release_version` changes. The release version effectively names a
+/// Every per-release field on disk (`release_version` here, `pointers.json`,
+/// and the per-patch `state.json` files under `patches/`) is wiped when
+/// `release_version` changes; `client_id` and `queued_events` are kept. The release version effectively names a
 /// unique build of the engine + updater, since the updater ships
 /// embedded in the engine — there's no "version range" of updater code
 /// that's mutually compatible. On a release-version mismatch, anything
@@ -74,8 +78,11 @@ struct SerializedState {
     /// app's reported release version triggers a wipe of all per-release
     /// state.
     release_version: String,
-    /// Events that have not yet been sent to the server. Format may
-    /// change between releases, so this is per-release state.
+    /// Events that have not yet been sent to the server, oldest first. Kept
+    /// across release-version changes: each event names its own release, and
+    /// dropping them would lose installs the server should count. An updater
+    /// that can't read an older format falls back to a new state (see
+    /// `load_or_new_on_error`), as for any unreadable state file.
     queued_events: Vec<PatchEvent>,
 }
 
@@ -106,6 +113,7 @@ impl UpdaterState {
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
         client_id: String,
+        queued_events: Vec<PatchEvent>,
     ) -> Self {
         Self {
             lifecycle: PatchLifecycle::load_or_default(cache_dir.clone(), download_dir),
@@ -115,7 +123,7 @@ impl UpdaterState {
             serialized_state: SerializedState {
                 client_id,
                 release_version,
-                queued_events: Vec::new(),
+                queued_events,
             },
         }
     }
@@ -159,6 +167,7 @@ impl UpdaterState {
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
         client_id: String,
+        queued_events: Vec<PatchEvent>,
     ) -> Self {
         for relative in SHOREBIRD_OWNED_PATHS {
             let path = cache_dir.join(relative);
@@ -188,6 +197,7 @@ impl UpdaterState {
             patch_public_key,
             verification_mode,
             client_id,
+            queued_events,
         );
         if let Err(e) = state.save() {
             shorebird_warn!("Error saving state {:?}, ignoring.", e);
@@ -219,6 +229,7 @@ impl UpdaterState {
                         patch_public_key,
                         verification_mode,
                         loaded.client_id(),
+                        loaded.serialized_state.queued_events,
                     );
                 }
                 loaded
@@ -234,6 +245,7 @@ impl UpdaterState {
                     patch_public_key,
                     verification_mode,
                     generate_client_id(),
+                    Vec::new(),
                 )
             }
         }
@@ -354,8 +366,15 @@ impl UpdaterState {
 
 /// PatchEvent management.
 impl UpdaterState {
+    /// Adds `event` to the end of the queue, dropping the oldest events if
+    /// the queue would hold more than [`MAX_QUEUED_EVENTS`].
     pub fn queue_event(&mut self, event: PatchEvent) -> Result<()> {
-        self.serialized_state.queued_events.push(event);
+        let events = &mut self.serialized_state.queued_events;
+        events.push(event);
+        if events.len() > MAX_QUEUED_EVENTS {
+            let excess = events.len() - MAX_QUEUED_EVENTS;
+            events.drain(..excess);
+        }
         self.save()
     }
 
@@ -368,9 +387,23 @@ impl UpdaterState {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn clear_events(&mut self) -> Result<()> {
         self.serialized_state.queued_events.clear();
         self.save()
+    }
+
+    /// Removes the first queued event equal to `event`, once the server has
+    /// it. Does nothing if it's no longer queued (dropped for space).
+    pub fn remove_event(&mut self, event: &PatchEvent) -> Result<()> {
+        let events = &mut self.serialized_state.queued_events;
+        match events.iter().position(|queued| queued == event) {
+            Some(index) => {
+                events.remove(index);
+                self.save()
+            }
+            None => Ok(()),
+        }
     }
 }
 
@@ -458,6 +491,56 @@ mod tests {
         let original_client_id = original.client_id();
         let next = load(&tmp, "1.0.0+2");
         assert_eq!(next.client_id(), original_client_id);
+    }
+
+    fn event(patch_number: usize) -> PatchEvent {
+        PatchEvent {
+            app_id: "app_id".to_string(),
+            arch: "aarch64".to_string(),
+            client_id: "client_id".to_string(),
+            identifier: crate::events::EventType::PatchInstallSuccess,
+            patch_number,
+            platform: "android".to_string(),
+            release_version: "1.0.0+1".to_string(),
+            timestamp: 1,
+            message: None,
+            failure_category: None,
+            event_id: Some(format!("id-{patch_number}")),
+        }
+    }
+
+    #[test]
+    fn queued_events_persist_across_release_changes() {
+        let tmp = TempDir::new().unwrap();
+        let mut original = load(&tmp, "1.0.0+1");
+        original.queue_event(event(1)).unwrap();
+        let next = load(&tmp, "1.0.0+2");
+        assert_eq!(next.copy_events(10), vec![event(1)]);
+    }
+
+    #[test]
+    fn queue_drops_oldest_past_the_limit() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load(&tmp, "1.0.0+1");
+        for n in 0..MAX_QUEUED_EVENTS + 2 {
+            state.queue_event(event(n)).unwrap();
+        }
+        let events = load(&tmp, "1.0.0+1").copy_events(MAX_QUEUED_EVENTS + 2);
+        assert_eq!(events.len(), MAX_QUEUED_EVENTS);
+        assert_eq!(events[0], event(2));
+        assert_eq!(events[MAX_QUEUED_EVENTS - 1], event(MAX_QUEUED_EVENTS + 1));
+    }
+
+    #[test]
+    fn remove_event_removes_only_that_event() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load(&tmp, "1.0.0+1");
+        state.queue_event(event(1)).unwrap();
+        state.queue_event(event(2)).unwrap();
+        state.remove_event(&event(1)).unwrap();
+        // Removing an event that's gone already is a no-op.
+        state.remove_event(&event(1)).unwrap();
+        assert_eq!(load(&tmp, "1.0.0+1").copy_events(10), vec![event(2)]);
     }
 
     #[test]
