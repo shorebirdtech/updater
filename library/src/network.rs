@@ -282,7 +282,10 @@ pub struct PatchCheckRequest {
     /// per install rather than per device, and _not_ the device's UUID or any
     /// other identifier that has meaning outside of Shorebird.
     pub client_id: String,
-    /// The number of the patch currently running on the device, if any.
+    /// The number of the patch currently running on the device, 0 for the
+    /// base release, or omitted when the updater does not yet know what is
+    /// running (before launch start). Older updaters omit it for the base
+    /// release too.
     ///
     /// Supersedes the legacy `patch_number` field. `patch_number` is
     /// retained server-side for compatibility with older clients that still

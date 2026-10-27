@@ -394,12 +394,8 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 /// Returns true if an update is available for download. Will return false if the update is already
 /// downloaded and ready to install.
 pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bool> {
-    let (client_id, current_patch_number) = with_state(|state| {
-        Ok((
-            state.client_id().to_string(),
-            state.running_patch().map(|p| p.number),
-        ))
-    })?;
+    let client_id = with_state(|state| Ok(state.client_id().to_string()))?;
+    let current_patch_number = current_patch_number_for_check();
 
     let (request, url, request_fn) = with_config(|config| {
         let mut config = config.clone();
@@ -565,7 +561,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         Ok(PatchCheckRequest::new(
             &config,
             &state.client_id(),
-            state.running_patch().map(|p| p.number),
+            current_patch_number_for_check(),
         ))
     })?;
 
@@ -1378,6 +1374,15 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
 /// rollbacks of the running patch — the process is still using it.
 pub fn running_patch() -> anyhow::Result<Option<PatchInfo>> {
     with_state(|state| Ok(state.running_patch()))
+}
+
+/// The `current_patch_number` a patch check sends: the running patch, 0 for
+/// the base release (patch numbers start at 1), or nothing before
+/// `report_launch_start` has recorded what this process booted, so the
+/// server can tell a device on the base release from one whose updater
+/// does not know yet.
+fn current_patch_number_for_check() -> Option<usize> {
+    crate::config::launched_patch_number().map(|patch| patch.unwrap_or(0))
 }
 
 pub fn report_launch_start() -> anyhow::Result<()> {
@@ -4861,7 +4866,7 @@ mod patch_check_current_patch_number_tests {
         network::{
             testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD, UNEXPECTED_REPORT,
         },
-        report_launch_start, report_launch_success,
+        report_launch_failure, report_launch_start, report_launch_success,
         test_utils::install_fake_patch,
         update,
         updater::tests::init_for_testing,
@@ -4948,6 +4953,51 @@ mod patch_check_current_patch_number_tests {
 
         // 1 = running patch sent; -1 = field omitted (the bug); i64::MIN = hook never ran.
         assert_eq!(CAPTURED.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn check_sends_zero_on_the_base_release() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        report_launch_start()?;
+        report_launch_success()?;
+        arrange_capturing_hooks();
+
+        check_for_downloadable_update(None)?;
+
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn check_sends_zero_after_a_patch_fails_to_launch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_failure()?;
+        arrange_capturing_hooks();
+
+        check_for_downloadable_update(None)?;
+
+        // The engine boots the base release after a patch fails to load.
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn check_omits_the_field_before_launch_start() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        arrange_capturing_hooks();
+
+        check_for_downloadable_update(None)?;
+
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), FIELD_OMITTED);
         Ok(())
     }
 }
