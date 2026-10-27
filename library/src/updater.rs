@@ -546,7 +546,11 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
         config.channel = channel.to_string();
     }
 
-    flush_queued_events();
+    // A flush already running (one started at launch) covers the queue;
+    // don't hold up the patch check behind its network request.
+    if let Ok(flush) = EVENT_FLUSH_LOCK.try_lock() {
+        send_queued_events(&flush);
+    }
     let request = with_state(|state| {
         Ok(PatchCheckRequest::new(
             &config,
@@ -628,6 +632,7 @@ static EVENT_FLUSH_LOCK: Mutex<()> = Mutex::new(());
 
 /// Flushes started by [`spawn_event_flush`] that may still be running. Tests
 /// wait on them so a flush can't reach into the next test's state.
+#[cfg(any(test, feature = "test-hooks"))]
 static EVENT_FLUSH_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
 
 /// Sends queued events, oldest first, removing each once the server answers
@@ -639,7 +644,13 @@ static EVENT_FLUSH_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new
 /// Must not be called with the config lock held: it takes it to read and
 /// write the queue, and releases it while sending.
 fn flush_queued_events() {
-    let _flush = EVENT_FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let flush = EVENT_FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    send_queued_events(&flush);
+}
+
+/// The body of [`flush_queued_events`], for a caller already holding
+/// [`EVENT_FLUSH_LOCK`].
+fn send_queued_events(_flush: &std::sync::MutexGuard<'_, ()>) {
     let Ok(config) = copy_update_config() else {
         return;
     };
@@ -687,12 +698,30 @@ fn spawn_event_flush() {
         flush_queued_events();
         return;
     }
-    let handle = std::thread::spawn(flush_queued_events);
-    let mut threads = EVENT_FLUSH_THREADS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    threads.retain(|thread| !thread.is_finished());
-    threads.push(handle);
+    let _handle = std::thread::spawn(flush_queued_events);
+    #[cfg(any(test, feature = "test-hooks"))]
+    {
+        let mut threads = EVENT_FLUSH_THREADS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        threads.retain(|thread| !thread.is_finished());
+        threads.push(_handle);
+    }
+}
+
+/// Queues `event` for the next flush. If the queue can't be saved (a full
+/// disk), sends `event` once on its own thread instead, as the updater did
+/// before it queued installs and downloads, rather than losing it.
+fn queue_or_send_event(state: &mut UpdaterState, config: &UpdateConfig, event: PatchEvent) {
+    if let Err(err) = state.queue_event(event.clone()) {
+        shorebird_error!("Failed to queue event, sending it once: {:?}", err);
+        let config = config.clone();
+        std::thread::spawn(move || {
+            if let Err(err) = crate::network::send_patch_event(event, &config) {
+                shorebird_error!("Failed to report event: {:?}", err);
+            }
+        });
+    }
 }
 
 /// Waits for every flush [`spawn_event_flush`] started.
@@ -964,9 +993,7 @@ fn install_downloaded_patch(
             state.client_id(),
             None,
         );
-        if let Err(err) = state.queue_event(event) {
-            shorebird_error!("Failed to queue patch download event: {:?}", err);
-        }
+        queue_or_send_event(state, config, event);
         Ok(())
     })?;
     spawn_event_flush();
@@ -1542,7 +1569,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
                     state.client_id(),
                     None,
                 );
-                state.queue_event(event)?;
+                queue_or_send_event(&mut state, config, event);
             }
         }
         Ok(!state.copy_events(1).is_empty())
