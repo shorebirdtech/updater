@@ -159,8 +159,9 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
 pub(crate) enum NetworkError {
     /// The server was reached but responded with a non-success HTTP status.
     Server { status: u16 },
-    /// The request never reached the server: offline, DNS failure, connection
-    /// refused, or a transport-level IO error.
+    /// The request never reached the server (offline, DNS failure, connection
+    /// refused), or the connection failed mid-response (the peer disconnected,
+    /// a timeout).
     Transport,
 }
 
@@ -212,7 +213,7 @@ fn copy_body_to_file(
     file: &mut impl Write,
     dest: &Path,
 ) -> anyhow::Result<()> {
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = match body.read(&mut buf) {
             Ok(0) => return Ok(()),
@@ -721,7 +722,7 @@ mod tests {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             if self.data.is_empty() {
                 return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionAborted,
+                    std::io::ErrorKind::UnexpectedEof,
                     "Peer disconnected",
                 ));
             }
