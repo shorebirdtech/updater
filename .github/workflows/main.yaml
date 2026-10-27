@@ -3,6 +3,11 @@ name: ci
 
 on:
   pull_request:
+  # Checks run on the queue's own temp branch, not the PR. Without this
+  # trigger the required contexts never report there and the queue
+  # ejects every PR at the timeout.
+  merge_group:
+    types: [checks_requested]
   push:
     branches:
       - main
@@ -10,6 +15,9 @@ on:
 jobs:
   semantic_pull_request:
     name: ✅ Semantic Pull Request
+    # No pull request to read the title of on a merge_group event. A skipped
+    # job is not a failure, so the ci gate still reports.
+    if: ${{ github.event_name == 'pull_request' }}
     uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/semantic_pull_request.yml@v1
 
   cspell:
