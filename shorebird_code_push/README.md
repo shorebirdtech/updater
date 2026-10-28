@@ -102,6 +102,13 @@ if (status == UpdateStatus.restartRequired) {
 Requires a Shorebird Flutter version with hot restart support on Android or
 iOS. On anything older `restartApp()` safely returns `false`.
 
+Plugins keep their native state across the restart while their Dart state is
+discarded, so `main()` runs again against native objects that believe they
+are still in use. A plugin written only for a cold start can double-register
+listeners or serve the new isolate state belonging to the old one. Exercise a
+restart against the plugins your app uses before putting it behind a button a
+user can press.
+
 ### Tracks
 
 Shorebird supports publishing patches to different tracks, which can be

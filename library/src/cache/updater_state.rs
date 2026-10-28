@@ -297,6 +297,13 @@ impl UpdaterState {
         self.lifecycle.record_boot_failure(patch_number)
     }
 
+    /// Records that a hot restart could not bring up `patch_number`,
+    /// without condemning it. See
+    /// [`PatchLifecycle::record_restart_failure`].
+    pub fn record_restart_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.lifecycle.record_restart_failure(patch_number)
+    }
+
     /// Records that the in-flight boot succeeded.
     pub fn record_boot_success(&mut self) -> Result<()> {
         self.lifecycle.record_boot_success()
@@ -334,8 +341,7 @@ impl UpdaterState {
 
     pub fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         self.lifecycle
-            .pointers()
-            .next_boot_patch
+            .effective_next_boot_patch()
             .map(|n| self.patch_info(n))
     }
 

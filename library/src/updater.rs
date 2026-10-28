@@ -1467,6 +1467,46 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     })
 }
 
+/// Report that a hot restart could not bring up the patch it was
+/// relaunching into.
+///
+/// Unlike [`report_launch_failure`], this does not condemn the patch and
+/// queues no event. The evidence only says the live process failed to
+/// start a second isolate on the patch, and the engine can fail at that
+/// for reasons the patch has no part in; a `PatchInstallFailure` would
+/// be a false accusation, and `mark_bad` would delete the artifacts and
+/// tombstone the patch for the whole release, so a patch that boots
+/// perfectly well from cold would never get another chance.
+///
+/// The patch is instead excluded from the boot target for the rest of
+/// this process, so the engine's recovery relaunch lands on the last
+/// patch that booted (or the base release) rather than failing the same
+/// way again. It stays `Installed`, and the next cold boot tries it
+/// under the ordinary first-cycle breadcrumb, which condemns it if it
+/// really is broken.
+pub fn report_restart_failure() -> anyhow::Result<()> {
+    shorebird_info!("Reporting failed hot restart.");
+
+    with_config(|config| {
+        let mut state = UpdaterState::load_or_new_on_error(
+            &config.storage_dir,
+            &config.download_dir,
+            &config.release_version,
+            config.patch_public_key.as_deref(),
+            config.patch_verification,
+        );
+
+        let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
+            UpdateError::InvalidState("currently_booting_patch is None".to_string()),
+        ))?;
+        state.record_restart_failure_for_patch(patch.number)?;
+        // The engine relaunches onto whatever we name next, which is no
+        // longer this patch.
+        state.set_running_patch(None);
+        Ok(())
+    })
+}
+
 pub fn report_launch_success() -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch.");
 
@@ -4817,6 +4857,10 @@ mod multi_engine_tests {
                 state.currently_booting_patch().is_none(),
                 "crash recovery must drop the breadcrumb it spared"
             );
+            assert!(
+                state.copy_events(10).is_empty(),
+                "a spared patch must not be reported as a failed install"
+            );
             Ok(())
         })?;
 
@@ -5235,7 +5279,7 @@ mod hot_restart_tests {
 
     use crate::{
         network::{testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD},
-        report_launch_failure, report_launch_start, report_launch_success, running_patch,
+        report_launch_start, report_launch_success, report_restart_failure, running_patch,
         test_utils::install_fake_patch,
         updater::tests::init_for_testing,
         with_mut_state,
@@ -5314,19 +5358,100 @@ mod hot_restart_tests {
         install_fake_patch(2)?;
         report_launch_start()?;
         assert_eq!(running_patch()?.map(|p| p.number), Some(2));
-        report_launch_failure()?;
+        report_restart_failure()?;
 
         with_mut_state(|state| {
-            assert!(state.is_known_bad_patch(2));
+            // The restart mechanism failed, not the patch: no tombstone,
+            // no event, artifacts kept.
+            assert!(!state.is_known_bad_patch(2));
+            assert!(state.copy_events(10).is_empty());
+            // This process boots the last good patch from here on.
             assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.currently_booting_patch().is_none());
             Ok(())
         })?;
+        assert!(tmp_dir.path().join("patches/2/dlc.vmcode").exists());
 
         // The engine's recovery relaunch begins another cycle, which lands
         // back on patch 1.
         report_launch_start()?;
         assert_eq!(running_patch()?.map(|p| p.number), Some(1));
         report_launch_success()?;
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn a_patch_that_failed_a_hot_restart_is_retried_on_the_next_cold_boot() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        install_fake_patch(2)?;
+        report_launch_start()?;
+        report_restart_failure()?;
+
+        // The exclusion is session-scoped, so a fresh process reads patch 2
+        // back out of pointers.json and tries it.
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            Ok(())
+        })?;
+        report_launch_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(2));
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn a_failed_hot_restart_onto_the_running_patch_falls_back_to_the_base_release() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        // Patch 1 is both the running patch and the restart target, so the
+        // last-booted fallback is the patch that just failed. Relaunching
+        // onto it would fail the same way; the base release is the only
+        // target left.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        report_launch_start()?;
+        report_restart_failure()?;
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+        report_launch_start()?;
+        assert!(running_patch()?.is_none());
+        report_launch_success()?;
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn report_restart_failure_without_a_boot_in_flight_is_an_error() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        assert!(report_restart_failure().is_err());
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
 
         Ok(())
     }

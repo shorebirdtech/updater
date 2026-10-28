@@ -146,7 +146,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       // export the symbol, which surfaces as an ArgumentError from the
       // late-bound FFI lookup.
       // ignore: avoid_catches_without_on_clauses
-    } catch (_) {
+    } catch (error) {
+      logRestartUnavailableMessage(error);
       return false;
     }
   }

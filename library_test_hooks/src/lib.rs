@@ -15,8 +15,9 @@
 //!    against tempdir-scoped state.
 //! 2. Extra `shorebird_test_*` symbols defined here that wrap
 //!    Rust-internal items in `updater` (gated behind the `test-hooks`
-//!    Cargo feature) — currently just `shorebird_test_reset`, with more
-//!    to come as later stages of the integration suite need them.
+//!    Cargo feature): resetting state, initializing against a tempdir,
+//!    faking a successful launch, and standing in for the engine's
+//!    restart handler.
 //!
 //! Production updater builds (the cdylib/staticlib that ships in the
 //! engine) do not enable `test-hooks` and never link this crate.

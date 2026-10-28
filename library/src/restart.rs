@@ -16,20 +16,39 @@ pub type RestartHandler = extern "C" fn() -> bool;
 
 static RESTART_HANDLER: Mutex<Option<RestartHandler>> = Mutex::new(None);
 
+/// Reads past a poisoned lock instead of panicking. Both critical
+/// sections here are a single assignment or copy, so poisoning means a
+/// panic somewhere else left the process in a strange state — and these
+/// functions are reached through `extern "C"`, where a panic aborts the
+/// app rather than unwinding into a caller that could handle it.
+fn handler_lock() -> std::sync::MutexGuard<'static, Option<RestartHandler>> {
+    RESTART_HANDLER.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Installs (or clears, with `None`) the engine's restart handler.
+///
+/// Clearing does not join a call already in flight: [`request_restart`]
+/// copies the handler out of the lock before invoking it, so a handler
+/// can still run after this returns `None`. The engine's handler has to
+/// stay safe to call against a shell it has begun tearing down.
 pub fn set_restart_handler(handler: Option<RestartHandler>) {
-    let mut lock = RESTART_HANDLER.lock().unwrap();
-    *lock = handler;
+    *handler_lock() = handler;
 }
 
 /// Asks the engine to restart the app. Returns true if a handler was
 /// installed and it accepted the request. Returns false when no handler is
 /// registered (e.g. running against an engine without hot restart support,
 /// or in a debug build where the updater is not attached to an engine).
+///
+/// The handler runs on the calling thread, which is whichever thread
+/// asked for the restart — the Dart isolate's thread when the request
+/// comes from `package:shorebird_code_push`. Tearing down that isolate
+/// from this call would be tearing down the thread it is running on, so
+/// the engine hops to its platform thread itself.
 pub fn request_restart() -> bool {
     // Copy the handler out of the lock before invoking it so a slow or
     // re-entrant handler cannot deadlock against set_restart_handler.
-    let handler = *RESTART_HANDLER.lock().unwrap();
+    let handler = *handler_lock();
     match handler {
         Some(handler) => handler(),
         None => {

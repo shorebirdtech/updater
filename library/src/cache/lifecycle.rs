@@ -208,6 +208,26 @@ impl PatchLifecycle {
         &self.pointers
     }
 
+    /// The patch this process should actually boot: `next_boot_patch`,
+    /// minus a patch a hot restart in this process already failed to
+    /// bring up. The exclusion lives in a session-scoped global rather
+    /// than on disk, so the patch is retried on the next cold boot.
+    ///
+    /// Every reader of the boot target goes through here, including
+    /// [`arm_boot_breadcrumb`]'s check that the engine is booting the
+    /// patch we named — after a failed restart, the patch we named is
+    /// the fallback, not the one in `pointers`.
+    pub fn effective_next_boot_patch(&self) -> Option<usize> {
+        let failed = crate::config::restart_failed_patch_number();
+        let is_excluded = |n: usize| failed == Some(n);
+        match self.pointers.next_boot_patch {
+            Some(n) if is_excluded(n) => self.pointers.last_booted_patch.filter(|&lb| {
+                !is_excluded(lb) && matches!(self.read_state(lb), Some(PatchState::Installed { .. }))
+            }),
+            other => other,
+        }
+    }
+
     /// Returns the on-disk state for patch `n`, or `None` if the patch has
     /// no record on disk (i.e. is in the conceptual "Unknown" state).
     pub fn read_state(&self, n: usize) -> Option<PatchState> {
@@ -600,7 +620,7 @@ impl PatchLifecycle {
                 bail!("record_boot_start({n}) expected Installed, got {other:?}");
             }
         }
-        match self.pointers.next_boot_patch {
+        match self.effective_next_boot_patch() {
             Some(next) if next == n => {}
             Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
             None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
@@ -631,6 +651,21 @@ impl PatchLifecycle {
         self.pointers.boot_started_at = None;
         self.pointers.boot_is_repeat_cycle = false;
         self.save_pointers()
+    }
+
+    /// Records that a hot restart could not bring up patch `n`, without
+    /// judging the patch.
+    ///
+    /// Drops the breadcrumb and excludes `n` from the boot target for
+    /// the rest of this process, so the engine's recovery relaunch lands
+    /// on the last patch that booted (or the base release). The patch
+    /// keeps its `Installed` state and its artifacts: a restart can fail
+    /// for reasons that are the engine's, and a cold boot onto the same
+    /// patch is how we find out. Condemning it here would delete the
+    /// bytes and make that retry impossible.
+    pub fn record_restart_failure(&mut self, n: usize) -> Result<()> {
+        crate::config::set_restart_failed_patch_number(Some(n));
+        self.clear_boot_breadcrumb()
     }
 
     /// Records a successful boot. Promotes `currently_booting_patch` to

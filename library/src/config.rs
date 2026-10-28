@@ -85,6 +85,34 @@ pub fn set_successfully_booted_patch_number(patch_number: Option<usize>) {
         .expect("Failed to acquire successfully_booted_patch lock.") = patch_number;
 }
 
+/// A patch this process tried and failed to hot restart into, if any.
+///
+/// Session-scoped, and deliberately never written to disk. The evidence
+/// only says the live process could not bring a second isolate up on the
+/// patch, which the engine can fail at for reasons the patch has no part
+/// in. A cold boot onto the same patch may well work, so the patch stays
+/// `Installed` and keeps its artifacts; the ordinary first-cycle
+/// breadcrumb condemns it on that boot if it really is broken.
+///
+/// Excluding it for the rest of this process is what keeps the engine's
+/// recovery relaunch from failing the same way again.
+fn global_restart_failed_patch() -> &'static Mutex<Option<usize>> {
+    static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
+    INSTANCE.get_or_init(|| Mutex::new(None))
+}
+
+pub fn restart_failed_patch_number() -> Option<usize> {
+    *global_restart_failed_patch()
+        .lock()
+        .expect("Failed to acquire restart_failed_patch lock.")
+}
+
+pub fn set_restart_failed_patch_number(patch_number: Option<usize>) {
+    *global_restart_failed_patch()
+        .lock()
+        .expect("Failed to acquire restart_failed_patch lock.") = patch_number;
+}
+
 /// Unit tests should call this to reset the config between tests.
 /// Also exposed (via the `test-hooks` Cargo feature) to the
 /// `library_test_hooks` cdylib so Dart-side integration tests can reset
@@ -96,6 +124,7 @@ pub fn testing_reset_config() {
     });
     set_running_patch_number(None);
     set_successfully_booted_patch_number(None);
+    set_restart_failed_patch_number(None);
     crate::restart::set_restart_handler(None);
 }
 

@@ -138,6 +138,20 @@ SHOREBIRD_EXPORT void shorebird_report_launch_start(void);
 SHOREBIRD_EXPORT void shorebird_report_launch_failure(void);
 
 /**
+ * Report that a hot restart could not bring up the patch it was
+ * relaunching into: the isolate snapshot would not resolve, the patch
+ * would not load, or the relaunch itself failed.
+ *
+ * Use this rather than `shorebird_report_launch_failure` for a failure
+ * of the restart mechanism. It rolls the boot target back so the
+ * recovery relaunch lands on the last patch that booted, but leaves the
+ * patch installed and un-tombstoned, because a restart can fail for
+ * reasons the patch has no part in and a cold boot onto it is how we
+ * find out. The exclusion lasts for this process only.
+ */
+SHOREBIRD_EXPORT void shorebird_report_restart_failure(void);
+
+/**
  * Report that the app launched successfully. The Shell constructor calls
  * this once per process when the VM has finished booting; it pairs with
  * `shorebird_report_launch_start` to mark a patch as having booted cleanly.

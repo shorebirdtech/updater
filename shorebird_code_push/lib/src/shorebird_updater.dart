@@ -68,6 +68,26 @@ It can also occur when running on an unsupported platform (e.g. web).
 ''');
 }
 
+/// Log message when [ShorebirdUpdater.restartApp] cannot reach the engine.
+///
+/// Expected on an engine that predates hot restart support, where the FFI
+/// symbol is absent. Printed because the alternative is a bare `false`
+/// that reads identically to "this engine does not support it", leaving a
+/// genuine break with nothing in the device log.
+void logRestartUnavailableMessage(Object error) {
+  // Printing to the console is intentional here, for the same reason
+  // logShorebirdEngineUnavailableMessage prints: this has to be visible in a
+  // release app's device log, where the package has no logger to call.
+  // ignore: avoid_print
+  print('''
+-------------------------------------------------------------------------------
+Shorebird could not request a restart: $error
+-------------------------------------------------------------------------------
+This is expected on a Shorebird engine that predates hot restart support.
+restartApp() returned false; the patch still applies on the next launch.
+''');
+}
+
 /// {@template patch}
 /// An object representing a single patch (over-the-air update).
 /// {@endtemplate}
@@ -198,6 +218,15 @@ abstract class ShorebirdUpdater {
   /// equivalent of a development-time hot restart: all in-memory Dart state
   /// is lost and `main()` runs again, while the surrounding platform
   /// activity/view controller and plugin registrations are preserved.
+  ///
+  /// Preserved is not the same as reset. Native state a plugin is holding
+  /// — an open socket, a subscription, a camera session, a cached handle
+  /// to a Dart callback — survives the restart while the Dart half of it
+  /// does not, so `main()` runs again against native objects that think
+  /// they are still in use. Plugins written only for a cold start may
+  /// double-register listeners or hand the new isolate state belonging to
+  /// the old one. Test a restart against the plugins your app actually
+  /// uses before shipping one behind a user-facing button.
   ///
   /// Returns `true` if the engine accepted the restart request. When this
   /// returns `true` the restart happens asynchronously. Dart code (including
