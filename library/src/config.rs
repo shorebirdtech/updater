@@ -119,6 +119,9 @@ pub fn set_restart_failed_patch_number(patch_number: Option<usize>) {
 /// state between scenarios without spawning a subprocess.
 #[cfg(any(test, feature = "test-hooks"))]
 pub fn testing_reset_config() {
+    // A flush left over from the last test would read and send this one's
+    // queue.
+    crate::updater::testing_wait_for_event_flushes();
     with_config_mut(|config| {
         *config = None;
     });

@@ -222,7 +222,8 @@ impl PatchLifecycle {
         let is_excluded = |n: usize| failed == Some(n);
         match self.pointers.next_boot_patch {
             Some(n) if is_excluded(n) => self.pointers.last_booted_patch.filter(|&lb| {
-                !is_excluded(lb) && matches!(self.read_state(lb), Some(PatchState::Installed { .. }))
+                !is_excluded(lb)
+                    && matches!(self.read_state(lb), Some(PatchState::Installed { .. }))
             }),
             other => other,
         }

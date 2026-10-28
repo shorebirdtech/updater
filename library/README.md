@@ -207,8 +207,9 @@ Changes in this state can be triggered by:
 - Patches are downloaded to a temporary location on disk.
 - Client keeps on disk (in state.json):
   - Current release version. Set when the app launches. If the app is updated to
-    a new release version, all state is invalidated.
-  - Queue of PatchEvents. This is cleared once events are sent to our servers.
+    a new release version, all state but the client id and the event queue is
+    invalidated.
+  - Queue of PatchEvents, oldest first. Each is removed once the server answers 2xx (or refuses it with a 4xx); the rest wait for the next flush. Kept across release-version changes, capped at 50.
 
 ### Trust model
 

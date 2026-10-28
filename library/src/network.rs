@@ -4,7 +4,7 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::string::ToString;
 
@@ -120,8 +120,7 @@ pub fn download_to_path_default(
         File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
     };
 
-    std::io::copy(&mut response.into_body().as_reader(), &mut file)
-        .with_file_context(FileOperation::WriteFile, dest)?;
+    copy_body_to_file(&mut response.into_body().as_reader(), &mut file, dest)?;
 
     let total_bytes = std::fs::metadata(dest)
         .with_file_context(FileOperation::ReadFile, dest)?
@@ -133,8 +132,16 @@ pub fn download_to_path_default(
     })
 }
 
+/// How long an event post may take. The flush that sends it holds a lock
+/// other flushes wait on, so one that never gets an answer must give up.
+const REPORT_EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    let result = ureq::post(url).send_json(&request);
+    let result = ureq::post(url)
+        .config()
+        .timeout_global(Some(REPORT_EVENT_TIMEOUT))
+        .build()
+        .send_json(&request);
     handle_network_result(result)?;
     Ok(())
 }
@@ -152,8 +159,9 @@ pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyh
 pub(crate) enum NetworkError {
     /// The server was reached but responded with a non-success HTTP status.
     Server { status: u16 },
-    /// The request never reached the server: offline, DNS failure, connection
-    /// refused, or a transport-level IO error.
+    /// The request never reached the server (offline, DNS failure, connection
+    /// refused), or the connection failed mid-response (the peer disconnected,
+    /// a timeout).
     Transport,
 }
 
@@ -185,10 +193,36 @@ fn handle_network_result(
     match result {
         Ok(response) => Ok(response),
         Err(ureq::Error::StatusCode(code)) => Err(NetworkError::Server { status: code }.into()),
-        Err(ureq::Error::HostNotFound)
-        | Err(ureq::Error::ConnectionFailed)
-        | Err(ureq::Error::Io(_)) => Err(NetworkError::Transport.into()),
+        // Keep ureq's error as the cause, so logs and the failure event say
+        // why the server couldn't be reached (an untrusted certificate, a DNS
+        // failure, a refused connection) instead of only that it couldn't.
+        Err(
+            e @ (ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_)),
+        ) => Err(anyhow::Error::new(e).context(NetworkError::Transport)),
         Err(e) => bail!(e),
+    }
+}
+
+/// Streams a response body into `file`, keeping read and write failures
+/// apart: a body that stops mid-download (the peer disconnected, the
+/// connection timed out) is a network failure, and only a failed write is a
+/// file failure. `std::io::copy` returns both as one `io::Error`, which
+/// reported every dropped connection as "Failed to write to file".
+fn copy_body_to_file(
+    body: &mut impl Read,
+    file: &mut impl Write,
+    dest: &Path,
+) -> anyhow::Result<()> {
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = match body.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(anyhow::Error::new(e).context(NetworkError::Transport)),
+        };
+        file.write_all(&buf[..n])
+            .with_file_context(FileOperation::WriteFile, dest)?;
     }
 }
 
@@ -365,7 +399,7 @@ impl PatchCheckRequest {
 /// using something like <https://github.com/dtolnay/typetag>.
 #[derive(Debug, Serialize)]
 pub struct CreatePatchEventRequest {
-    event: PatchEvent,
+    pub(crate) event: PatchEvent,
 }
 
 /// A response from the server telling us the latest state of patches for this release.
@@ -415,6 +449,7 @@ pub fn download_to_path(
 #[cfg(test)]
 mod tests {
     use crate::{network::PatchCheckResponse, time};
+    use std::path::Path;
 
     use super::{patches_events_url, PatchEvent};
     use crate::events::EventType;
@@ -510,6 +545,7 @@ mod tests {
             timestamp: 1234,
             message: None,
             failure_category: None,
+            event_id: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -534,6 +570,7 @@ mod tests {
             timestamp: 1234,
             message: Some("update_failure: patch 1 failed (...)".to_string()),
             failure_category: Some("network".to_string()),
+            event_id: None,
         };
         let json_string = serde_json::to_string(&event).unwrap();
         assert!(
@@ -555,6 +592,7 @@ mod tests {
             timestamp: 1234,
             message: Some("hello".to_string()),
             failure_category: None,
+            event_id: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -654,6 +692,104 @@ mod tests {
     }
 
     #[test]
+    fn handle_network_result_keeps_transport_cause() {
+        // What ureq reports when a TLS-inspecting proxy presents a root that
+        // isn't in the updater's trust store.
+        let io = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid peer certificate: UnknownIssuer",
+        );
+        let err = super::handle_network_result(Err(ureq::Error::Io(io))).unwrap_err();
+
+        assert_eq!(
+            err.downcast_ref::<super::NetworkError>(),
+            Some(&super::NetworkError::Transport)
+        );
+        assert_eq!(
+            format!("{err:#}"),
+            "Network request failed; the server could not be reached.: \
+             io: invalid peer certificate: UnknownIssuer"
+        );
+    }
+
+    /// A body that yields `data`, then fails the way ureq does when the
+    /// server drops the connection mid-download.
+    struct DroppedBody<'a> {
+        data: &'a [u8],
+    }
+
+    impl std::io::Read for DroppedBody<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.data.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Peer disconnected",
+                ));
+            }
+            let n = self.data.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.data[..n]);
+            self.data = &self.data[n..];
+            Ok(n)
+        }
+    }
+
+    /// A file whose writes fail because the disk is full.
+    struct FullDisk;
+
+    impl std::io::Write for FullDisk {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn copy_body_to_file_copies_whole_body() {
+        let mut out = Vec::new();
+        super::copy_body_to_file(&mut &b"patch bytes"[..], &mut out, Path::new("dest")).unwrap();
+        assert_eq!(out, b"patch bytes");
+    }
+
+    #[test]
+    fn copy_body_to_file_dropped_connection_is_network() {
+        let mut out = Vec::new();
+        let err = super::copy_body_to_file(
+            &mut DroppedBody { data: b"partial" },
+            &mut out,
+            Path::new("dest"),
+        )
+        .unwrap_err();
+
+        // The bytes before the drop are kept, so the next attempt resumes.
+        assert_eq!(out, b"partial");
+        assert_eq!(
+            crate::updater::classify_failure(&err),
+            crate::updater::FailureCategory::Network
+        );
+        assert_eq!(
+            format!("{err:#}"),
+            "Network request failed; the server could not be reached.: Peer disconnected"
+        );
+    }
+
+    #[test]
+    fn copy_body_to_file_write_failure_is_file_error() {
+        let err =
+            super::copy_body_to_file(&mut &b"patch bytes"[..], &mut FullDisk, Path::new("dest"))
+                .unwrap_err();
+
+        assert_eq!(
+            crate::updater::classify_failure(&err),
+            crate::updater::FailureCategory::OutOfSpace
+        );
+        assert!(err
+            .to_string()
+            .starts_with("Failed to write to file 'dest'"));
+    }
+
+    #[test]
     fn handle_network_result_no_internet() {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
@@ -666,6 +802,7 @@ mod tests {
             timestamp: time::unix_timestamp(),
             message: None,
             failure_category: None,
+            event_id: None,
         };
         let result = super::report_event_default(
             // Make the request to a non-existent URL, which will trigger the
@@ -700,6 +837,7 @@ mod tests {
                     timestamp: time::unix_timestamp(),
                     message: None,
                     failure_category: None,
+                    event_id: None,
                 },
             },
         );
