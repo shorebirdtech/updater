@@ -127,7 +127,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       # The runner image ships an NDK at ANDROID_NDK_HOME; cargo-ndk points
-      # the C compilers that ring and zstd-sys build with at it.
+      # the C compiler that zstd-sys builds with at it.
       - name: 🤖 Install cargo-ndk
         if: ${{ contains(matrix.target, 'android') }}
         uses: taiki-e/install-action@v2

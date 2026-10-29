@@ -66,6 +66,112 @@ pub struct FileCallbacks {
     pub close: extern "C" fn(file_handle: *mut libc::c_void),
 }
 
+/// One HTTP header: a NUL-terminated name and value.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct HttpHeader {
+    pub name: *const libc::c_char,
+    pub value: *const libc::c_char,
+}
+
+/// An HTTP request the updater asks the engine to send.
+///
+/// Every pointer is owned by the updater and valid only for the duration of
+/// the `EngineCallbacks::http_request` call.
+#[repr(C)]
+pub struct HttpRequest {
+    /// "GET" or "POST".
+    pub method: *const libc::c_char,
+    /// An absolute `http://` or `https://` URL.
+    pub url: *const libc::c_char,
+    pub headers: *const HttpHeader,
+    pub header_count: usize,
+    /// The request body, or null with `body_length` 0 for none.
+    pub body: *const u8,
+    pub body_length: usize,
+    /// How long the whole request may take, in milliseconds, before it fails
+    /// with `SHOREBIRD_HTTP_TRANSPORT_ERROR`; 0 for no limit beyond the
+    /// client's own.
+    pub timeout_ms: u32,
+}
+
+/// Where the engine delivers a response, on the thread that called
+/// `EngineCallbacks::http_request`, before that call returns.
+#[repr(C)]
+pub struct HttpResponseCallbacks {
+    /// Passed back unchanged as the first argument of each callback.
+    pub context: *mut libc::c_void,
+
+    /// Called once with the status and headers of the final response (after
+    /// any redirects), before any body bytes. The pointers are valid only
+    /// during the call. Returning false stops the request, which then returns
+    /// `SHOREBIRD_HTTP_ABORTED`.
+    pub on_response: extern "C" fn(
+        context: *mut libc::c_void,
+        status: u16,
+        headers: *const HttpHeader,
+        header_count: usize,
+    ) -> bool,
+
+    /// Called with each run of body bytes, in order, exactly as received: the
+    /// updater sends no `Accept-Encoding`, so the client must not decode a
+    /// `Content-Encoding` (the updater checks the bytes against
+    /// `Content-Length`). Returning false stops the request, which then
+    /// returns `SHOREBIRD_HTTP_ABORTED`.
+    pub on_body: extern "C" fn(context: *mut libc::c_void, data: *const u8, length: usize) -> bool,
+}
+
+/// The whole response was delivered.
+pub const SHOREBIRD_HTTP_OK: i32 = 0;
+/// The server could not be reached or the connection failed: DNS, connect,
+/// a read or write error, or a timeout.
+pub const SHOREBIRD_HTTP_TRANSPORT_ERROR: i32 = 1;
+/// The TLS handshake failed, including an untrusted certificate.
+pub const SHOREBIRD_HTTP_TLS_ERROR: i32 = 2;
+/// The server's response was not valid HTTP/1.1, or redirected too often.
+pub const SHOREBIRD_HTTP_PROTOCOL_ERROR: i32 = 3;
+/// A response callback returned false.
+pub const SHOREBIRD_HTTP_ABORTED: i32 = 4;
+/// The request itself was unusable, e.g. a malformed URL.
+pub const SHOREBIRD_HTTP_INVALID_REQUEST: i32 = 5;
+
+/// Services the engine provides to the updater: a signature verifier on the
+/// engine's BoringSSL, and an HTTP client on the platform's HTTP stack.
+///
+/// The updater uses `http_request` only on iOS, macOS and Android; on other
+/// platforms it sends requests itself and ignores it.
+///
+/// Either function may be null when the engine does not provide it: with no
+/// `http_request`, network requests fail as if the device were offline; with
+/// no `verify_signature`, `shorebird_init` fails for an app configured with a
+/// patch public key.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct EngineCallbacks {
+    /// Sends `request` and delivers the response through `callbacks`,
+    /// blocking until done. Returns one of the `SHOREBIRD_HTTP_*` codes. A
+    /// response with any status, including 4xx and 5xx, is
+    /// `SHOREBIRD_HTTP_OK` as long as it was delivered. Must be safe to call
+    /// from any thread.
+    pub http_request: Option<
+        extern "C" fn(request: *const HttpRequest, callbacks: *const HttpResponseCallbacks) -> i32,
+    >,
+    /// Returns whether `signature` is a valid RSASSA-PKCS1-v1_5 SHA-256
+    /// signature of `message` by `public_key`, a DER-encoded PKCS#1
+    /// RSAPublicKey with a 2048 to 8192 bit modulus. Must be safe to call
+    /// from any thread.
+    pub verify_signature: Option<
+        extern "C" fn(
+            public_key: *const u8,
+            public_key_length: usize,
+            message: *const u8,
+            message_length: usize,
+            signature: *const u8,
+            signature_length: usize,
+        ) -> bool,
+    >,
+}
+
 fn to_rust_vector(
     c_array: *const *const libc::c_char,
     size: libc::c_int,
@@ -112,6 +218,26 @@ fn path_to_c_string(path: Option<PathBuf>) -> anyhow::Result<*mut c_char> {
 #[no_mangle]
 pub unsafe extern "C" fn shorebird_free_string(c_string: *const c_char) {
     unsafe { free_c_string(c_string) }
+}
+
+/// Registers the engine's network and signature services. Call before
+/// `shorebird_init`: until this is called, network requests on iOS, macOS and
+/// Android fail as if the device were offline, and `shorebird_init` fails for
+/// an app configured with a patch public key. A later call replaces the
+/// earlier callbacks.
+///
+/// # Safety
+///
+/// `callbacks` must be null (ignored) or point to a valid `EngineCallbacks`.
+/// The updater copies the struct; the functions it names must stay callable
+/// for the life of the process.
+#[no_mangle]
+pub unsafe extern "C" fn shorebird_set_engine_callbacks(callbacks: *const EngineCallbacks) {
+    if callbacks.is_null() {
+        shorebird_error!("Null callbacks passed to shorebird_set_engine_callbacks");
+        return;
+    }
+    crate::engine_callbacks::set(unsafe { *callbacks });
 }
 
 /// Configures the updater. First parameter is a struct containing
