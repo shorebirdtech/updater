@@ -50,12 +50,17 @@ pub extern "C" fn shorebird_test_reset() {
 }
 
 // `FileCallbacks` that serve the bytes of the `libapp_path` passed to
-// `shorebird_test_init`, the way a real engine serves the patch base. macOS
+// `shorebird_test_init`, standing in for the engine's patch base (a real macOS
+// engine serves only the Dart snapshot regions of App.framework/App). macOS
 // builds read the base through these callbacks, and the test patch fixtures
 // copy from it, so they must deliver the file's real bytes.
 static BASE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 fn set_base_path(libapp_path: *const c_char) {
+    // `shorebird_init` rejects a null path; leave that failure to it.
+    if libapp_path.is_null() {
+        return;
+    }
     let path = unsafe { CStr::from_ptr(libapp_path) }.to_string_lossy();
     *BASE_PATH.lock().unwrap() = Some(PathBuf::from(path.as_ref()));
 }
@@ -70,6 +75,7 @@ extern "C" fn base_open() -> *mut libc::c_void {
 extern "C" fn base_read(handle: *mut libc::c_void, buffer: *mut u8, count: usize) -> usize {
     let file = unsafe { &mut *handle.cast::<File>() };
     let buf = unsafe { std::slice::from_raw_parts_mut(buffer, count) };
+    // The callback can't report an error; a failed read looks like EOF.
     file.read(buf).unwrap_or(0)
 }
 extern "C" fn base_seek(handle: *mut libc::c_void, offset: i64, whence: i32) -> i64 {
