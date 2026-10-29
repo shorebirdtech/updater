@@ -1135,8 +1135,8 @@ mod test {
         update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
         assert_eq!(shorebird_current_boot_patch_number(), 2);
         assert_eq!(shorebird_next_boot_patch_number(), 1);
-        // Stable's patch 2 is the running one, so stable has nothing to
-        // download, but current != next.
+        // Patch 2 is still installed (it is the last booted patch), so
+        // stable has nothing to download, but current != next.
         assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
 
         // Restart: patch 1 boots.
@@ -1146,6 +1146,8 @@ mod test {
         shorebird_report_launch_start();
         shorebird_report_launch_success();
         assert_eq!(shorebird_current_boot_patch_number(), 1);
+        // Boot cleanup removed only lower numbers, so patch 2 is still here.
+        assert!(crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2).exists());
 
         // Back on stable: patch 2 is still Installed, so it is skipped.
         assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
@@ -1179,6 +1181,7 @@ mod test {
 
         update_on_expecting("stable", SHOREBIRD_UPDATE_INSTALLED);
         assert_eq!(shorebird_next_boot_patch_number(), 2);
+        assert!(crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2).exists());
         update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
         assert_eq!(shorebird_next_boot_patch_number(), 1);
         assert_eq!(shorebird_current_boot_patch_number(), 0);
