@@ -288,7 +288,7 @@ pub struct Patch {
 ///
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy, <https://shorebird.dev/privacy/>, and should
-/// keep what Shorebird collects up to date:
+/// keep the list of what Shorebird collects up to date:
 /// <https://docs.shorebird.dev/system/what-shorebird-collects/>
 #[derive(Serialize)]
 pub struct PatchCheckRequest {

@@ -46,11 +46,13 @@ impl<'de> Deserialize<'de> for EventType {
         }
     }
 }
-/// An event that is sent to the server when a patch is successfully installed.
+
+/// An event sent to the server about a patch: a download, an install, or an
+/// install or update failure.
 ///
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy, <https://shorebird.dev/privacy/>, and should
-/// keep what Shorebird collects up to date:
+/// keep the list of what Shorebird collects up to date:
 /// <https://docs.shorebird.dev/system/what-shorebird-collects/>
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PatchEvent {
