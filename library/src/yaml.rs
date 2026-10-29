@@ -23,6 +23,12 @@ pub struct YamlConfig {
     pub base_url: Option<String>,
     /// Update behavior. Defaults to true if not set.
     pub auto_update: Option<bool>,
+    /// Whether a patch may be brought up by restarting the app in place
+    /// rather than waiting for the user to relaunch it. Defaults to true if
+    /// not set. False does not stop patches installing; it makes them wait
+    /// for the next launch, which is how patches applied before hot restart
+    /// existed.
+    pub hot_restart: Option<bool>,
     /// Base64-encoded public key for verifying patch hash signatures.
     pub patch_public_key: Option<String>,
     /// When to verify patch signatures. Defaults to "strict" (verify at boot time).
@@ -40,6 +46,7 @@ impl YamlConfig {
         let mut channel: Option<String> = None;
         let mut base_url: Option<String> = None;
         let mut auto_update: Option<bool> = None;
+        let mut hot_restart: Option<bool> = None;
         let mut patch_public_key: Option<String> = None;
         let mut patch_verification: Option<PatchVerificationMode> = None;
 
@@ -65,6 +72,12 @@ impl YamlConfig {
                             format!("invalid value for auto_update: '{value}': {e}")
                         })?);
                 }
+                "hot_restart" => {
+                    hot_restart =
+                        Some(value.parse::<bool>().map_err(|e| {
+                            format!("invalid value for hot_restart: '{value}': {e}")
+                        })?);
+                }
                 "patch_public_key" => patch_public_key = Some(value.to_string()),
                 "patch_verification" => {
                     patch_verification = Some(match value {
@@ -86,6 +99,7 @@ impl YamlConfig {
             channel,
             base_url,
             auto_update,
+            hot_restart,
             patch_public_key,
             patch_verification,
         })
@@ -95,6 +109,27 @@ impl YamlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_hot_restart() {
+        let off = YamlConfig::from_yaml("app_id: test_app\nhot_restart: false\n").unwrap();
+        assert_eq!(off.hot_restart, Some(false));
+
+        let on = YamlConfig::from_yaml("app_id: test_app\nhot_restart: true\n").unwrap();
+        assert_eq!(on.hot_restart, Some(true));
+
+        // Unset is what almost every shorebird.yaml in the world says, and it
+        // has to mean the same as true once resolved.
+        let unset = YamlConfig::from_yaml("app_id: test_app\n").unwrap();
+        assert_eq!(unset.hot_restart, None);
+    }
+
+    #[test]
+    fn invalid_hot_restart_is_error() {
+        let err = YamlConfig::from_yaml("app_id: test_app\nhot_restart: sometimes\n")
+            .expect_err("'sometimes' is not a bool");
+        assert!(err.contains("hot_restart"), "unhelpful error: {err}");
+    }
 
     #[test]
     fn parses_patch_verification_strict() {

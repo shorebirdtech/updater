@@ -147,8 +147,18 @@ pub unsafe extern "C" fn shorebird_free_update_result(result: *mut UpdateResult)
 /// momentarily. Dart code continues running until the restart begins, so
 /// callers should not assume execution stops at this call. Returns false if
 /// restarting is not supported (engine too old, debug build, or an
-/// unsupported engine configuration such as multiple concurrent engines).
+/// unsupported engine configuration such as multiple concurrent engines),
+/// or if `hot_restart: false` in shorebird.yaml has turned it off, in which
+/// case the patch stays installed and boots on the next launch instead.
 #[no_mangle]
 pub extern "C" fn shorebird_restart_app() -> bool {
+    // Checked before the engine is asked, so turning it off looks the same to
+    // a caller as running against an engine that cannot restart: refused, and
+    // the patch waits for the next launch.
+    let allowed = crate::config::with_config(|config| Ok(config.hot_restart)).unwrap_or(true);
+    if !allowed {
+        shorebird_info!("Restart requested, but shorebird.yaml sets hot_restart: false.");
+        return false;
+    }
     crate::restart::request_restart()
 }
