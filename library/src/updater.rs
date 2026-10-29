@@ -5615,6 +5615,89 @@ mod hot_restart_tests {
         Ok(())
     }
 
+    /// Validation has to judge the patch the engine is about to load. After
+    /// a failed restart that is the fallback, so validating `pointers`
+    /// instead would let a corrupt fallback boot unchecked and tombstone
+    /// the excluded patch for a fault that is not its own.
+    #[serial]
+    #[test]
+    fn validation_after_a_failed_restart_judges_the_fallback() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        install_fake_patch(2)?;
+        report_launch_start()?;
+        report_restart_failure()?;
+
+        // Patch 1 is what boots from here, and it is corrupt.
+        let artifact = tmp_dir.path().join("patches/1/dlc.vmcode");
+        let bytes = std::fs::read(&artifact)?;
+        std::fs::write(&artifact, &bytes[..bytes.len() - 1])?;
+
+        assert!(crate::validate_next_boot_patch().is_err());
+        with_mut_state(|state| {
+            // Patch 1 is condemned, and the event names 1, not 2.
+            assert!(state.is_known_bad_patch(1));
+            assert!(!state.is_known_bad_patch(2));
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1, "expected one queued event");
+            assert_eq!(events[0].patch_number, 1);
+            // Patch 2 is still excluded for this process, so with 1 gone
+            // the target is the base release.
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// A recovery relaunch can fail too. Recording the fallback's failure
+    /// must not readmit the patch whose failure caused the fallback, or the
+    /// engine is handed a patch that already failed and the two targets
+    /// flip for the rest of the process.
+    #[serial]
+    #[test]
+    fn a_failed_relaunch_onto_the_fallback_does_not_readmit_the_failed_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Hot restart into patch 2 fails, so this process falls back to 1.
+        install_fake_patch(2)?;
+        report_launch_start()?;
+        report_restart_failure()?;
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // The relaunch onto 1 fails as well. Both are now excluded, so the
+        // target is the base release, not patch 2 again.
+        report_launch_start()?;
+        report_restart_failure()?;
+        with_mut_state(|state| {
+            assert!(state.next_boot_patch().is_none());
+            assert!(!state.is_known_bad_patch(1));
+            assert!(!state.is_known_bad_patch(2));
+            Ok(())
+        })?;
+
+        report_launch_start()?;
+        assert!(running_patch()?.is_none());
+        report_launch_success()?;
+
+        Ok(())
+    }
+
     #[serial]
     #[test]
     fn report_restart_failure_without_a_boot_in_flight_is_an_error() -> Result<()> {

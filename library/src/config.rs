@@ -4,6 +4,7 @@ use crate::network::NetworkHooks;
 use crate::updater::AppConfig;
 use crate::yaml::{PatchVerificationMode, YamlConfig};
 use crate::{ExternalFileProvider, UpdateError};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
@@ -85,7 +86,7 @@ pub fn set_successfully_booted_patch_number(patch_number: Option<usize>) {
         .expect("Failed to acquire successfully_booted_patch lock.") = patch_number;
 }
 
-/// A patch this process tried and failed to hot restart into, if any.
+/// Every patch this process tried and failed to hot restart into.
 ///
 /// Session-scoped, and deliberately never written to disk. The evidence
 /// only says the live process could not bring a second isolate up on the
@@ -95,22 +96,36 @@ pub fn set_successfully_booted_patch_number(patch_number: Option<usize>) {
 /// breadcrumb condemns it on that boot if it really is broken.
 ///
 /// Excluding it for the rest of this process is what keeps the engine's
-/// recovery relaunch from failing the same way again.
-fn global_restart_failed_patch() -> &'static Mutex<Option<usize>> {
-    static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
-    INSTANCE.get_or_init(|| Mutex::new(None))
+/// recovery relaunch from failing the same way again. A set rather than
+/// one slot because the relaunch can fail too: recording the fallback's
+/// failure must not readmit the patch whose failure caused the fallback,
+/// or the two flip forever and each cycle hands the engine a patch that
+/// already failed.
+fn global_restart_failed_patches() -> &'static Mutex<HashSet<usize>> {
+    static INSTANCE: OnceCell<Mutex<HashSet<usize>>> = OnceCell::new();
+    INSTANCE.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-pub fn restart_failed_patch_number() -> Option<usize> {
-    *global_restart_failed_patch()
+pub fn restart_failed_patch(patch_number: usize) -> bool {
+    global_restart_failed_patches()
         .lock()
-        .expect("Failed to acquire restart_failed_patch lock.")
+        .expect("Failed to acquire restart_failed_patches lock.")
+        .contains(&patch_number)
 }
 
-pub fn set_restart_failed_patch_number(patch_number: Option<usize>) {
-    *global_restart_failed_patch()
+pub fn add_restart_failed_patch(patch_number: usize) {
+    global_restart_failed_patches()
         .lock()
-        .expect("Failed to acquire restart_failed_patch lock.") = patch_number;
+        .expect("Failed to acquire restart_failed_patches lock.")
+        .insert(patch_number);
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn clear_restart_failed_patches() {
+    global_restart_failed_patches()
+        .lock()
+        .expect("Failed to acquire restart_failed_patches lock.")
+        .clear();
 }
 
 /// Unit tests should call this to reset the config between tests.
@@ -127,7 +142,7 @@ pub fn testing_reset_config() {
     });
     set_running_patch_number(None);
     set_successfully_booted_patch_number(None);
-    set_restart_failed_patch_number(None);
+    clear_restart_failed_patches();
     crate::restart::set_restart_handler(None);
 }
 

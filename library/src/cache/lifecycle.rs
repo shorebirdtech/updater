@@ -218,8 +218,7 @@ impl PatchLifecycle {
     /// patch we named — after a failed restart, the patch we named is
     /// the fallback, not the one in `pointers`.
     pub fn effective_next_boot_patch(&self) -> Option<usize> {
-        let failed = crate::config::restart_failed_patch_number();
-        let is_excluded = |n: usize| failed == Some(n);
+        let is_excluded = crate::config::restart_failed_patch;
         match self.pointers.next_boot_patch {
             Some(n) if is_excluded(n) => self.pointers.last_booted_patch.filter(|&lb| {
                 !is_excluded(lb)
@@ -665,7 +664,7 @@ impl PatchLifecycle {
     /// patch is how we find out. Condemning it here would delete the
     /// bytes and make that retry impossible.
     pub fn record_restart_failure(&mut self, n: usize) -> Result<()> {
-        crate::config::set_restart_failed_patch_number(Some(n));
+        crate::config::add_restart_failed_patch(n);
         self.clear_boot_breadcrumb()
     }
 
@@ -721,7 +720,11 @@ impl PatchLifecycle {
         public_key: Option<&str>,
         mode: PatchVerificationMode,
     ) -> Result<()> {
-        let Some(n) = self.pointers.next_boot_patch else {
+        // The effective target, not `pointers`: after a failed restart the
+        // patch the engine is about to load is the fallback, and validating
+        // the excluded patch instead would both skip the check on the patch
+        // that boots and blame it for the other one's failure.
+        let Some(n) = self.effective_next_boot_patch() else {
             return Ok(());
         };
         if let Err(e) = self.validate_installed_patch(n, public_key, mode) {
