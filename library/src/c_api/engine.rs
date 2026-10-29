@@ -103,7 +103,7 @@ pub struct HttpResponseCallbacks {
     pub context: *mut libc::c_void,
 
     /// Called once with the status and headers of the final response (after
-    /// any redirects), before any body bytes. The pointers are valid only
+    /// any redirects), before any body bytes; a second call fails the request. The pointers are valid only
     /// during the call. Returning false stops the request, which then returns
     /// `SHOREBIRD_HTTP_ABORTED`.
     pub on_response: extern "C" fn(
@@ -114,11 +114,17 @@ pub struct HttpResponseCallbacks {
     ) -> bool,
 
     /// Called with each run of body bytes, in order, exactly as received: the
-    /// updater sends no `Accept-Encoding`, so the client must not decode a
-    /// `Content-Encoding` (the updater checks the bytes against
+    /// updater sends `Accept-Encoding: identity`, and the client must not
+    /// decode a `Content-Encoding` (the updater checks the bytes against
     /// `Content-Length`). Returning false stops the request, which then
     /// returns `SHOREBIRD_HTTP_ABORTED`.
     pub on_body: extern "C" fn(context: *mut libc::c_void, data: *const u8, length: usize) -> bool,
+
+    /// May be called once, before `http_request` returns a code other than
+    /// `SHOREBIRD_HTTP_OK` or `SHOREBIRD_HTTP_ABORTED`, with why the request
+    /// failed (the platform error's description), for logs and the failure
+    /// event. `message` is NUL-terminated and valid only during the call.
+    pub on_error: extern "C" fn(context: *mut libc::c_void, message: *const libc::c_char),
 }
 
 /// The whole response was delivered.

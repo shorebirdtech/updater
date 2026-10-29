@@ -48,11 +48,12 @@ mod http {
     #[derive(Debug)]
     pub enum HttpError {
         /// The server could not be reached, or the connection failed mid-way.
-        Transport,
+        /// Each failure carries the engine's reason, if it gave one.
+        Transport(Option<String>),
         /// The TLS handshake failed.
-        Tls,
+        Tls(Option<String>),
         /// The response was not valid HTTP, or redirected too many times.
-        Protocol,
+        Protocol(Option<String>),
         /// The request was unusable (e.g. a malformed URL).
         InvalidRequest,
         /// A response handler returned this error, which stopped the request.
@@ -71,9 +72,11 @@ mod http {
     struct HandlerContext<'a> {
         handler: &'a mut dyn ResponseHandler,
         error: Option<anyhow::Error>,
-        /// Whether `on_response` was delivered; body bytes before it, or success
-        /// without it, break the contract and fail the request.
+        /// Whether `on_response` was delivered; body bytes before it, a second
+        /// one, or success without it, break the contract and fail the request.
         responded: bool,
+        /// The reason the engine passed to `on_error`.
+        engine_error: Option<String>,
     }
 
     impl HandlerContext<'_> {
@@ -132,8 +135,22 @@ mod http {
                 })
                 .collect()
         };
+        if context.responded {
+            context.error = Some(anyhow::anyhow!("HTTP response delivered twice"));
+            return false;
+        }
         context.responded = true;
         context.run(|handler| handler.on_response(status, &headers))
+    }
+
+    extern "C" fn on_error_trampoline(context: *mut c_void, message: *const libc::c_char) {
+        // SAFETY: as in `on_response_trampoline`.
+        let context = unsafe { &mut *(context as *mut HandlerContext) };
+        // SAFETY: the engine passes null or a NUL-terminated string.
+        let message = unsafe { lossy_string(message) };
+        if context.engine_error.is_none() && !message.is_empty() {
+            context.engine_error = Some(message);
+        }
     }
 
     extern "C" fn on_body_trampoline(context: *mut c_void, data: *const u8, length: usize) -> bool {
@@ -173,7 +190,9 @@ mod http {
             shorebird_error!(
                 "No HTTP client registered; call shorebird_set_engine_callbacks first"
             );
-            return Err(HttpError::Transport);
+            return Err(HttpError::Transport(Some(
+                "no HTTP client registered".to_string(),
+            )));
         };
         let to_c = |s: &str| CString::new(s).map_err(|_| HttpError::InvalidRequest);
         let c_method = to_c(method)?;
@@ -210,11 +229,13 @@ mod http {
             handler,
             error: None,
             responded: false,
+            engine_error: None,
         };
         let response_callbacks = HttpResponseCallbacks {
             context: &mut context as *mut HandlerContext as *mut c_void,
             on_response: on_response_trampoline,
             on_body: on_body_trampoline,
+            on_error: on_error_trampoline,
         };
         let code = http_request(&request, &response_callbacks);
         // A handler error is the most specific explanation, whatever code the
@@ -222,16 +243,19 @@ mod http {
         if let Some(error) = context.error {
             return Err(HttpError::Handler(error));
         }
+        let reason = context.engine_error;
         match code {
             SHOREBIRD_HTTP_OK if context.responded => Ok(()),
-            SHOREBIRD_HTTP_OK => Err(HttpError::Protocol),
-            SHOREBIRD_HTTP_TRANSPORT_ERROR => Err(HttpError::Transport),
-            SHOREBIRD_HTTP_TLS_ERROR => Err(HttpError::Tls),
-            SHOREBIRD_HTTP_PROTOCOL_ERROR => Err(HttpError::Protocol),
+            SHOREBIRD_HTTP_OK => Err(HttpError::Protocol(Some(
+                "the client reported success without a response".to_string(),
+            ))),
+            SHOREBIRD_HTTP_TRANSPORT_ERROR => Err(HttpError::Transport(reason)),
+            SHOREBIRD_HTTP_TLS_ERROR => Err(HttpError::Tls(reason)),
+            SHOREBIRD_HTTP_PROTOCOL_ERROR => Err(HttpError::Protocol(reason)),
             SHOREBIRD_HTTP_INVALID_REQUEST => Err(HttpError::InvalidRequest),
             // SHOREBIRD_HTTP_ABORTED without a recorded handler error, or a code
             // this updater does not know: treat as a failed transport.
-            _ => Err(HttpError::Transport),
+            _ => Err(HttpError::Transport(reason)),
         }
     }
 }
@@ -269,7 +293,7 @@ mod tests {
     use super::*;
     use crate::c_api::engine::{
         HttpHeader, HttpRequest, HttpResponseCallbacks, SHOREBIRD_HTTP_ABORTED, SHOREBIRD_HTTP_OK,
-        SHOREBIRD_HTTP_PROTOCOL_ERROR, SHOREBIRD_HTTP_TLS_ERROR,
+        SHOREBIRD_HTTP_PROTOCOL_ERROR, SHOREBIRD_HTTP_TLS_ERROR, SHOREBIRD_HTTP_TRANSPORT_ERROR,
     };
     use crate::http::{Header, Request, ResponseHandler};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -450,7 +474,7 @@ mod tests {
     fn no_registered_client_is_a_transport_error() {
         let mut recorder = Recorder::new();
         let result = send(None, "GET", "u", &[], b"", &mut recorder);
-        assert!(matches!(result, Err(HttpError::Transport)));
+        assert!(matches!(result, Err(HttpError::Transport(_))));
         assert_eq!(recorder.status, None);
     }
 
@@ -474,9 +498,9 @@ mod tests {
         }
         let mut recorder = Recorder::new();
         let mut send_to = |f| send(with_http(f), "GET", "u", &[], b"", &mut recorder);
-        assert!(matches!(send_to(tls), Err(HttpError::Tls)));
-        assert!(matches!(send_to(protocol), Err(HttpError::Protocol)));
-        assert!(matches!(send_to(unknown), Err(HttpError::Transport)));
+        assert!(matches!(send_to(tls), Err(HttpError::Tls(_))));
+        assert!(matches!(send_to(protocol), Err(HttpError::Protocol(_))));
+        assert!(matches!(send_to(unknown), Err(HttpError::Transport(_))));
     }
 
     #[test]
@@ -500,7 +524,7 @@ mod tests {
         };
         let mut recorder = Recorder::new();
         let result = send(Some(verify_only), "GET", "u", &[], b"", &mut recorder);
-        assert!(matches!(result, Err(HttpError::Transport)));
+        assert!(matches!(result, Err(HttpError::Transport(_))));
     }
 
     // Reports success without ever delivering a response.
@@ -525,7 +549,7 @@ mod tests {
     fn ok_without_a_response_is_a_protocol_error() {
         let mut recorder = Recorder::new();
         let result = send(with_http(silent), "GET", "u", &[], b"", &mut recorder);
-        assert!(matches!(result, Err(HttpError::Protocol)));
+        assert!(matches!(result, Err(HttpError::Protocol(_))));
     }
 
     #[test]
@@ -589,5 +613,56 @@ mod tests {
         // Rounding must not turn a tiny limit into none.
         assert_eq!(send_timeout(Some(Duration::from_micros(10))), 1);
         assert_eq!(send_timeout(Some(Duration::from_secs(u64::MAX))), 0);
+    }
+
+    // Answers twice.
+    extern "C" fn two_responses(
+        _: *const HttpRequest,
+        callbacks: *const HttpResponseCallbacks,
+    ) -> i32 {
+        let callbacks = unsafe { &*callbacks };
+        for status in [200, 206] {
+            if !(callbacks.on_response)(callbacks.context, status, std::ptr::null(), 0) {
+                return SHOREBIRD_HTTP_ABORTED;
+            }
+        }
+        SHOREBIRD_HTTP_OK
+    }
+
+    #[test]
+    fn second_response_fails_the_request() {
+        let mut recorder = Recorder::new();
+        let result = send(
+            with_http(two_responses),
+            "GET",
+            "u",
+            &[],
+            b"",
+            &mut recorder,
+        );
+        match result {
+            Err(HttpError::Handler(e)) => {
+                assert_eq!(e.to_string(), "HTTP response delivered twice")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(recorder.status, Some(200));
+    }
+
+    // Fails with a reason.
+    extern "C" fn refused(_: *const HttpRequest, callbacks: *const HttpResponseCallbacks) -> i32 {
+        let callbacks = unsafe { &*callbacks };
+        (callbacks.on_error)(callbacks.context, c"Connection refused".as_ptr());
+        SHOREBIRD_HTTP_TRANSPORT_ERROR
+    }
+
+    #[test]
+    fn engine_reason_is_kept() {
+        let mut recorder = Recorder::new();
+        let result = send(with_http(refused), "GET", "u", &[], b"", &mut recorder);
+        match result {
+            Err(HttpError::Transport(Some(reason))) => assert_eq!(reason, "Connection refused"),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }

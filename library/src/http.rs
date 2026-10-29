@@ -61,15 +61,26 @@ pub fn engine_send(request: &Request, handler: &mut dyn ResponseHandler) -> anyh
 }
 
 #[cfg(any(engine_http, test))]
+fn with_reason(reason: Option<String>) -> String {
+    reason.map(|r| format!(": {r}")).unwrap_or_default()
+}
+
+#[cfg(any(engine_http, test))]
 fn engine_error(error: crate::engine_callbacks::HttpError, url: &str) -> anyhow::Error {
     use crate::engine_callbacks::HttpError;
     match error {
         HttpError::Handler(e) => e,
-        HttpError::Transport => NetworkError::Transport.into(),
+        HttpError::Transport(None) => NetworkError::Transport.into(),
+        HttpError::Transport(Some(reason)) => {
+            anyhow::anyhow!(reason).context(NetworkError::Transport)
+        }
         // An untrusted certificate (a TLS-inspecting proxy, say) means the
         // server couldn't be reached, as ureq reports it.
-        HttpError::Tls => anyhow::anyhow!("TLS handshake failed").context(NetworkError::Transport),
-        HttpError::Protocol => anyhow::anyhow!("Invalid HTTP response"),
+        HttpError::Tls(reason) => anyhow::anyhow!("TLS handshake failed{}", with_reason(reason))
+            .context(NetworkError::Transport),
+        HttpError::Protocol(reason) => {
+            anyhow::anyhow!("Invalid HTTP response{}", with_reason(reason))
+        }
         HttpError::InvalidRequest => anyhow::anyhow!("Invalid HTTP request for URL: {url}"),
     }
 }
@@ -116,7 +127,10 @@ pub fn ureq_send(request: &Request, handler: &mut dyn ResponseHandler) -> anyhow
             e @ (ureq::Error::HostNotFound
             | ureq::Error::ConnectionFailed
             | ureq::Error::Io(_)
-            | ureq::Error::Timeout(_)),
+            | ureq::Error::Timeout(_)
+            // An untrusted certificate, or no system roots to check it with.
+            | ureq::Error::Tls(_)
+            | ureq::Error::Rustls(_)),
         ) => return Err(anyhow::Error::new(e).context(NetworkError::Transport)),
         Err(e) => return Err(e.into()),
     };
@@ -163,16 +177,28 @@ mod tests {
     #[test]
     fn engine_tls_failure_is_a_transport_failure_with_its_cause() {
         use crate::engine_callbacks::HttpError;
-        let err = engine_error(HttpError::Tls, "https://example.com");
+        let err = engine_error(
+            HttpError::Tls(Some("certificate unknown".to_string())),
+            "https://example.com",
+        );
         assert_eq!(
             err.downcast_ref::<NetworkError>(),
             Some(&NetworkError::Transport)
         );
         assert_eq!(
             format!("{err:#}"),
-            "Network request failed; the server could not be reached.: TLS handshake failed"
+            "Network request failed; the server could not be reached.: \
+             TLS handshake failed: certificate unknown"
         );
-        let err = engine_error(HttpError::Protocol, "https://example.com");
+        let err = engine_error(
+            HttpError::Transport(Some("Connection refused".to_string())),
+            "https://example.com",
+        );
+        assert_eq!(
+            format!("{err:#}"),
+            "Network request failed; the server could not be reached.: Connection refused"
+        );
+        let err = engine_error(HttpError::Protocol(None), "https://example.com");
         assert_eq!(err.downcast_ref::<NetworkError>(), None);
     }
 }

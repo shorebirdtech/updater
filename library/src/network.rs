@@ -191,7 +191,15 @@ fn send_checked(
     request: &Request,
     handler: &mut dyn ResponseHandler,
 ) -> anyhow::Result<()> {
-    send(request, &mut StatusCheck { inner: handler })
+    // Ask for the bytes as stored. Platform clients otherwise ask for gzip
+    // and decode it, and a decoded download fails its Content-Length check.
+    let mut headers = vec![("Accept-Encoding", "identity")];
+    headers.extend_from_slice(request.headers);
+    let request = Request {
+        headers: &headers,
+        ..*request
+    };
+    send(&request, &mut StatusCheck { inner: handler })
 }
 
 struct StatusCheck<'a> {
@@ -885,6 +893,7 @@ mod tests {
             let mock = server
                 .mock("GET", "/patch")
                 .match_header("range", "bytes=6-")
+                .match_header("accept-encoding", "identity")
                 .with_status(206)
                 .with_header("content-range", "bytes 6-10/11")
                 .with_body("world")
@@ -1036,14 +1045,13 @@ mod tests {
     }
 
     #[test]
-    fn refused_connection_keeps_its_cause() {
-        // A port nothing listens on.
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
-        let url = format!("http://127.0.0.1:{port}/patch");
-        let err = super::report_event_with(ureq_send, &url, event_request()).unwrap_err();
+    fn unreachable_host_keeps_its_cause() {
+        let err = super::report_event_with(
+            ureq_send,
+            &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
+            event_request(),
+        )
+        .unwrap_err();
         assert_eq!(
             err.downcast_ref::<NetworkError>(),
             Some(&NetworkError::Transport)

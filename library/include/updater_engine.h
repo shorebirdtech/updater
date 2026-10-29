@@ -94,7 +94,7 @@ typedef struct ShorebirdHttpResponseCallbacks {
   void *context;
   /**
    * Called once with the status and headers of the final response (after
-   * any redirects), before any body bytes. The pointers are valid only
+   * any redirects), before any body bytes; a second call fails the request. The pointers are valid only
    * during the call. Returning false stops the request, which then returns
    * `SHOREBIRD_HTTP_ABORTED`.
    */
@@ -104,12 +104,19 @@ typedef struct ShorebirdHttpResponseCallbacks {
                       uintptr_t header_count);
   /**
    * Called with each run of body bytes, in order, exactly as received: the
-   * updater sends no `Accept-Encoding`, so the client must not decode a
-   * `Content-Encoding` (the updater checks the bytes against
+   * updater sends `Accept-Encoding: identity`, and the client must not
+   * decode a `Content-Encoding` (the updater checks the bytes against
    * `Content-Length`). Returning false stops the request, which then
    * returns `SHOREBIRD_HTTP_ABORTED`.
    */
   bool (*on_body)(void *context, const uint8_t *data, uintptr_t length);
+  /**
+   * May be called once, before `http_request` returns a code other than
+   * `SHOREBIRD_HTTP_OK` or `SHOREBIRD_HTTP_ABORTED`, with why the request
+   * failed (the platform error's description), for logs and the failure
+   * event. `message` is NUL-terminated and valid only during the call.
+   */
+  void (*on_error)(void *context, const char *message);
 } ShorebirdHttpResponseCallbacks;
 
 /**

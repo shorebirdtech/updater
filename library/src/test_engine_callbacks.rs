@@ -67,11 +67,18 @@ extern "C" fn http_request(
     };
     let response = match agent.run(http_request) {
         Ok(response) => response,
-        Err(ureq::Error::HostNotFound)
-        | Err(ureq::Error::ConnectionFailed)
-        | Err(ureq::Error::Io(_))
-        | Err(ureq::Error::Timeout(_)) => return SHOREBIRD_HTTP_TRANSPORT_ERROR,
-        Err(_) => return SHOREBIRD_HTTP_PROTOCOL_ERROR,
+        Err(e) => {
+            if let Ok(message) = CString::new(e.to_string()) {
+                (callbacks.on_error)(callbacks.context, message.as_ptr());
+            }
+            return match e {
+                ureq::Error::HostNotFound
+                | ureq::Error::ConnectionFailed
+                | ureq::Error::Io(_)
+                | ureq::Error::Timeout(_) => SHOREBIRD_HTTP_TRANSPORT_ERROR,
+                _ => SHOREBIRD_HTTP_PROTOCOL_ERROR,
+            };
+        }
     };
 
     let header_strings: Vec<(CString, CString)> = response
