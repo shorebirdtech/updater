@@ -284,10 +284,12 @@ pub struct Patch {
     pub hash_signature: Option<String>,
 }
 
-/// Any edits to this struct should be made carefully and in accordance
-/// with our privacy policy:
-/// <https://shorebird.dev/privacy/>
 /// The request body for the patch check endpoint.
+///
+/// Any edits to this struct should be made carefully and in accordance
+/// with our privacy policy, <https://shorebird.dev/privacy/>, and should
+/// keep the list of what Shorebird collects up to date:
+/// <https://docs.shorebird.dev/system/what-shorebird-collects/>
 #[derive(Serialize)]
 pub struct PatchCheckRequest {
     /// The Shorebird app_id built into the shorebird.yaml in the app.
