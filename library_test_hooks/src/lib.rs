@@ -21,7 +21,12 @@
 //! Production updater builds (the cdylib/staticlib that ships in the
 //! engine) do not enable `test-hooks` and never link this crate.
 
+use std::ffi::CStr;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::raw::c_char;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
 use updater::c_api::engine;
 
@@ -44,27 +49,45 @@ pub extern "C" fn shorebird_test_reset() {
     updater::testing_reset_config();
 }
 
-// Stub `FileCallbacks` mirroring the `#[cfg(test)]` `FileCallbacks::new`
-// in `library/src/c_api/c_file.rs`. The test patch fixtures are
-// self-contained zstd payloads that bipatch can apply against an empty
-// source, so the read/seek callbacks never need to deliver real bytes.
-extern "C" fn stub_open() -> *mut libc::c_void {
-    // `CFileProvider` only checks for null to detect open failure, so
-    // any non-null value works. `NonNull::dangling()` gives us one
-    // without tripping clippy's `manual_dangling_ptr` lint (which fires
-    // on integer-to-pointer casts like `1 as *mut _`).
-    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr()
+// `FileCallbacks` that serve the bytes of the `libapp_path` passed to
+// `shorebird_test_init`, the way a real engine serves the patch base. macOS
+// builds read the base through these callbacks, and the test patch fixtures
+// copy from it, so they must deliver the file's real bytes.
+static BASE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn set_base_path(libapp_path: *const c_char) {
+    let path = unsafe { CStr::from_ptr(libapp_path) }.to_string_lossy();
+    *BASE_PATH.lock().unwrap() = Some(PathBuf::from(path.as_ref()));
 }
-extern "C" fn stub_read(_handle: *mut libc::c_void, _buffer: *mut u8, _count: usize) -> usize {
-    0
+
+extern "C" fn base_open() -> *mut libc::c_void {
+    let path = BASE_PATH.lock().unwrap().clone();
+    match path.map(File::open) {
+        Some(Ok(file)) => Box::into_raw(Box::new(file)).cast(),
+        _ => std::ptr::null_mut(),
+    }
 }
-extern "C" fn stub_seek(_handle: *mut libc::c_void, _offset: i64, _whence: i32) -> i64 {
-    0
+extern "C" fn base_read(handle: *mut libc::c_void, buffer: *mut u8, count: usize) -> usize {
+    let file = unsafe { &mut *handle.cast::<File>() };
+    let buf = unsafe { std::slice::from_raw_parts_mut(buffer, count) };
+    file.read(buf).unwrap_or(0)
 }
-extern "C" fn stub_close(_handle: *mut libc::c_void) {}
+extern "C" fn base_seek(handle: *mut libc::c_void, offset: i64, whence: i32) -> i64 {
+    let file = unsafe { &mut *handle.cast::<File>() };
+    let pos = match whence {
+        libc::SEEK_SET => SeekFrom::Start(offset as u64),
+        libc::SEEK_CUR => SeekFrom::Current(offset),
+        libc::SEEK_END => SeekFrom::End(offset),
+        _ => return -1,
+    };
+    file.seek(pos).map_or(-1, |p| p as i64)
+}
+extern "C" fn base_close(handle: *mut libc::c_void) {
+    drop(unsafe { Box::from_raw(handle.cast::<File>()) });
+}
 
 /// Test-only convenience wrapper around `shorebird_init` that builds
-/// `AppParameters` and stub `FileCallbacks` internally. Dart tests
+/// `AppParameters` and `FileCallbacks` serving `libapp_path` internally. Dart tests
 /// pass plain C strings instead of needing bindings for those
 /// engine-API structs.
 #[no_mangle]
@@ -75,6 +98,7 @@ pub extern "C" fn shorebird_test_init(
     libapp_path: *const c_char,
     yaml: *const c_char,
 ) -> bool {
+    set_base_path(libapp_path);
     let libapp_paths = [libapp_path];
     let params = engine::AppParameters {
         release_version,
@@ -84,10 +108,10 @@ pub extern "C" fn shorebird_test_init(
         code_cache_dir,
     };
     let callbacks = engine::FileCallbacks {
-        open: stub_open,
-        read: stub_read,
-        seek: stub_seek,
-        close: stub_close,
+        open: base_open,
+        read: base_read,
+        seek: base_seek,
+        close: base_close,
     };
     engine::shorebird_init(&params, callbacks, yaml)
 }
