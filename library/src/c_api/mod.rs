@@ -1048,8 +1048,9 @@ mod test {
         assert_eq!(shorebird_next_boot_patch_number(), 1);
     }
 
-    /// Answers patch checks per channel the way the server does: each
-    /// channel's latest patch, whatever the device runs. "stable" holds
+    /// Answers patch checks per channel as the patch-check server does
+    /// today (it answers each channel's latest patch and doesn't read the
+    /// device's `currentPatchNumber`; this test assumes that). "stable" holds
     /// patch 2, "beta" patch 1, and "empty" nothing. Patch 2's download
     /// is `HELLO_PATCH_2_PATCH`, patch 1's `HELLO_TESTS_PATCH`.
     fn set_two_track_hooks() {
@@ -1122,7 +1123,8 @@ mod test {
         init_two_track_app(&tmp_dir);
         set_two_track_hooks();
 
-        // Launch auto-update (stable) installs patch 2; the app boots it.
+        // Launch auto-update (stable) installs patch 2. The launch is
+        // simulated in this process, so patch 2 counts as booted.
         run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
         shorebird_report_launch_start();
         shorebird_report_launch_success();
@@ -1181,7 +1183,9 @@ mod test {
         assert_eq!(shorebird_next_boot_patch_number(), 1);
         assert_eq!(shorebird_current_boot_patch_number(), 0);
 
-        // Patch 2 was dropped when patch 1 replaced it as next boot.
+        // Patch 2 was deleted when patch 1 replaced it as next boot, so
+        // stable offers it again.
+        assert!(!crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2).exists());
         assert!(check_on("stable"));
     }
 
