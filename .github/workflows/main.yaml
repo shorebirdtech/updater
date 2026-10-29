@@ -3,8 +3,9 @@ name: ci
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Cancel superseded runs: a newer push's result covers the older one.
-  cancel-in-progress: true
+  # Cancel superseded PR runs: a newer push's result covers the older one.
+  # Runs on main always finish so every commit gets its coverage upload.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
   pull_request:
