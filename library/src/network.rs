@@ -286,7 +286,7 @@ pub struct Patch {
 
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy:
-/// <https://docs.shorebird.dev/privacy>
+/// <https://shorebird.dev/privacy/>
 /// The request body for the patch check endpoint.
 #[derive(Serialize)]
 pub struct PatchCheckRequest {
