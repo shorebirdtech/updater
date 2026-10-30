@@ -642,6 +642,10 @@ impl PatchLifecycle {
     /// Records a successful boot. Promotes `currently_booting_patch` to
     /// `last_booted_patch` and runs cleanup on older patches (per-patch
     /// state-aware: Bad tombstones survive, others are forgotten).
+    ///
+    /// Recomputes `next_boot_patch` too: a newer patch installed and then
+    /// rolled back during the launch window left it at the last good patch
+    /// from before this boot, which this boot has just replaced.
     pub fn record_boot_success(&mut self) -> Result<()> {
         let n = self
             .pointers
@@ -651,7 +655,7 @@ impl PatchLifecycle {
         self.clear_breadcrumb();
         self.save_pointers()?;
         self.cleanup_older_than(n);
-        Ok(())
+        self.recompute_next_boot()
     }
 
     /// Records that patch `n` failed to boot. Marks the patch

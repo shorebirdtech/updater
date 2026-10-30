@@ -331,8 +331,8 @@ pub extern "C" fn shorebird_report_launch_start() {
 /// Report that the app failed to launch. This will cause the updater to
 /// attempt to roll back to the previous version if this version has not been
 /// launched successfully before. Between `shorebird_report_launch_paused` and
-/// `shorebird_report_launch_resumed` nothing is armed and this does nothing,
-/// so report a failure to launch the root isolate after resumed.
+/// `shorebird_report_launch_resumed` nothing is armed and this returns an error
+/// (logged), so report a failure to launch the root isolate after resumed.
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_failure() {
     log_on_error(

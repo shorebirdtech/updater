@@ -5300,8 +5300,7 @@ mod launch_sequence_tests {
     };
 
     /// Two launches reach every pair of what one launch leaves and how the
-    /// next one goes (484 sequences). Three (10,648) also pass, in about a
-    /// minute and a half.
+    /// next one goes (784 sequences). Three (21,952) also pass, slowly.
     const LAUNCHES: usize = 2;
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -5326,6 +5325,9 @@ mod launch_sequence_tests {
         InstallsNewer,
         /// The server rolls back the running patch.
         RollsBackRunning,
+        /// The app installs a newer patch, then the server rolls that one
+        /// back.
+        InstallsNewerThenRollsItBack,
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -5350,6 +5352,7 @@ mod launch_sequence_tests {
                     InWindow::Nothing,
                     InWindow::InstallsNewer,
                     InWindow::RollsBackRunning,
+                    InWindow::InstallsNewerThenRollsItBack,
                 ] {
                     launches.push(Launch {
                         newer_patch_before,
@@ -5476,6 +5479,16 @@ mod launch_sequence_tests {
                         })?;
                     }
                 }
+                InWindow::InstallsNewerThenRollsItBack => {
+                    install_fake_patch(next_patch)?;
+                    super::roll_back_patches_if_needed(vec![next_patch])?;
+                    next_patch += 1;
+                    assert_eq!(
+                        booting()?,
+                        patch,
+                        "{ctx}: rolling back the newer patch disarmed"
+                    );
+                }
                 InWindow::RollsBackRunning => {
                     if let Some(n) = patch {
                         super::roll_back_patches_if_needed(vec![n])?;
@@ -5504,6 +5517,12 @@ mod launch_sequence_tests {
                             assert_ne!(last, Some(n), "{ctx}: promoted rolled-back {n}");
                         } else {
                             assert_eq!(last, Some(n), "{ctx}: success didn't promote {n}");
+                            if launch.in_window != InWindow::InstallsNewer {
+                                let next = with_mut_state(|state| {
+                                    Ok(state.next_boot_patch().map(|p| p.number))
+                                })?;
+                                assert_eq!(next, Some(n), "{ctx}: next boot isn't booted {n}");
+                            }
                             assert!(!is_bad(n)?, "{ctx}: booted patch {n} is Bad");
                         }
                     }
