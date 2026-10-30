@@ -143,6 +143,9 @@ mod test {
             release_version: c_string("1.0.0"),
             original_libapp_paths: app_paths as *const *const libc::c_char,
             original_libapp_paths_size: app_paths_size,
+            process_token: std::ptr::null(),
+            previous_exit_process_token: std::ptr::null(),
+            previous_exit_reason: 0,
         }
     }
 
@@ -256,6 +259,9 @@ mod test {
             release_version: std::ptr::null(),
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
+            process_token: std::ptr::null(),
+            previous_exit_process_token: std::ptr::null(),
+            previous_exit_reason: 0,
         };
         assert!(!shorebird_init(
             &c_params,
@@ -286,6 +292,9 @@ mod test {
             release_version: c_string("1.0.0"),
             original_libapp_paths: paths_array.as_ptr(),
             original_libapp_paths_size: 1,
+            process_token: std::ptr::null(),
+            previous_exit_process_token: std::ptr::null(),
+            previous_exit_reason: 0,
         };
         let c_yaml = c_string("app_id: foo");
 
@@ -324,6 +333,55 @@ mod test {
             assert_eq!(result.read().status, SHOREBIRD_UPDATE_ERROR);
             shorebird_free_update_result(result as *mut UpdateResult);
         }
+    }
+
+    #[serial]
+    #[test]
+    fn init_passes_process_token_and_previous_exit() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+        let mut c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
+        c_params.process_token = c_string("p2");
+        c_params.previous_exit_process_token = c_string("p1");
+        c_params.previous_exit_reason = 3;
+        let c_yaml = c_string("app_id: foo");
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+        crate::config::with_config(|config| {
+            assert_eq!(config.process_token.as_deref(), Some("p2"));
+            assert_eq!(
+                config.previous_exit,
+                Some(crate::PreviousExit {
+                    process_token: "p1".to_string(),
+                    reason: 3,
+                })
+            );
+            Ok(())
+        })
+        .unwrap();
+        free_c_string(c_params.process_token as *mut libc::c_char);
+        free_c_string(c_params.previous_exit_process_token as *mut libc::c_char);
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+    }
+
+    #[serial]
+    #[test]
+    fn init_ignores_a_previous_exit_token_that_is_not_utf8() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+        let mut c_params = parameters(&tmp_dir, "/dir/lib/arm64/libapp.so");
+        let bad: [u8; 3] = [0xff, 0xfe, 0];
+        c_params.previous_exit_process_token = bad.as_ptr() as *const libc::c_char;
+        c_params.previous_exit_reason = 3;
+        let c_yaml = c_string("app_id: foo");
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+        crate::config::with_config(|config| {
+            assert!(config.previous_exit.is_none());
+            Ok(())
+        })
+        .unwrap();
+        free_c_string(c_yaml);
+        free_parameters(c_params);
     }
 
     #[serial]

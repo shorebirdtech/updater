@@ -17,7 +17,7 @@
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use super::{allocate_c_string, free_c_string, log_on_error, to_rust};
+use super::{allocate_c_string, free_c_string, log_on_error, to_rust, to_rust_option};
 use crate::c_api::c_file::CFileProvider;
 use crate::updater;
 
@@ -45,6 +45,20 @@ pub struct AppParameters {
     /// Path to cache directory where the updater will store downloaded
     /// artifacts and data that can be deleted when a new release is detected.
     pub code_cache_dir: *const libc::c_char,
+
+    /// This process's token, or NULL. The updater writes it into the boot
+    /// breadcrumb. On Android 11+ the engine also gives it to
+    /// `ActivityManager.setProcessStateSummary`, so the OS's record of how
+    /// the process ended carries it.
+    pub process_token: *const libc::c_char,
+
+    /// The token on the OS's record of how the previous process ended, or
+    /// NULL when there is no record (every platform but Android 11+).
+    pub previous_exit_process_token: *const libc::c_char,
+
+    /// `ApplicationExitInfo.getReason()` from that record. Ignored when
+    /// `previous_exit_process_token` is NULL.
+    pub previous_exit_reason: libc::c_int,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -205,6 +219,16 @@ fn app_config_from_c(c_params: *const AppParameters) -> anyhow::Result<updater::
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,
         )?,
+        // Tokens that aren't UTF-8 (the OS record can hold another SDK's
+        // summary) are dropped rather than failing init: without them a
+        // death while booting counts as a crash, as on any other platform.
+        process_token: to_rust_option(c_params_ref.process_token).unwrap_or(None),
+        previous_exit: to_rust_option(c_params_ref.previous_exit_process_token)
+            .unwrap_or(None)
+            .map(|process_token| updater::PreviousExit {
+                process_token,
+                reason: c_params_ref.previous_exit_reason,
+            }),
     })
 }
 

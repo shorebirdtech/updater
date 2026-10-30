@@ -23,6 +23,7 @@ Release-level pointers live in `pointers.json` (`ReleasePointers` in
 | `last_booted_patch` | `Option<usize>` | The patch that last completed a successful boot cycle. Our "known good" state. |
 | `currently_booting_patch` | `Option<usize>` | Boot breadcrumb: set when boot starts, cleared on success/failure. If set on init, the previous boot crashed. |
 | `boot_started_at` | `Option<u64>` | When the breadcrumb was set; diagnostic only. |
+| `boot_process_token` | `Option<String>` | The engine's token for the process that set the breadcrumb, if it gave one. Matches the breadcrumb to the OS's record of how that process ended (Android 11+). |
 
 Each patch has its own lifecycle state in `patches/{N}/state.json`
 (`PatchState`): `Downloading`, `Downloaded`, `Installed`, or `Bad`. A `Bad`
@@ -33,7 +34,7 @@ release.
 
 | Variable | Description |
 |----------|-------------|
-| `UpdateConfig` | Global config set once via `init()`. Contains app ID, paths, network hooks, etc. |
+| `UpdateConfig` | Global config set once via `init()`. Contains app ID, paths, network hooks, this process's `process_token` and the OS's record of the previous process's exit (`previous_exit`), etc. |
 | `running_patch` | The patch this process is using. Set at `report_launch_start()`, surfaced to Dart as `shorebird_current_boot_patch_number` and sent on patch checks as `current_patch_number`. Survives a server-driven rollback of the running patch (the process is still using it) and resets on every process start. |
 
 ## Boot Lifecycle
@@ -120,6 +121,22 @@ isolate or in the first seconds of Dart is still caught:
 While the breadcrumb is armed, `promote_to_next_boot` doesn't retire the
 booting patch, because the app's own Dart code can install a newer patch
 during the window.
+
+### A Kill Is Not a Crash (Android 11+)
+
+On Android 11+ the engine gives each process a token, both to the OS
+(`ActivityManager.setProcessStateSummary`) and to `init()` as
+`process_token`, which writes it into the breadcrumb. The next process reads
+the OS's record of how the previous one ended (`ApplicationExitInfo`) and
+passes its token and reason to `init()` as `previous_exit`. If the breadcrumb
+is armed, its token matches the record's, and the reason is a kill (low
+memory, the user, a permission, dependency or package change; see
+`PreviousExit::is_kill`), the breadcrumb is cleared and the patch boots
+again, with no event. Only `MAX_BOOT_KILLS` kills in a row are forgiven,
+since a patch can get its own process killed (memory it allocates at
+launch); the next death counts as a crash. Any other reason, a missing record, a token mismatch,
+or any other platform marks the patch `Bad` as above. Nothing about the
+reason leaves the device.
 
 ### Patch Load Failure
 
