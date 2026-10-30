@@ -193,6 +193,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # A cancelled job never ran its checks, so it fails the gate too.
       - name: ⛔️ exit(1) on failure
-        if: ${{ contains(join(needs.*.result, ','), 'failure') }}
+        if: ${{ contains(join(needs.*.result, ','), 'failure') || contains(join(needs.*.result, ','), 'cancelled') }}
         run: exit 1
