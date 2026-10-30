@@ -14,7 +14,9 @@ runs:
   using: "composite"
   steps:
     - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
+      uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      with:
+        tool: cargo-llvm-cov
 
     - name: Check Formatting
       working-directory: ${{ inputs.working_directory }}
@@ -41,7 +43,7 @@ runs:
       run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
 
     - name: Upload Coverage
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:
         # We use Codecov's carryforward flags to allow our PR testing to only
         # run affected packages, but also allow our coverage information from
