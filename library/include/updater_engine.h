@@ -290,13 +290,31 @@ SHOREBIRD_EXPORT void shorebird_report_launch_start(void);
 /**
  * Report that the app failed to launch. This will cause the updater to
  * attempt to roll back to the previous version if this version has not been
- * launched successfully before.
+ * launched successfully before. Between `shorebird_report_launch_paused` and
+ * `shorebird_report_launch_resumed` nothing is armed and this does nothing,
+ * so report a failure to launch the root isolate after resumed.
  */
 SHOREBIRD_EXPORT void shorebird_report_launch_failure(void);
 
 /**
- * Report that the app launched successfully. The Shell constructor calls
- * this once per process when the VM has finished booting; it pairs with
+ * Report that the engine built its Shell but hasn't launched Dart. Clears
+ * the boot breadcrumb without promoting the patch, so an engine that is
+ * created and never run doesn't mark the patch Bad. Call once per process,
+ * after `shorebird_report_launch_start`.
+ */
+SHOREBIRD_EXPORT void shorebird_report_launch_paused(void);
+
+/**
+ * Report that the engine is launching the root isolate. Arms the boot
+ * breadcrumb again for the patch this process loaded. Call once per
+ * process, from the first engine to launch, before
+ * `shorebird_report_launch_success` or `shorebird_report_launch_failure`.
+ */
+SHOREBIRD_EXPORT void shorebird_report_launch_resumed(void);
+
+/**
+ * Report that the app launched successfully: the root isolate launched and
+ * the app stayed up through the engine's launch window. Pairs with
  * `shorebird_report_launch_start` to mark a patch as having booted cleanly.
  */
 SHOREBIRD_EXPORT void shorebird_report_launch_success(void);

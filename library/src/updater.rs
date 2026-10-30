@@ -1412,6 +1412,27 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     })
 }
 
+/// The engine has built its Shell but hasn't launched Dart: clears the boot
+/// breadcrumb without promoting the patch, so a process that ends before
+/// [`report_launch_resumed`] (an engine created and never run) doesn't mark
+/// the patch Bad. The patch stays the running patch.
+pub fn report_launch_paused() -> anyhow::Result<()> {
+    shorebird_info!("Reporting launch paused.");
+    with_mut_state(|state| state.lifecycle_mut().record_boot_pause())
+}
+
+/// The engine is launching the root isolate: arms the boot breadcrumb again
+/// for the running patch, the one this process loaded, whatever
+/// `next_boot_patch` says by now. A death from here until
+/// [`report_launch_success`] is a death booting the patch.
+pub fn report_launch_resumed() -> anyhow::Result<()> {
+    shorebird_info!("Reporting launch resumed.");
+    with_mut_state(|state| match state.running_patch() {
+        Some(patch) => state.lifecycle_mut().record_boot_resume(patch.number),
+        None => Ok(()),
+    })
+}
+
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
@@ -3970,6 +3991,135 @@ mod state_recovery_tests {
         Ok(())
     }
 
+    /// An engine built and never run: the process ends after paused, and
+    /// the patch is not blamed.
+    #[serial]
+    #[test]
+    fn death_after_paused_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })
+    }
+
+    /// The app's Dart code can install a newer patch during the launch
+    /// window. The booting patch stays installed and armed, and success
+    /// promotes it, not the newer one.
+    #[serial]
+    #[test]
+    fn install_during_launch_window_keeps_booting_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        install_fake_patch(2)?;
+
+        with_mut_state(|state| {
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            assert!(matches!(
+                state.lifecycle().read_state(1),
+                Some(crate::cache::lifecycle::PatchState::Installed { .. })
+            ));
+            Ok(())
+        })?;
+
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+        with_mut_state(|state| {
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            Ok(())
+        })
+    }
+
+    /// A server rollback of the booting patch during the launch window:
+    /// success promotes nothing and keeps the last good patch.
+    #[serial]
+    #[test]
+    fn rollback_during_launch_window_keeps_last_good_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        install_fake_patch(2)?;
+        init_for_testing(&tmp_dir, None);
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        super::roll_back_patches_if_needed(vec![2])?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.lifecycle().installed_artifact_path(1).exists());
+            Ok(())
+        })
+    }
+
+    /// Without a patch, paused and resumed arm nothing.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_without_patch_arm_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// The full sequence promotes the patch and reports one install.
+    #[serial]
+    #[test]
+    fn start_paused_resumed_success_promotes_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        with_mut_state(|state| {
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
     /// When a newer patch crashes during boot, it should be marked bad.
     /// The previously-good patch (patch 1) was booted successfully before
     /// patch 2 was installed, so crash recovery should mark only patch 2 bad.
@@ -5128,5 +5278,280 @@ mod failure_classification_tests {
         ));
         assert!(require_signature_verifier(&signed, true).is_ok());
         assert!(require_signature_verifier(&unsigned, false).is_ok());
+    }
+}
+
+/// Runs every sequence of [`LAUNCHES`] launches the engine can report, then
+/// one more init, and checks the boot invariants after each step. Each launch follows the engine's order (start, paused, resumed,
+/// then success or failure when the launch window closes) and can end at
+/// any point, can find a newer patch installed before it starts, and can
+/// install a patch or have the server roll back its patch while the window
+/// is open.
+#[cfg(test)]
+mod launch_sequence_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use crate::{
+        report_launch_failure, report_launch_paused, report_launch_resumed, report_launch_start,
+        report_launch_success, test_utils::install_fake_patch, updater::tests::init_for_testing,
+        with_mut_state,
+    };
+
+    /// Two launches reach every pair of what one launch leaves and how the
+    /// next one goes (484 sequences). Three (10,648) also pass, in about a
+    /// minute and a half.
+    const LAUNCHES: usize = 2;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum End {
+        /// The process dies after start, before the Shell is built.
+        DiesAfterStart,
+        /// The Shell is built and Dart never runs (an engine created and
+        /// never run), then the process ends.
+        EndsAfterPaused,
+        /// The process dies inside the launch window.
+        DiesInWindow,
+        /// The window closes: success.
+        Success,
+        /// The root isolate fails to launch.
+        Failure,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum InWindow {
+        Nothing,
+        /// The app's own Dart code installs a newer patch.
+        InstallsNewer,
+        /// The server rolls back the running patch.
+        RollsBackRunning,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Launch {
+        newer_patch_before: bool,
+        in_window: InWindow,
+        end: End,
+    }
+
+    fn all_launches() -> Vec<Launch> {
+        let mut launches = vec![];
+        for newer_patch_before in [false, true] {
+            for end in [End::DiesAfterStart, End::EndsAfterPaused] {
+                launches.push(Launch {
+                    newer_patch_before,
+                    in_window: InWindow::Nothing,
+                    end,
+                });
+            }
+            for end in [End::DiesInWindow, End::Success, End::Failure] {
+                for in_window in [
+                    InWindow::Nothing,
+                    InWindow::InstallsNewer,
+                    InWindow::RollsBackRunning,
+                ] {
+                    launches.push(Launch {
+                        newer_patch_before,
+                        in_window,
+                        end,
+                    });
+                }
+            }
+        }
+        launches
+    }
+
+    fn sequences(len: usize) -> Vec<Vec<Launch>> {
+        if len == 0 {
+            return vec![vec![]];
+        }
+        let mut out = vec![];
+        for prefix in sequences(len - 1) {
+            for launch in all_launches() {
+                let mut seq = prefix.clone();
+                seq.push(launch);
+                out.push(seq);
+            }
+        }
+        out
+    }
+
+    /// What the previous launch left for the next init to judge.
+    enum Left {
+        Nothing,
+        /// The process died with the breadcrumb armed for this patch.
+        DiedArmed(usize),
+        /// The process ended with this patch unarmed and not blamed.
+        EndedClean(usize),
+    }
+
+    fn running() -> Result<Option<usize>> {
+        with_mut_state(|state| Ok(state.running_patch().map(|p| p.number)))
+    }
+
+    fn booting() -> Result<Option<usize>> {
+        with_mut_state(|state| Ok(state.currently_booting_patch().map(|p| p.number)))
+    }
+
+    fn is_bad(n: usize) -> Result<bool> {
+        with_mut_state(|state| Ok(state.is_known_bad_patch(n)))
+    }
+
+    /// The patch the next launch would boot is never Bad, and its artifact
+    /// is on disk.
+    fn check_next_boot(ctx: &str) -> Result<()> {
+        with_mut_state(|state| {
+            if let Some(next) = state.next_boot_patch() {
+                assert!(
+                    !state.is_known_bad_patch(next.number),
+                    "{ctx}: next boot {} is Bad",
+                    next.number
+                );
+                assert!(
+                    state
+                        .lifecycle()
+                        .installed_artifact_path(next.number)
+                        .exists(),
+                    "{ctx}: next boot {} has no artifact",
+                    next.number
+                );
+            }
+            Ok(())
+        })
+    }
+
+    fn run(seq: &[Launch]) -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        let mut next_patch = 1;
+        let mut left = Left::Nothing;
+        for (i, launch) in seq.iter().enumerate() {
+            let ctx = format!("{seq:?} at launch {i}");
+            if launch.newer_patch_before {
+                // Installed by the previous process's update thread.
+                if i > 0 {
+                    install_fake_patch(next_patch)?;
+                }
+                next_patch += 1;
+            }
+            init_for_testing(&tmp_dir, None);
+            if i == 0 && launch.newer_patch_before {
+                install_fake_patch(next_patch - 1)?;
+            }
+
+            judge(&left, &ctx)?;
+
+            report_launch_start()?;
+            let patch = running()?;
+            assert_eq!(booting()?, patch, "{ctx}: start arms the running patch");
+            if launch.end == End::DiesAfterStart {
+                left = patch.map_or(Left::Nothing, Left::DiedArmed);
+                continue;
+            }
+
+            report_launch_paused()?;
+            assert_eq!(booting()?, None, "{ctx}: paused leaves nothing armed");
+            if launch.end == End::EndsAfterPaused {
+                left = patch.map_or(Left::Nothing, Left::EndedClean);
+                continue;
+            }
+
+            report_launch_resumed()?;
+            assert_eq!(booting()?, patch, "{ctx}: resumed arms the running patch");
+
+            let mut rolled_back = false;
+            match launch.in_window {
+                InWindow::Nothing => {}
+                InWindow::InstallsNewer => {
+                    install_fake_patch(next_patch)?;
+                    next_patch += 1;
+                    if let Some(n) = patch {
+                        assert_eq!(booting()?, Some(n), "{ctx}: install disarmed {n}");
+                        with_mut_state(|state| {
+                            assert!(
+                                state.lifecycle().installed_artifact_path(n).exists(),
+                                "{ctx}: install retired booting patch {n}"
+                            );
+                            Ok(())
+                        })?;
+                    }
+                }
+                InWindow::RollsBackRunning => {
+                    if let Some(n) = patch {
+                        super::roll_back_patches_if_needed(vec![n])?;
+                        assert_eq!(booting()?, None, "{ctx}: rollback left {n} armed");
+                        rolled_back = true;
+                    }
+                }
+            }
+
+            match launch.end {
+                End::DiesInWindow => {
+                    left = match patch {
+                        Some(n) if !rolled_back => Left::DiedArmed(n),
+                        _ => Left::Nothing,
+                    };
+                }
+                End::Success => {
+                    report_launch_success()?;
+                    super::testing_wait_for_event_flushes();
+                    assert_eq!(booting()?, None, "{ctx}: success left a breadcrumb");
+                    let last = with_mut_state(|state| {
+                        Ok(state.last_successfully_booted_patch().map(|p| p.number))
+                    })?;
+                    if let Some(n) = patch {
+                        if rolled_back {
+                            assert_ne!(last, Some(n), "{ctx}: promoted rolled-back {n}");
+                        } else {
+                            assert_eq!(last, Some(n), "{ctx}: success didn't promote {n}");
+                            assert!(!is_bad(n)?, "{ctx}: booted patch {n} is Bad");
+                        }
+                    }
+                    left = match patch {
+                        Some(n) if !rolled_back => Left::EndedClean(n),
+                        _ => Left::Nothing,
+                    };
+                }
+                End::Failure => {
+                    // The engine reports a failure only for a patch it was
+                    // booting; after a rollback nothing is armed.
+                    if let (Some(n), false) = (patch, rolled_back) {
+                        report_launch_failure()?;
+                        assert!(is_bad(n)?, "{ctx}: failure didn't mark {n} Bad");
+                        assert_eq!(booting()?, None, "{ctx}: failure left a breadcrumb");
+                    }
+                    left = Left::Nothing;
+                }
+                End::DiesAfterStart | End::EndsAfterPaused => unreachable!(),
+            }
+            check_next_boot(&ctx)?;
+        }
+        init_for_testing(&tmp_dir, None);
+        judge(&left, &format!("{seq:?} after the last launch"))
+    }
+
+    /// Crash recovery at init judged what the last process left.
+    fn judge(left: &Left, ctx: &str) -> Result<()> {
+        assert_eq!(booting()?, None, "{ctx}: breadcrumb after init");
+        match *left {
+            Left::Nothing => {}
+            Left::DiedArmed(n) => {
+                assert!(is_bad(n)?, "{ctx}: patch {n} died armed but isn't Bad")
+            }
+            Left::EndedClean(n) => {
+                assert!(!is_bad(n)?, "{ctx}: patch {n} ended unarmed but is Bad")
+            }
+        }
+        check_next_boot(ctx)
+    }
+
+    #[serial]
+    #[test]
+    fn every_launch_sequence_keeps_the_boot_invariants() -> Result<()> {
+        let all = sequences(LAUNCHES);
+        for seq in &all {
+            run(seq)?;
+        }
+        Ok(())
     }
 }

@@ -343,6 +343,7 @@ impl UpdaterState {
     /// Removes the artifacts for `patch_number` and recomputes pointers.
     /// Used today for server-driven rollbacks.
     pub fn uninstall_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.lifecycle.forget_booting(patch_number)?;
         self.lifecycle.cleanup(patch_number)?;
         self.lifecycle.recompute_next_boot()
     }

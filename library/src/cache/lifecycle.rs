@@ -139,9 +139,10 @@ pub struct ReleasePointers {
     /// a fallback target when `next_boot_patch` becomes invalid.
     pub last_booted_patch: Option<usize>,
 
-    /// Boot-in-progress breadcrumb. Set at `record_boot_start`, cleared
-    /// at `record_boot_success` / `record_boot_failure`. If still set on
-    /// next init, treat as a crashed boot.
+    /// Boot-in-progress breadcrumb. Set at `record_boot_start` and again at
+    /// `record_boot_resume`; cleared at `record_boot_pause`,
+    /// `record_boot_success` and `record_boot_failure`.
+    /// If still set on next init, the process died while booting the patch.
     pub currently_booting_patch: Option<usize>,
 
     /// Unix timestamp (seconds) when `currently_booting_patch` was set.
@@ -587,8 +588,54 @@ impl PatchLifecycle {
             Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
             None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
         }
+        self.set_breadcrumb(n)
+    }
+
+    fn set_breadcrumb(&mut self, n: usize) -> Result<()> {
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
+        self.save_pointers()
+    }
+
+    fn clear_breadcrumb(&mut self) {
+        self.pointers.currently_booting_patch = None;
+        self.pointers.boot_started_at = None;
+    }
+
+    /// Clears the breadcrumb without promoting the patch: the engine has
+    /// built its Shell but may never run Dart, and a process that ends now
+    /// didn't crash running the patch. [`record_boot_resume`] arms it again
+    /// when the root isolate launches. No-op without a breadcrumb.
+    pub fn record_boot_pause(&mut self) -> Result<()> {
+        if self.pointers.currently_booting_patch.is_none() {
+            return Ok(());
+        }
+        self.clear_breadcrumb();
+        self.save_pointers()
+    }
+
+    /// Arms the breadcrumb again for patch `n`, the patch this process
+    /// loaded, when the engine launches the root isolate. Unlike
+    /// [`record_boot_start`] it doesn't require `n` to still be
+    /// `next_boot_patch`: what matters is the patch that is running.
+    pub fn record_boot_resume(&mut self, n: usize) -> Result<()> {
+        match self.read_state(n) {
+            Some(PatchState::Installed { .. }) => {}
+            other => {
+                bail!("record_boot_resume({n}) expected Installed, got {other:?}");
+            }
+        }
+        self.set_breadcrumb(n)
+    }
+
+    /// Clears the breadcrumb if it names `n`, which is being uninstalled
+    /// (a server rollback during the launch window): success must not
+    /// promote a patch that is gone, nor clean up the patches before it.
+    pub fn forget_booting(&mut self, n: usize) -> Result<()> {
+        if self.pointers.currently_booting_patch != Some(n) {
+            return Ok(());
+        }
+        self.clear_breadcrumb();
         self.save_pointers()
     }
 
@@ -601,8 +648,7 @@ impl PatchLifecycle {
             .currently_booting_patch
             .context("record_boot_success without currently_booting_patch")?;
         self.pointers.last_booted_patch = Some(n);
-        self.pointers.currently_booting_patch = None;
-        self.pointers.boot_started_at = None;
+        self.clear_breadcrumb();
         self.save_pointers()?;
         self.cleanup_older_than(n);
         Ok(())
@@ -626,8 +672,7 @@ impl PatchLifecycle {
     /// it silently.
     pub fn record_boot_failure(&mut self, n: usize) -> Result<()> {
         self.mark_bad(n, BadReason::BootCrash)?;
-        self.pointers.currently_booting_patch = None;
-        self.pointers.boot_started_at = None;
+        self.clear_breadcrumb();
         self.save_pointers()?;
         self.recompute_next_boot()
     }
@@ -731,9 +776,13 @@ impl PatchLifecycle {
         }
         // If we're replacing an Installed-but-never-booted previous
         // next_boot, retire it. cleanup handles tombstones correctly.
+        // Not while it is booting: the app's own Dart code can install a
+        // patch during the launch window, and the booting patch must stay
+        // to be promoted at success or marked Bad if the launch dies.
         let last_booted = self.pointers.last_booted_patch;
+        let booting = self.pointers.currently_booting_patch;
         if let Some(prev) = self.pointers.next_boot_patch {
-            if prev != n && Some(prev) != last_booted {
+            if prev != n && Some(prev) != last_booted && Some(prev) != booting {
                 self.cleanup(prev)?;
             }
         }
