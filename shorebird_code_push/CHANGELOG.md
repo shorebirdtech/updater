@@ -4,9 +4,13 @@
   app's Dart code in place so a downloaded patch takes effect without the
   user relaunching the app. Requires an engine with hot restart support,
   returns `false` (patch still applies on next launch) on older engines.
-- breaking: `dangerouslyHotRestart()` is a new member on `ShorebirdUpdater`.
-  Code that `implements ShorebirdUpdater` (hand-written test fakes, most
-  often) has to add it. Code that uses the updater is unaffected.
+- feat: add `ShorebirdUpdater.patchTransitions`, a stream that reports when a
+  patch is waiting on a restart, so the app can pick the moment instead of
+  having one picked for it. Nothing restarts on its own.
+- breaking: `patchTransitions` and `dangerouslyHotRestart()` are new members
+  on `ShorebirdUpdater`. Code that `implements ShorebirdUpdater` (hand-written
+  test fakes, most often) has to add them. Code that uses the updater is
+  unaffected.
 
 # 2.0.7
 

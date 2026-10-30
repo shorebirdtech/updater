@@ -4,6 +4,11 @@ Hot restart applies a downloaded patch without the user relaunching the app:
 the Flutter engine tears down the running Dart isolate and boots a fresh one
 from the next boot patch, inside the same OS process.
 
+Nothing in Shorebird starts one. The app subscribes to
+`ShorebirdUpdater.patchTransitions`, learns that a patch is waiting, and
+calls `dangerouslyHotRestart()` if it judges the moment a safe one. Only the
+app knows what the user is in the middle of losing.
+
 ## Who does what
 
 The updater cannot restart the Dart VM: only the engine can. The updater's

@@ -13,6 +13,9 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => false;
 
   @override
+  Stream<PatchTransition> get patchTransitions => const Stream.empty();
+
+  @override
   Future<Patch?> readCurrentPatch() async => null;
 
   @override

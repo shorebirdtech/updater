@@ -46,8 +46,42 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
   final IsolateRun _run;
 
+  final _transitions = StreamController<PatchTransition>.broadcast();
+
   @override
   bool get isAvailable => _isAvailable;
+
+  @override
+  Stream<PatchTransition> get patchTransitions {
+    if (!_isAvailable) return const Stream.empty();
+    return Stream.multi((controller) {
+      PatchTransition? last;
+      void send(PatchTransition transition) {
+        // The same pending transition read twice is one restart seen twice,
+        // not two.
+        if (transition == last) return;
+        last = transition;
+        controller.add(transition);
+      }
+
+      final subscription = _transitions.stream.listen(send);
+      controller.onCancel = subscription.cancel;
+
+      // A patch can already be waiting from before this listener existed, so
+      // a stream carrying only what it saw live would never mention the
+      // update() that landed during startup.
+      // A read that fails says nothing about whether a patch is waiting, and
+      // the app's own readCurrentPatch/readNextPatch still report it, so the
+      // catch-up stays silent rather than tearing down the subscription.
+      _readTransition().then(
+        (transition) {
+          if (controller.isClosed) return;
+          if (transition.isPending) send(transition);
+        },
+        onError: (_, __) {},
+      );
+    });
+  }
 
   @override
   Future<Patch?> readCurrentPatch() => _readPatch(_updater.currentPatchNumber);
@@ -79,22 +113,42 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
     // If no new update is available for download, see if a new patch exists
-    // on disk that requires a restart.
+    // on disk that requires a restart. A restart is required when the current
+    // and next patches differ, which covers both the "new patch downloaded"
+    // case and the "current patch was rolled back" case, where next is null
+    // and the app has to restart to revert to the base release.
+    final transition = await _readTransition();
+    if (!transition.isPending) return UpdateStatus.upToDate;
+    _transitions.add(transition);
+    return UpdateStatus.restartRequired;
+  }
+
+  Future<PatchTransition> _readTransition() async {
     final (current, next) = await (readCurrentPatch(), readNextPatch()).wait;
-    // A restart is required when the current and next patches differ. This
-    // covers both the "new patch downloaded" case (next differs from current)
-    // and the "current patch was rolled back" case (current is non-null but
-    // next is null, meaning the app needs to restart to revert to the base
-    // release).
-    return current?.number != next?.number
-        ? UpdateStatus.restartRequired
-        : UpdateStatus.upToDate;
+    return PatchTransition(current: current, next: next);
   }
 
   @override
   Future<void> update({UpdateTrack? track}) async {
     if (!_isAvailable) return;
 
+    await _install(track: track);
+
+    // An install is the one point where the next boot patch changes without
+    // the app asking anything, so it is where a subscriber has to be told.
+    // Best-effort: the install already succeeded, and a patch that cannot be
+    // read is not a reason to report that it failed.
+    try {
+      final transition = await _readTransition();
+      if (transition.isPending) _transitions.add(transition);
+      // A ReadPatchException is the expected failure, but the read crosses an
+      // isolate boundary, so catch everything rather than let an unforeseen
+      // error reach a caller whose install worked.
+      // ignore: avoid_catches_without_on_clauses
+    } catch (_) {}
+  }
+
+  Future<void> _install({UpdateTrack? track}) async {
     final result = await _run(() => _updater.update(track: track));
 
     const unknownErrorMessage = 'An unknown error occurred.';

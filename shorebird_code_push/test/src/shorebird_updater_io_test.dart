@@ -711,5 +711,134 @@ void main() {
         });
       });
     });
+
+    group('patchTransitions', () {
+      /// Collects everything the stream emits, so a test can assert on the
+      /// absence of an event as well as its presence.
+      List<PatchTransition> collect(Stream<PatchTransition> stream) {
+        final events = <PatchTransition>[];
+        final subscription = stream.listen(events.add);
+        addTearDown(subscription.cancel);
+        return events;
+      }
+
+      group('when updater is unavailable', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenThrow(Exception('oops'));
+        });
+
+        test(
+          'emits nothing',
+          overridePrint((_) async {
+            shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+            final events = collect(shorebirdUpdater.patchTransitions);
+            await pumpEventQueue();
+            expect(events, isEmpty);
+          }),
+        );
+      });
+
+      group('when a patch is already waiting', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(1);
+          when(updater.nextPatchNumber).thenReturn(2);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('tells a new listener about it', () async {
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await pumpEventQueue();
+          expect(events, [
+            const PatchTransition(
+              current: Patch(number: 1),
+              next: Patch(number: 2),
+            ),
+          ]);
+        });
+
+        test('emits once however many times the transition is read', () async {
+          when(() => updater.checkForDownloadableUpdate()).thenReturn(false);
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await shorebirdUpdater.checkForUpdate();
+          await shorebirdUpdater.checkForUpdate();
+          await pumpEventQueue();
+          expect(events, hasLength(1));
+        });
+
+        test('tells every listener', () async {
+          final first = collect(shorebirdUpdater.patchTransitions);
+          final second = collect(shorebirdUpdater.patchTransitions);
+          await pumpEventQueue();
+          expect(first, hasLength(1));
+          expect(second, equals(first));
+        });
+      });
+
+      group('when nothing is waiting', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(1);
+          when(updater.nextPatchNumber).thenReturn(1);
+          when(() => updater.checkForDownloadableUpdate()).thenReturn(false);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('emits nothing', () async {
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await shorebirdUpdater.checkForUpdate();
+          await pumpEventQueue();
+          expect(events, isEmpty);
+        });
+
+        test('emits when checkForUpdate finds the patch withdrawn', () async {
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await pumpEventQueue();
+          expect(events, isEmpty);
+
+          // The server pulled the running patch, so next_boot_patch is gone
+          // and a restart drops the app back to the base release.
+          when(updater.nextPatchNumber).thenReturn(0);
+          await shorebirdUpdater.checkForUpdate();
+          await pumpEventQueue();
+          expect(events, [
+            const PatchTransition(current: Patch(number: 1), next: null),
+          ]);
+        });
+      });
+
+      group('when update installs a patch', () {
+        setUp(() {
+          when(updater.currentPatchNumber).thenReturn(0);
+          when(updater.nextPatchNumber).thenReturn(0);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
+          result.ref.status = SHOREBIRD_UPDATE_INSTALLED;
+          addTearDown(() => calloc.free(result));
+          when(() => updater.update()).thenReturn(result);
+          shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
+        });
+
+        test('emits the installed patch', () async {
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await pumpEventQueue();
+          expect(events, isEmpty);
+
+          when(updater.nextPatchNumber).thenReturn(3);
+          await shorebirdUpdater.update();
+          await pumpEventQueue();
+          expect(events, [
+            const PatchTransition(current: null, next: Patch(number: 3)),
+          ]);
+        });
+
+        test('a failed read leaves the successful install alone', () async {
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await pumpEventQueue();
+
+          when(updater.nextPatchNumber).thenThrow(Exception('oops'));
+          await expectLater(shorebirdUpdater.update(), completes);
+          await pumpEventQueue();
+          expect(events, isEmpty);
+        });
+      });
+    });
   });
 }

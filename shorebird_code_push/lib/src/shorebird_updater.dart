@@ -1,3 +1,4 @@
+import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/shorebird_updater_io.dart'
     if (dart.library.js_interop) './shorebird_updater_web.dart';
 
@@ -100,6 +101,46 @@ class Patch {
   final int number;
 }
 
+/// {@template patch_transition}
+/// A change, waiting on a restart, in which patch the app's Dart code runs
+/// from.
+///
+/// Delivered by [ShorebirdUpdater.patchTransitions]. Both patches are given
+/// rather than just the new one, because an app that wants to treat a
+/// withdrawal differently from a new patch cannot tell them apart otherwise.
+/// {@endtemplate}
+@immutable
+class PatchTransition {
+  /// {@macro patch_transition}
+  const PatchTransition({required this.current, required this.next});
+
+  /// The patch the app's Dart code is running from now, or `null` if it is
+  /// running the base release.
+  final Patch? current;
+
+  /// The patch a restart would boot, or `null` if a restart would boot the
+  /// base release. `null` with a non-null [current] is a withdrawal: the
+  /// patch the app is running has been pulled.
+  final Patch? next;
+
+  /// Whether [next] differs from [current], so a restart would change which
+  /// code the app runs.
+  bool get isPending => current?.number != next?.number;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PatchTransition &&
+      other.current?.number == current?.number &&
+      other.next?.number == next?.number;
+
+  @override
+  int get hashCode => Object.hash(current?.number, next?.number);
+
+  @override
+  String toString() =>
+      'PatchTransition(current: ${current?.number}, next: ${next?.number})';
+}
+
 /// The current status of the app in terms of whether its up-to-date.
 enum UpdateStatus {
   /// The app is up to date (e.g. running the latest patch.)
@@ -134,6 +175,27 @@ abstract class ShorebirdUpdater {
   /// 2. The app was *NOT* built using `shorebird release` and does *NOT*
   ///    contain the Shorebird engine.
   bool get isAvailable;
+
+  /// Emits a [PatchTransition] each time a patch is waiting on a restart to
+  /// take effect, so the app can decide for itself whether this is a moment
+  /// the user can afford to lose their place.
+  ///
+  /// Nothing is restarted for you. An event says a restart would change which
+  /// code the app runs; whether to call [dangerouslyHotRestart], prompt
+  /// first, or wait for the next launch is the app's call.
+  ///
+  /// A new listener is told about a transition that is already waiting, so
+  /// subscribing after the [update] that produced one still reports it. While
+  /// subscribed, a listener is told when [update] installs a patch and when
+  /// [checkForUpdate] finds that the running patch was withdrawn. The same
+  /// pending transition seen twice is emitted once.
+  ///
+  /// Events arrive only from calls the app makes. Nothing polls in the
+  /// background, so an app that never calls [checkForUpdate] or [update]
+  /// never hears anything.
+  ///
+  /// Emits nothing if the updater is not available (see [isAvailable]).
+  Stream<PatchTransition> get patchTransitions;
 
   /// Returns information about the currently installed patch.
   /// Returns `null` if no patch has been installed.
@@ -254,9 +316,9 @@ abstract class ShorebirdUpdater {
   /// the next full app launch, so callers can fall back to prompting the user
   /// to restart the app.
   ///
-  /// Note: this restarts Dart code even if no new patch is waiting. Check
-  /// [checkForUpdate] for [UpdateStatus.restartRequired] before calling this
-  /// if you only want to restart when a patch is pending.
+  /// Note: this restarts Dart code even if no new patch is waiting. Subscribe
+  /// to [patchTransitions] and call this from there if you only want to
+  /// restart when a patch is pending.
   Future<bool> dangerouslyHotRestart();
 }
 

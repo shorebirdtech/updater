@@ -37,6 +37,16 @@ void main() {
       );
     });
 
+    group('patchTransitions', () {
+      test(
+        'emits nothing',
+        overridePrint((_) async {
+          shorebirdUpdater = ShorebirdUpdaterImpl();
+          await expectLater(shorebirdUpdater.patchTransitions, emitsDone);
+        }),
+      );
+    });
+
     group('readPatch', () {
       test(
         'returns null',
