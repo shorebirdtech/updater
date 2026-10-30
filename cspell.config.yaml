@@ -32,6 +32,7 @@ words:
   - comde
   - compatch
   - Condvar
+  - dashmap
   - datadir
   - debuginfo
   - declspec
@@ -54,6 +55,7 @@ words:
   - ffigen
   - gclient
   - hdpi
+  - hexdigit
   - ifdef
   - keypair
   - libapp
@@ -109,5 +111,6 @@ words:
   - xlink
   - zstandard
   - zstd
+  - zopfli
   - xcodeproj
   - pbxproj
