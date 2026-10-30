@@ -6,6 +6,9 @@ name: build_patch_artifacts
 # published only after all uploads succeed.
 #
 # To release: git tag patch-vX.Y.Z && git push origin patch-vX.Y.Z
+# If an upload fails, use "Re-run failed jobs"; the draft is reused.
+# Don't publish a patch release from the UI: it would have no binaries,
+# and an immutable release's tag can never be reused.
 
 permissions:
   contents: write
@@ -24,8 +27,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
-            --verify-tag --title "patch ${TAG#patch-v}" --generate-notes
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --verify-tag --title "patch ${TAG#patch-v}" --generate-notes
 
   upload-artifacts:
     needs: create-draft
@@ -62,4 +66,12 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+        run: |
+          # Publishing can't be undone, so check every binary is there first.
+          count=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '[.assets[].name | select(endswith(".zip"))] | length')
+          if [ "$count" != 4 ]; then
+            echo "Expected 4 zips on the draft, found $count" >&2
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
