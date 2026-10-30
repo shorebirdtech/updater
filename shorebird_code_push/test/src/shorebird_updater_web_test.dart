@@ -37,16 +37,6 @@ void main() {
       );
     });
 
-    group('patchTransitions', () {
-      test(
-        'emits nothing',
-        overridePrint((_) async {
-          shorebirdUpdater = ShorebirdUpdaterImpl();
-          await expectLater(shorebirdUpdater.patchTransitions, emitsDone);
-        }),
-      );
-    });
-
     group('readPatch', () {
       test(
         'returns null',
@@ -80,18 +70,6 @@ void main() {
         'does nothing',
         overridePrint((_) async {
           await expectLater(shorebirdUpdater.update(), completes);
-        }),
-      );
-    });
-
-    group('dangerouslyHotRestart', () {
-      test(
-        'returns false',
-        overridePrint((_) async {
-          await expectLater(
-            shorebirdUpdater.dangerouslyHotRestart(),
-            completion(isFalse),
-          );
         }),
       );
     });

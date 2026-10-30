@@ -69,7 +69,7 @@ It can also occur when running on an unsupported platform (e.g. web).
 ''');
 }
 
-/// Log message when [ShorebirdUpdater.dangerouslyHotRestart] cannot reach
+/// Log message when `ShorebirdHotRestart.dangerouslyHotRestart` cannot reach
 /// the engine.
 ///
 /// Expected on an engine that predates hot restart support, where the FFI
@@ -106,8 +106,8 @@ class Patch {
 /// A change, waiting on a restart, in which patch the app's Dart code runs
 /// from.
 ///
-/// Delivered by [ShorebirdUpdater.patchTransitions]. Both patches are given
-/// rather than just the new one, because an app that wants to treat a
+/// Delivered by `ShorebirdHotRestart.patchTransitions`. Both patches are
+/// given rather than just the new one, because an app that wants to treat a
 /// withdrawal differently from a new patch cannot tell them apart otherwise.
 /// {@endtemplate}
 @immutable
@@ -176,30 +176,6 @@ abstract class ShorebirdUpdater {
   /// 2. The app was *NOT* built using `shorebird release` and does *NOT*
   ///    contain the Shorebird engine.
   bool get isAvailable;
-
-  /// Emits a [PatchTransition] each time a patch is waiting on a restart to
-  /// take effect, so the app can decide for itself whether this is a moment
-  /// the user can afford to lose their place.
-  ///
-  /// Nothing is restarted for you. An event says a restart would change which
-  /// code the app runs; whether to call [dangerouslyHotRestart], prompt
-  /// first, or wait for the next launch is the app's call.
-  ///
-  /// An event fires whenever [update] or [checkForUpdate] finds that the
-  /// patch a restart would boot differs from the one running. A withdrawal is
-  /// the `next == null` case of that, not a separate kind of event. The same
-  /// pending transition seen twice is emitted once.
-  ///
-  /// A new listener is told about a transition that is already waiting, so
-  /// subscribing after the [update] that produced one still reports it, as
-  /// does one the updater's own background thread installed before the
-  /// listener existed.
-  ///
-  /// Nothing polls. Past that read on subscribe, events follow the calls the
-  /// app makes.
-  ///
-  /// Emits nothing if the updater is not available (see [isAvailable]).
-  Stream<PatchTransition> get patchTransitions;
 
   /// Returns information about the currently installed patch.
   /// Returns `null` if no patch has been installed.
@@ -275,55 +251,6 @@ abstract class ShorebirdUpdater {
   /// * [checkForUpdate], which should be called to check if an update is
   ///   available before calling this method.
   Future<void> update({UpdateTrack? track});
-
-  /// Restarts the app's Dart code so the most recently downloaded patch takes
-  /// effect immediately, without the user relaunching the app.
-  ///
-  /// The name says `dangerously` because the cost is paid by whoever is using
-  /// the app at the time: everything on screen is thrown away mid-task, with
-  /// no prompt and no undo. Only the code that knows what the user is doing
-  /// can judge that this moment is a safe one, which is why nothing in
-  /// Shorebird ever calls this for you.
-  ///
-  /// This tears down the running Dart isolate and boots a fresh one from the
-  /// next boot patch (the patch reported by [readNextPatch], or the base
-  /// release if the current patch was rolled back). It is the production
-  /// equivalent of a development-time hot restart: all in-memory Dart state
-  /// is lost and `main()` runs again, while the surrounding platform
-  /// activity/view controller and plugin registrations are preserved.
-  ///
-  /// Preserved is not the same as reset. Native state a plugin is holding
-  /// — an open socket, a subscription, a camera session, a cached handle
-  /// to a Dart callback — survives the restart while the Dart half of it
-  /// does not, so `main()` runs again against native objects that think
-  /// they are still in use. Plugins written only for a cold start may
-  /// double-register listeners or hand the new isolate state belonging to
-  /// the old one. Test a restart against the plugins your app actually
-  /// uses before shipping one behind a user-facing button.
-  ///
-  /// Returns `true` if the engine accepted the restart request. When this
-  /// returns `true` the restart happens asynchronously. Dart code (including
-  /// code immediately after this call) may continue to run briefly before the
-  /// isolate is torn down, so don't rely on execution stopping here.
-  ///
-  /// Returns `false` when hot restart is not supported in the current
-  /// environment:
-  /// * The updater is not available (see [isAvailable]).
-  /// * The app is running against a Shorebird engine that predates hot
-  ///   restart support.
-  /// * The engine configuration is unsupported (e.g. multiple Flutter engines
-  ///   in one process, as with some add-to-app setups).
-  /// * The app is running on a desktop platform (Windows, macOS, or Linux).
-  ///   Hot restart is supported on Android and iOS only.
-  ///
-  /// When this returns `false`, the downloaded patch still takes effect on
-  /// the next full app launch, so callers can fall back to prompting the user
-  /// to restart the app.
-  ///
-  /// Note: this restarts Dart code even if no new patch is waiting. Subscribe
-  /// to [patchTransitions] and call this from there if you only want to
-  /// restart when a patch is pending.
-  Future<bool> dangerouslyHotRestart();
 }
 
 /// A track to check for updates on.

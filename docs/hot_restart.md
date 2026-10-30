@@ -5,7 +5,7 @@ the Flutter engine tears down the running Dart isolate and boots a fresh one
 from the next boot patch, inside the same OS process.
 
 Nothing in Shorebird starts one. The app subscribes to
-`ShorebirdUpdater.patchTransitions`, learns that a patch is waiting, and
+`ShorebirdHotRestart.patchTransitions`, learns that a patch is waiting, and
 calls `dangerouslyHotRestart()` if it judges the moment a safe one. Only the
 app knows what the user is in the middle of losing.
 
@@ -18,7 +18,7 @@ more than one launch cycle per process.
 ```
 package:shorebird_code_push          updater (Rust)              Shorebird engine (C++)
 ----------------------------         --------------              ----------------------
-ShorebirdUpdater.dangerouslyHotRestart()
+ShorebirdHotRestart.dangerouslyHotRestart()
   └─ shorebird_restart_app() ──────► restart::request_restart()
                                        └─ registered handler ──► restart host
                                                                    ├─ resolves next boot patch

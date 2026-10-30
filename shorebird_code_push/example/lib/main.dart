@@ -30,6 +30,10 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
+  // Experimental on purpose: the surface may move onto the updater itself
+  // when the next major version of the package settles.
+  // ignore: experimental_member_use
+  late final _hotRestart = ShorebirdHotRestart(updater: _updater);
   late final bool _isUpdaterAvailable;
   var _currentTrack = UpdateTrack.stable;
   var _isCheckingForUpdates = false;
@@ -54,7 +58,7 @@ class _MyHomePageState extends State<MyHomePage> {
     // Ask to be told when a patch is waiting on a restart, from this check or
     // any other. The app decides what to do about it: here, offer the user the
     // choice rather than take their screen away from them.
-    _transitions = _updater.patchTransitions.listen((_) {
+    _transitions = _hotRestart.patchTransitions.listen((_) {
       if (!mounted) return;
       _showRestartBanner();
     });
@@ -167,7 +171,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 // immediately. Returns false if hot restart isn't supported
                 // in this environment (e.g. an older engine), in which case
                 // the patch takes effect on the next app launch instead.
-                final restarting = await _updater.dangerouslyHotRestart();
+                final restarting = await _hotRestart.dangerouslyHotRestart();
                 if (!mounted || restarting) return;
                 _showRestartFailedBanner();
               },

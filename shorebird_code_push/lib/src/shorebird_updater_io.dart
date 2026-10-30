@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
+import 'package:shorebird_code_push/src/patch_transitions.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
@@ -46,53 +47,8 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
   final IsolateRun _run;
 
-  final _transitions = StreamController<PatchTransition>.broadcast();
-
   @override
   bool get isAvailable => _isAvailable;
-
-  @override
-  Stream<PatchTransition> get patchTransitions {
-    if (!_isAvailable) return const Stream.empty();
-    return Stream.multi((controller) {
-      PatchTransition? last;
-      void send(PatchTransition transition) {
-        // The same pending transition read twice is one restart seen twice,
-        // not two.
-        if (transition == last) return;
-        last = transition;
-        controller.add(transition);
-      }
-
-      var sawLive = false;
-      final subscription = _transitions.stream.listen((transition) {
-        sawLive = true;
-        send(transition);
-      });
-      controller.onCancel = subscription.cancel;
-
-      // A patch can already be waiting from before this listener existed, so
-      // a stream carrying only what it saw live would never mention the
-      // update() that landed during startup.
-      //
-      // The catch-up read and a live event race, and each patch read is its
-      // own isolate spawn, so the read can resolve after an install that has
-      // already been published. A live event is never older than the read
-      // this listener started with, so one arriving retires the catch-up
-      // rather than being corrected by it.
-      //
-      // A read that fails says nothing about whether a patch is waiting, and
-      // the app's own readCurrentPatch/readNextPatch still report it, so the
-      // catch-up stays silent rather than tearing down the subscription.
-      _readTransition().then(
-        (transition) {
-          if (controller.isClosed || sawLive) return;
-          if (transition.isPending) send(transition);
-        },
-        onError: (_, __) {},
-      );
-    });
-  }
 
   @override
   Future<Patch?> readCurrentPatch() => _readPatch(_updater.currentPatchNumber);
@@ -130,7 +86,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     // and the app has to restart to revert to the base release.
     final transition = await _readTransition();
     if (!transition.isPending) return UpdateStatus.upToDate;
-    _transitions.add(transition);
+    patchTransitionPublisher.add(transition);
     return UpdateStatus.restartRequired;
   }
 
@@ -149,7 +105,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     // read is not a reason to report that it failed.
     try {
       final transition = await _readTransition();
-      if (transition.isPending) _transitions.add(transition);
+      if (transition.isPending) patchTransitionPublisher.add(transition);
       // A ReadPatchException is the expected failure, but the read crosses an
       // isolate boundary, so catch everything rather than let an unforeseen
       // error reach a caller whose install worked.
@@ -191,27 +147,6 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
       throw UpdateException(message: message, reason: reason);
     } finally {
       _updater.freeUpdateResult(result);
-    }
-  }
-
-  @override
-  Future<bool> dangerouslyHotRestart() async {
-    if (!_isAvailable) return false;
-
-    // Intentionally not run in a separate isolate, because a helper isolate
-    // could be torn down mid-call once the restart begins. The updater invokes
-    // the engine's registered restart handler synchronously, so this relies on
-    // that handler scheduling the restart and returning without waiting for it
-    // to complete.
-    try {
-      return _updater.restartApp();
-      // Catch everything: engines that predate hot restart support don't
-      // export the symbol, which surfaces as an ArgumentError from the
-      // late-bound FFI lookup.
-      // ignore: avoid_catches_without_on_clauses
-    } catch (error) {
-      logRestartUnavailableMessage(error);
-      return false;
     }
   }
 }

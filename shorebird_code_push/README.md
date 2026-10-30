@@ -82,19 +82,21 @@ See the example for a complete working app.
 ### Applying a patch without relaunching the app
 
 By default, a downloaded patch takes effect the next time the app launches.
-`dangerouslyHotRestart()` applies it immediately instead by restarting the
-app's Dart code in place (like a development hot restart: all in-memory state
-is lost and `main()` runs again, but the app itself stays open).
+`ShorebirdHotRestart` applies it immediately instead by restarting the app's
+Dart code in place (like a development hot restart: all in-memory state is
+lost and `main()` runs again, but the app itself stays open).
 
-It is named `dangerously` because the user pays for it: whatever they were
-doing is gone, with no prompt and no undo. Nothing in Shorebird calls it for
-you, so pick the moment yourself:
+The call is named `dangerously` because the user pays for it: whatever they
+were doing is gone, with no prompt and no undo. Nothing in Shorebird calls it
+for you, so pick the moment yourself:
 
 ```dart
+final hotRestart = ShorebirdHotRestart(updater: updater);
+
 final status = await updater.checkForUpdate();
 if (status == UpdateStatus.restartRequired) {
   // Consider prompting the user first: the app's state resets.
-  final restarting = await updater.dangerouslyHotRestart();
+  final restarting = await hotRestart.dangerouslyHotRestart();
   if (!restarting) {
     // Hot restart isn't supported here (e.g. an engine that predates it or
     // an app running multiple Flutter engines). The patch will take effect
@@ -106,6 +108,10 @@ if (status == UpdateStatus.restartRequired) {
 Requires a Shorebird Flutter version with hot restart support on Android or
 iOS. On anything older `dangerouslyHotRestart()` safely returns `false`.
 
+`ShorebirdHotRestart` is marked experimental. It lives on its own class rather
+than on `ShorebirdUpdater` so that adding it breaks nobody, and it may move
+onto the updater itself in the next major version.
+
 Plugins keep their native state across the restart while their Dart state is
 discarded, so `main()` runs again against native objects that believe they
 are still in use. A plugin written only for a cold start can double-register
@@ -115,12 +121,13 @@ user can press.
 
 ### Hearing about a patch from anywhere in the app
 
-`patchTransitions` reports every patch that is waiting on a restart, whether
+`ShorebirdHotRestart.patchTransitions` reports every patch waiting on a
+restart, whether
 it arrived from your own `update()` call or turned up on a `checkForUpdate()`
 somewhere else. Subscribe once, near where you know what the user is doing:
 
 ```dart
-_subscription = updater.patchTransitions.listen((transition) {
+_subscription = hotRestart.patchTransitions.listen((transition) {
   // transition.next is the patch a restart would boot.
   if (transition.next == null) {
     // A withdrawal: the patch the app is running has been pulled, and a

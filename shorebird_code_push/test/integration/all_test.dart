@@ -189,7 +189,7 @@ void main() {
     });
 
     // Drives the full production hot restart request path:
-    // ShorebirdUpdater.dangerouslyHotRestart() → shorebird_restart_app FFI →
+    // ShorebirdHotRestart.dangerouslyHotRestart() → shorebird_restart_app FFI →
     // the Rust relay → the engine-registered restart handler. In
     // production the handler tears down and relaunches the Dart
     // isolate. Here a fake handler records the request.
@@ -204,27 +204,28 @@ void main() {
 
       engine.init(tmp: tmp, server: server);
       final updater = engine.createUpdater();
+      final hotRestart = ShorebirdHotRestart(updater: updater);
 
       // No handler registered (e.g. an engine without hot restart
       // support): the request is rejected.
-      expect(await updater.dangerouslyHotRestart(), isFalse);
+      expect(await hotRestart.dangerouslyHotRestart(), isFalse);
 
       // The engine registers a handler at startup and accepts the
       // request.
       engine.installRestartHandler();
-      expect(await updater.dangerouslyHotRestart(), isTrue);
+      expect(await hotRestart.dangerouslyHotRestart(), isTrue);
       expect(engine.restartRequestCount, 1);
 
       // The engine can also reject the request (e.g. unsupported
       // multi-engine configuration).
       engine.installRestartHandler(accept: false);
-      expect(await updater.dangerouslyHotRestart(), isFalse);
+      expect(await hotRestart.dangerouslyHotRestart(), isFalse);
       expect(engine.restartRequestCount, 1);
 
       // engine.reset() (shorebird_test_reset) removes the handler, as
       // process teardown would.
       engine.reset();
-      expect(await updater.dangerouslyHotRestart(), isFalse);
+      expect(await hotRestart.dangerouslyHotRestart(), isFalse);
     });
   });
 }

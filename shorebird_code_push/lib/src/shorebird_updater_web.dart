@@ -13,9 +13,6 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   bool get isAvailable => false;
 
   @override
-  Stream<PatchTransition> get patchTransitions => const Stream.empty();
-
-  @override
   Future<Patch?> readCurrentPatch() async => null;
 
   @override
@@ -27,7 +24,4 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
   @override
   Future<void> update({UpdateTrack? track}) async {}
-
-  @override
-  Future<bool> dangerouslyHotRestart() async => false;
 }
