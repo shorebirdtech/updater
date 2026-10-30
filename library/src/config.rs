@@ -119,6 +119,10 @@ pub struct UpdateConfig {
     pub file_provider: Arc<dyn ExternalFileProvider>,
     pub patch_public_key: Option<String>,
     pub patch_verification: PatchVerificationMode,
+    /// See `AppConfig::process_token`.
+    pub process_token: Option<String>,
+    /// See `AppConfig::previous_exit`.
+    pub previous_exit: Option<crate::PreviousExit>,
 }
 
 /// Returns Ok if the config was set successfully, Err if it was already set.
@@ -162,6 +166,8 @@ pub fn set_config(
             file_provider: Arc::from(file_provider),
             patch_public_key: yaml.patch_public_key.to_owned(),
             patch_verification: yaml.patch_verification.unwrap_or_default(),
+            process_token: app_config.process_token,
+            previous_exit: app_config.previous_exit,
         };
         shorebird_debug!("Updater configured with: {:?}", new_config);
         *config = Some(new_config);
@@ -220,6 +226,7 @@ mod tests {
             code_cache_dir: "/tmp".to_string(),
             release_version: "1.0.0".to_string(),
             original_libapp_paths: vec!["libapp.so".to_string()],
+            ..Default::default()
         }
     }
 
@@ -246,6 +253,7 @@ mod tests {
                 code_cache_dir: "/code_cache".to_string(),
                 release_version: "1.0.0".to_string(),
                 original_libapp_paths: vec!["libapp.so".to_string()],
+                ..Default::default()
             },
             Box::new(FakeExternalFileProvider {}),
             "first_path".into(),
