@@ -112,6 +112,10 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-apple-ios
             os: macos-latest
+          # The engine's arm64 iOS simulator build links this target
+          # (shorebirdtech/flutter#225).
+          - target: aarch64-apple-ios-sim
+            os: macos-latest
 
     runs-on: ${{ matrix.os }}
 
