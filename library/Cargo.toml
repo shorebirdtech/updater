@@ -20,7 +20,7 @@ test-hooks = ["dep:ring", "dep:ureq"]
 
 [dependencies]
 # Used for error handling for now.
-anyhow = "1.0.69"
+anyhow = "1.0.103"
 base64 = "0.23.0"
 # For inflating compressed patch files.
 bipatch = "1.0.0"
@@ -39,7 +39,7 @@ log = "0.4.14"
 # For mmap'ing libapp.so out of the APK without buffering it in RAM. This
 # matters on memory-constrained devices: reading the whole library into a
 # Vec<u8> can cost tens of MB and trigger OOM kills mid-patch.
-memmap2 = "0.9.10"
+memmap2 = "0.9.11"
 # For implementing thread-local-storage of ResolvedConfig object.
 once_cell = "1.17.1"
 # Json serialization/de-serialization.

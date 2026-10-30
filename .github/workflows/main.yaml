@@ -144,6 +144,23 @@ jobs:
         working-directory: library
         run: cargo clippy --target ${{ matrix.target }} -- -D warnings
 
+  # Advisories, banned crates and sources for every crate in Cargo.lock
+  # (config in deny.toml). Runs on every PR, not only Rust changes, so a
+  # newly published advisory against a dependency we already ship fails CI.
+  cargo_deny:
+    runs-on: ubuntu-latest
+
+    name: 🛡️ cargo deny
+
+    steps:
+      - name: 📚 Git Checkout
+        uses: actions/checkout@v7
+
+      - name: 🛡️ cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
   build_flutter_packages:
     needs: changes
     if: ${{ needs.changes.outputs.needs_flutter_build != '[]' }}
@@ -170,7 +187,7 @@ jobs:
           working_directory: ${{ matrix.package }}
 
   ci:
-    needs: [build_flutter_packages, build_rust_crates, check_mobile_targets]
+    needs: [build_flutter_packages, build_rust_crates, cargo_deny, check_mobile_targets]
     if: ${{ always() }}
 
     runs-on: ubuntu-latest
