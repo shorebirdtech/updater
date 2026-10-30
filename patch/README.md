@@ -10,10 +10,8 @@ file for uploading to Shorebird's servers.
 ## Context, design and future thoughts.
 
 Originally `patch` was written on top of the `bidiff` tool, but really no longer
-needs to be. For expediency we used the `comde` crate to have a generic api
-across multiple compression algorithms. However, we've since decided to use the
-`zstd` crate for compression and decompression and could remove our `comde` and
-`bidiff` dependencies eventually.
+needs to be. It compresses with the `zstd` crate, and could drop its `bidiff`
+dependency eventually.
 
 Because `bidiff` does not check what it's patching, it's possible to apply a
 patch to the wrong file. To avoid this we currently have a separate hash

@@ -93,7 +93,7 @@ pub fn ureq_send(request: &Request, handler: &mut dyn ResponseHandler) -> anyhow
 
     // Statuses are the caller's to judge, so ureq must not turn 4xx/5xx into
     // errors.
-    static AGENT: once_cell::sync::Lazy<ureq::Agent> = once_cell::sync::Lazy::new(|| {
+    static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
         ureq::Agent::config_builder()
             .http_status_as_error(false)
             .tls_config(

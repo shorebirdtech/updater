@@ -23,5 +23,6 @@ fn main() {
     println!("Base: {older}");
     println!("New: {newer}");
     println!("Patch: {patch:?}");
-    println!("Hash (new): {}", hex::encode(hash));
+    let hash: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    println!("Hash (new): {hash}");
 }

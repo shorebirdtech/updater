@@ -9,10 +9,9 @@ use crate::updater::UpdateError;
 // to read the config at once while an update is running.
 // We could share code with config.rs which does similar for UpdateConfig.
 fn updater_lock() -> &'static std::sync::Mutex<UpdaterLockState> {
-    use once_cell::sync::OnceCell;
     use std::sync::Mutex;
-    static INSTANCE: OnceCell<Mutex<UpdaterLockState>> = OnceCell::new();
-    INSTANCE.get_or_init(|| Mutex::new(UpdaterLockState::empty()))
+    static INSTANCE: Mutex<UpdaterLockState> = Mutex::new(UpdaterLockState::empty());
+    &INSTANCE
 }
 
 // Note: it is not OK to ever ask for the Updater lock *while* holding the
@@ -52,7 +51,7 @@ pub struct UpdaterLockState {
 }
 
 impl UpdaterLockState {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {}
     }
 }
