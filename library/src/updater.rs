@@ -5509,52 +5509,6 @@ mod hot_restart_tests {
         Ok(())
     }
 
-    /// `hot_restart: false` is how an app keeps the pre-hot-restart
-    /// behavior: patches still install, they just wait for the next launch.
-    /// The engine must not even be asked, so an app that opted out cannot be
-    /// restarted by an engine that would happily do it.
-    #[serial]
-    #[test]
-    fn hot_restart_false_refuses_without_asking_the_engine() -> Result<()> {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static ASKED: AtomicUsize = AtomicUsize::new(0);
-        extern "C" fn handler() -> bool {
-            ASKED.fetch_add(1, Ordering::SeqCst);
-            true
-        }
-
-        let tmp_dir = TempDir::new().unwrap();
-        crate::updater::tests::init_for_testing_with_yaml(&tmp_dir, None, "\nhot_restart: false");
-        crate::restart::set_restart_handler(Some(handler));
-        ASKED.store(0, Ordering::SeqCst);
-
-        assert!(
-            !crate::c_api::dart::shorebird_restart_app(),
-            "a restart must be refused when hot_restart is false"
-        );
-        assert_eq!(
-            ASKED.load(Ordering::SeqCst),
-            0,
-            "the engine was asked anyway"
-        );
-
-        // The same handler accepts once the app has not opted out, so the
-        // refusal above is the config and not a broken handler.
-        crate::updater::tests::init_for_testing_with_yaml(&tmp_dir, None, "\nhot_restart: true");
-        crate::restart::set_restart_handler(Some(handler));
-        assert!(crate::c_api::dart::shorebird_restart_app());
-        assert_eq!(ASKED.load(Ordering::SeqCst), 1);
-
-        // Unset is the default, and the default is on.
-        crate::updater::tests::init_for_testing_with_yaml(&tmp_dir, None, "");
-        crate::restart::set_restart_handler(Some(handler));
-        assert!(crate::c_api::dart::shorebird_restart_app());
-        assert_eq!(ASKED.load(Ordering::SeqCst), 2);
-
-        crate::restart::set_restart_handler(None);
-        Ok(())
-    }
-
     /// Validation has to judge the patch the engine is about to load. After
     /// a failed restart that is the fallback, so validating `pointers`
     /// instead would let a corrupt fallback boot unchecked and tombstone

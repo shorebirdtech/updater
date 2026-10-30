@@ -116,9 +116,7 @@ SHOREBIRD_EXPORT void shorebird_free_update_result(struct UpdateResult *result);
  * momentarily. Dart code continues running until the restart begins, so
  * callers should not assume execution stops at this call. Returns false if
  * restarting is not supported (engine too old, debug build, or an
- * unsupported engine configuration such as multiple concurrent engines),
- * or if `hot_restart: false` in shorebird.yaml has turned it off, in which
- * case the patch stays installed and boots on the next launch instead.
+ * unsupported engine configuration such as multiple concurrent engines).
  */
 SHOREBIRD_EXPORT bool shorebird_restart_app(void);
 
