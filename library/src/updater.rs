@@ -241,11 +241,61 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
 // `AppConfig` is the rust API.
 // However rusty api would probably used `&str` instead of `String`,
 // but making `&str` from `CStr*` is a bit of a pain.
+#[derive(Default)]
 pub struct AppConfig {
     pub app_storage_dir: String,
     pub code_cache_dir: String,
     pub release_version: String,
     pub original_libapp_paths: Vec<String>,
+    /// The engine's token for this process, written into the boot
+    /// breadcrumb. On Android 11+ it is also the process's state summary
+    /// (`ActivityManager.setProcessStateSummary`), so the OS's record of how
+    /// the process ended carries it. `None` where the engine has no such
+    /// record.
+    pub process_token: Option<String>,
+    /// What the OS recorded about how the previous process ended, if it
+    /// recorded anything.
+    pub previous_exit: Option<PreviousExit>,
+}
+
+/// The OS's record of how the previous process ended. Android 11+ only
+/// (`ApplicationExitInfo`); no other platform tells the next process before
+/// it boots.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviousExit {
+    /// The `process_token` that process gave the OS, read back from the
+    /// record. Ties the record to the boot breadcrumb that process left.
+    pub process_token: String,
+    /// `ApplicationExitInfo.getReason()`.
+    pub reason: i32,
+}
+
+impl PreviousExit {
+    /// Whether the OS ended the process for a reason that says nothing
+    /// about the patch it was running: memory pressure, the user, or a
+    /// change to permissions, a dependency or the package. Every other
+    /// reason, including `OTHER` and `UNKNOWN`, counts as a crash, so a
+    /// death we can't place errs toward rolling the patch back.
+    pub fn is_kill(&self) -> bool {
+        // https://developer.android.com/reference/android/app/ApplicationExitInfo
+        const REASON_LOW_MEMORY: i32 = 3;
+        const REASON_PERMISSION_CHANGE: i32 = 8;
+        const REASON_USER_REQUESTED: i32 = 10;
+        const REASON_USER_STOPPED: i32 = 11;
+        const REASON_DEPENDENCY_DIED: i32 = 12;
+        const REASON_PACKAGE_STATE_CHANGE: i32 = 15;
+        const REASON_PACKAGE_UPDATED: i32 = 16;
+        matches!(
+            self.reason,
+            REASON_LOW_MEMORY
+                | REASON_PERMISSION_CHANGE
+                | REASON_USER_REQUESTED
+                | REASON_USER_STOPPED
+                | REASON_DEPENDENCY_DIED
+                | REASON_PACKAGE_STATE_CHANGE
+                | REASON_PACKAGE_UPDATED
+        )
+    }
 }
 
 pub trait ReadSeek: Read + Seek {}
@@ -363,6 +413,25 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_verification,
         );
         if let Some(patch) = state.currently_booting_patch() {
+            // On Android 11+ the OS says how the process that left the
+            // breadcrumb ended. A kill (memory, the user) says nothing
+            // about the patch, so it boots again. Nothing is reported: the
+            // reason stays on the device.
+            let breadcrumb_token = state.lifecycle().pointers().boot_process_token.clone();
+            if let (Some(exit), Some(token)) = (&config.previous_exit, breadcrumb_token) {
+                if exit.process_token == token
+                    && exit.is_kill()
+                    && state.lifecycle_mut().record_boot_killed()?
+                {
+                    shorebird_info!(
+                        "Patch {} was booting when the OS ended the process (reason {}); keeping it.",
+                        patch.number,
+                        exit.reason
+                    );
+                    return Ok(());
+                }
+            }
+
             let boot_time_info = state
                 .boot_started_at()
                 .map(|ts| format!(",boot_started_at={ts}"))
@@ -1397,6 +1466,7 @@ pub fn running_patch() -> anyhow::Result<Option<PatchInfo>> {
 
 pub fn report_launch_start() -> anyhow::Result<()> {
     shorebird_info!("Reporting launch start.");
+    let process_token = with_config(|config| Ok(config.process_token.clone()))?;
 
     with_mut_state(|state| {
         let next_boot_patch = state.next_boot_patch();
@@ -1406,7 +1476,7 @@ pub fn report_launch_start() -> anyhow::Result<()> {
         // call below is the only disk write on this path.
         state.set_running_patch(next_boot_patch.as_ref().map(|p| p.number));
         if let Some(next_boot_patch) = next_boot_patch {
-            state.record_boot_start_for_patch(next_boot_patch.number)?;
+            state.record_boot_start_for_patch(next_boot_patch.number, process_token.as_deref())?;
         }
         Ok(())
     })
@@ -1427,8 +1497,11 @@ pub fn report_launch_paused() -> anyhow::Result<()> {
 /// [`report_launch_success`] is a death booting the patch.
 pub fn report_launch_resumed() -> anyhow::Result<()> {
     shorebird_info!("Reporting launch resumed.");
+    let process_token = with_config(|config| Ok(config.process_token.clone()))?;
     with_mut_state(|state| match state.running_patch() {
-        Some(patch) => state.lifecycle_mut().record_boot_resume(patch.number),
+        Some(patch) => state
+            .lifecycle_mut()
+            .record_boot_resume(patch.number, process_token.as_deref()),
         None => Ok(()),
     })
 }
@@ -1572,6 +1645,18 @@ mod tests {
     /// Like [`init_for_testing`], with `extra_yaml` appended to the
     /// shorebird.yaml (e.g. `patch_public_key` / `patch_verification`).
     pub fn init_for_testing_with_yaml(tmp_dir: &TempDir, base_url: Option<&str>, extra_yaml: &str) {
+        init_for_testing_with_process(tmp_dir, base_url, extra_yaml, None, None);
+    }
+
+    /// Like [`init_for_testing_with_yaml`], as a process with `process_token`
+    /// whose OS reports `previous_exit` for the process before it.
+    pub fn init_for_testing_with_process(
+        tmp_dir: &TempDir,
+        base_url: Option<&str>,
+        extra_yaml: &str,
+        process_token: Option<&str>,
+        previous_exit: Option<crate::PreviousExit>,
+    ) {
         testing_reset_config();
         let cache_dir = tmp_dir.path().to_str().unwrap().to_string();
         let mut yaml = "app_id: 1234".to_string();
@@ -1593,6 +1678,8 @@ mod tests {
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
                 original_libapp_paths: vec![libapp_path],
+                process_token: process_token.map(str::to_owned),
+                previous_exit,
             },
             Box::new(FakeExternalFileProvider {}),
             &yaml,
@@ -1616,6 +1703,7 @@ mod tests {
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
+                    ..Default::default()
                 },
                 Box::new(FakeExternalFileProvider {}),
                 &yaml,
@@ -1638,6 +1726,7 @@ mod tests {
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
+                    ..Default::default()
                 },
                 Box::new(FakeExternalFileProvider {}),
                 &yaml,
@@ -1816,6 +1905,7 @@ mod tests {
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
+                    ..Default::default()
                 },
                 Box::new(FakeExternalFileProvider {}),
                 "",
@@ -1843,6 +1933,7 @@ patch_verification: bogus_mode
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
                 original_libapp_paths: vec!["original_libapp_path".to_string()],
+                ..Default::default()
             },
             Box::new(FakeExternalFileProvider {}),
             yaml,
@@ -3991,6 +4082,104 @@ mod state_recovery_tests {
         Ok(())
     }
 
+    /// Starts process `token` booting patch 1 and leaves it dead with the
+    /// breadcrumb armed, as a process that died during its launch window.
+    fn die_while_booting_patch_1(tmp_dir: &TempDir, token: &str) -> Result<()> {
+        super::tests::init_for_testing_with_process(tmp_dir, None, "", Some(token), None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        Ok(())
+    }
+
+    fn exit(token: &str, reason: i32) -> Option<crate::PreviousExit> {
+        Some(crate::PreviousExit {
+            process_token: token.to_string(),
+            reason,
+        })
+    }
+
+    /// Android REASON_LOW_MEMORY: the OS killed the process, so the patch
+    /// boots again and nothing is reported.
+    #[serial]
+    #[test]
+    fn kill_during_boot_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        die_while_booting_patch_1(&tmp_dir, "p1")?;
+
+        super::tests::init_for_testing_with_process(&tmp_dir, None, "", Some("p2"), exit("p1", 3));
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.currently_booting_patch().is_none());
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })
+    }
+
+    /// Android REASON_CRASH_NATIVE: the patch is marked Bad, as without a
+    /// record.
+    #[serial]
+    #[test]
+    fn native_crash_during_boot_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        die_while_booting_patch_1(&tmp_dir, "p1")?;
+
+        super::tests::init_for_testing_with_process(&tmp_dir, None, "", Some("p2"), exit("p1", 5));
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert_eq!(state.copy_events(10).len(), 1);
+            Ok(())
+        })
+    }
+
+    /// A kill record from some other process (an older one, or one that
+    /// never armed) says nothing about this breadcrumb.
+    #[serial]
+    #[test]
+    fn kill_record_for_another_process_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        die_while_booting_patch_1(&tmp_dir, "p1")?;
+
+        super::tests::init_for_testing_with_process(&tmp_dir, None, "", Some("p2"), exit("p0", 3));
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            Ok(())
+        })
+    }
+
+    /// A breadcrumb with no token (an engine that gives none, or one left
+    /// by an older updater) can't be matched to a record.
+    #[serial]
+    #[test]
+    fn kill_record_without_breadcrumb_token_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+
+        super::tests::init_for_testing_with_process(&tmp_dir, None, "", Some("p2"), exit("p1", 3));
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn only_kill_reasons_are_kills() {
+        let kills: Vec<i32> = (0..=16)
+            .filter(|reason| exit("p", *reason).unwrap().is_kill())
+            .collect();
+        // LOW_MEMORY, PERMISSION_CHANGE, USER_REQUESTED, USER_STOPPED,
+        // DEPENDENCY_DIED, PACKAGE_STATE_CHANGE, PACKAGE_UPDATED.
+        assert_eq!(kills, vec![3, 8, 10, 11, 12, 15, 16]);
+    }
+
     /// An engine built and never run: the process ends after paused, and
     /// the patch is not blamed.
     #[serial]
@@ -4077,6 +4266,47 @@ mod state_recovery_tests {
             );
             assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
             assert!(state.lifecycle().installed_artifact_path(1).exists());
+            Ok(())
+        })
+    }
+
+    /// Kills are forgiven only a few times in a row: a patch that gets its
+    /// own process killed at launch is then marked Bad.
+    #[serial]
+    #[test]
+    fn repeated_kills_during_boot_mark_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        die_while_booting_patch_1(&tmp_dir, "p1")?;
+        let mut previous = "p1".to_string();
+        for i in 0..crate::cache::lifecycle::MAX_BOOT_KILLS {
+            let token = format!("k{i}");
+            super::tests::init_for_testing_with_process(
+                &tmp_dir,
+                None,
+                "",
+                Some(&token),
+                exit(&previous, 3),
+            );
+            with_mut_state(|state| {
+                assert!(!state.is_known_bad_patch(1));
+                Ok(())
+            })?;
+            report_launch_start()?;
+            crate::report_launch_paused()?;
+            crate::report_launch_resumed()?;
+            previous = token;
+        }
+
+        super::tests::init_for_testing_with_process(
+            &tmp_dir,
+            None,
+            "",
+            Some("last"),
+            exit(&previous, 3),
+        );
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
             Ok(())
         })
     }
@@ -5286,7 +5516,8 @@ mod failure_classification_tests {
 /// then success or failure when the launch window closes) and can end at
 /// any point, can find a newer patch installed before it starts, and can
 /// install a patch or have the server roll back its patch while the window
-/// is open.
+/// is open. On Android 11+ a death is either a crash or a kill, and the
+/// next process gets the OS's record of it.
 #[cfg(test)]
 mod launch_sequence_tests {
     use anyhow::Result;
@@ -5295,23 +5526,32 @@ mod launch_sequence_tests {
 
     use crate::{
         report_launch_failure, report_launch_paused, report_launch_resumed, report_launch_start,
-        report_launch_success, test_utils::install_fake_patch, updater::tests::init_for_testing,
-        with_mut_state,
+        report_launch_success, test_utils::install_fake_patch,
+        updater::tests::init_for_testing_with_process, with_mut_state, PreviousExit,
     };
 
     /// Two launches reach every pair of what one launch leaves and how the
-    /// next one goes (784 sequences). Three (21,952) also pass, slowly.
+    /// next one goes. The kill cap needs three in a row;
+    /// `repeated_kills_during_boot_mark_patch_bad` covers it.
     const LAUNCHES: usize = 2;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Death {
+        /// `REASON_CRASH_NATIVE`.
+        Crash,
+        /// `REASON_LOW_MEMORY`.
+        Kill,
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum End {
         /// The process dies after start, before the Shell is built.
-        DiesAfterStart,
+        DiesAfterStart(Death),
         /// The Shell is built and Dart never runs (an engine created and
         /// never run), then the process ends.
         EndsAfterPaused,
         /// The process dies inside the launch window.
-        DiesInWindow,
+        DiesInWindow(Death),
         /// The window closes: success.
         Success,
         /// The root isolate fails to launch.
@@ -5340,14 +5580,23 @@ mod launch_sequence_tests {
     fn all_launches() -> Vec<Launch> {
         let mut launches = vec![];
         for newer_patch_before in [false, true] {
-            for end in [End::DiesAfterStart, End::EndsAfterPaused] {
+            for end in [
+                End::DiesAfterStart(Death::Crash),
+                End::DiesAfterStart(Death::Kill),
+                End::EndsAfterPaused,
+            ] {
                 launches.push(Launch {
                     newer_patch_before,
                     in_window: InWindow::Nothing,
                     end,
                 });
             }
-            for end in [End::DiesInWindow, End::Success, End::Failure] {
+            for end in [
+                End::DiesInWindow(Death::Crash),
+                End::DiesInWindow(Death::Kill),
+                End::Success,
+                End::Failure,
+            ] {
                 for in_window in [
                     InWindow::Nothing,
                     InWindow::InstallsNewer,
@@ -5383,10 +5632,45 @@ mod launch_sequence_tests {
     /// What the previous launch left for the next init to judge.
     enum Left {
         Nothing,
-        /// The process died with the breadcrumb armed for this patch.
+        /// The process crashed with the breadcrumb armed for this patch.
         DiedArmed(usize),
+        /// The OS killed the process with the breadcrumb armed for this
+        /// patch, and hasn't killed it before since its last boot.
+        KilledArmed(usize),
         /// The process ended with this patch unarmed and not blamed.
         EndedClean(usize),
+    }
+
+    const REASON_LOW_MEMORY: i32 = 3;
+    const REASON_CRASH_NATIVE: i32 = 5;
+    const REASON_USER_REQUESTED: i32 = 10;
+
+    fn died_armed(n: usize, death: Death) -> Left {
+        match death {
+            Death::Crash => Left::DiedArmed(n),
+            Death::Kill => Left::KilledArmed(n),
+        }
+    }
+
+    /// The OS's record of a process with `token` that died of `death`.
+    fn exit(token: &str, death: Death) -> Option<PreviousExit> {
+        Some(PreviousExit {
+            process_token: token.to_string(),
+            reason: match death {
+                Death::Crash => REASON_CRASH_NATIVE,
+                Death::Kill => REASON_LOW_MEMORY,
+            },
+        })
+    }
+
+    /// No failure event for patch `n` is queued: nothing about a kill
+    /// leaves the device.
+    fn no_failure_event(n: usize) -> Result<bool> {
+        with_mut_state(|state| {
+            Ok(!state.copy_events(100).iter().any(|e| {
+                e.patch_number == n && e.identifier == crate::events::EventType::PatchInstallFailure
+            }))
+        })
     }
 
     fn running() -> Result<Option<usize>> {
@@ -5428,7 +5712,9 @@ mod launch_sequence_tests {
         let tmp_dir = TempDir::new().unwrap();
         let mut next_patch = 1;
         let mut left = Left::Nothing;
+        let mut previous_exit: Option<PreviousExit> = None;
         for (i, launch) in seq.iter().enumerate() {
+            let token = format!("p{i}");
             let ctx = format!("{seq:?} at launch {i}");
             if launch.newer_patch_before {
                 // Installed by the previous process's update thread.
@@ -5437,7 +5723,7 @@ mod launch_sequence_tests {
                 }
                 next_patch += 1;
             }
-            init_for_testing(&tmp_dir, None);
+            init_for_testing_with_process(&tmp_dir, None, "", Some(&token), previous_exit.take());
             if i == 0 && launch.newer_patch_before {
                 install_fake_patch(next_patch - 1)?;
             }
@@ -5447,13 +5733,20 @@ mod launch_sequence_tests {
             report_launch_start()?;
             let patch = running()?;
             assert_eq!(booting()?, patch, "{ctx}: start arms the running patch");
-            if launch.end == End::DiesAfterStart {
-                left = patch.map_or(Left::Nothing, Left::DiedArmed);
+            if let End::DiesAfterStart(death) = launch.end {
+                left = patch.map_or(Left::Nothing, |n| died_armed(n, death));
+                previous_exit = exit(&token, death);
                 continue;
             }
 
             report_launch_paused()?;
             assert_eq!(booting()?, None, "{ctx}: paused leaves nothing armed");
+            // From here on a process that isn't killed or crashed ends some
+            // time later, after the user swipes it away.
+            previous_exit = Some(PreviousExit {
+                process_token: token.clone(),
+                reason: REASON_USER_REQUESTED,
+            });
             if launch.end == End::EndsAfterPaused {
                 left = patch.map_or(Left::Nothing, Left::EndedClean);
                 continue;
@@ -5499,11 +5792,12 @@ mod launch_sequence_tests {
             }
 
             match launch.end {
-                End::DiesInWindow => {
+                End::DiesInWindow(death) => {
                     left = match patch {
-                        Some(n) if !rolled_back => Left::DiedArmed(n),
+                        Some(n) if !rolled_back => died_armed(n, death),
                         _ => Left::Nothing,
                     };
+                    previous_exit = exit(&token, death);
                 }
                 End::Success => {
                     report_launch_success()?;
@@ -5541,11 +5835,11 @@ mod launch_sequence_tests {
                     }
                     left = Left::Nothing;
                 }
-                End::DiesAfterStart | End::EndsAfterPaused => unreachable!(),
+                End::DiesAfterStart(_) | End::EndsAfterPaused => unreachable!(),
             }
             check_next_boot(&ctx)?;
         }
-        init_for_testing(&tmp_dir, None);
+        init_for_testing_with_process(&tmp_dir, None, "", Some("last"), previous_exit);
         judge(&left, &format!("{seq:?} after the last launch"))
     }
 
@@ -5556,6 +5850,10 @@ mod launch_sequence_tests {
             Left::Nothing => {}
             Left::DiedArmed(n) => {
                 assert!(is_bad(n)?, "{ctx}: patch {n} died armed but isn't Bad")
+            }
+            Left::KilledArmed(n) => {
+                assert!(!is_bad(n)?, "{ctx}: patch {n} was killed but is Bad");
+                assert!(no_failure_event(n)?, "{ctx}: a kill reported {n}");
             }
             Left::EndedClean(n) => {
                 assert!(!is_bad(n)?, "{ctx}: patch {n} ended unarmed but is Bad")
