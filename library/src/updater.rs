@@ -5510,7 +5510,7 @@ mod hot_restart_tests {
     }
 
     /// `hot_restart: false` is how an app keeps the pre-hot-restart
-    /// behaviour: patches still install, they just wait for the next launch.
+    /// behavior: patches still install, they just wait for the next launch.
     /// The engine must not even be asked, so an app that opted out cannot be
     /// restarted by an engine that would happily do it.
     #[serial]

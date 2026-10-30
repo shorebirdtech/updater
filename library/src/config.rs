@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -69,8 +69,8 @@ pub fn set_running_patch_number(patch_number: Option<usize>) {
 /// cycle failed, and the engine's recovery relaunch back onto it is a
 /// repeat cycle, not a first boot.
 fn global_successfully_booted_patch() -> &'static Mutex<Option<usize>> {
-    static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
-    INSTANCE.get_or_init(|| Mutex::new(None))
+    static INSTANCE: Mutex<Option<usize>> = Mutex::new(None);
+    &INSTANCE
 }
 
 pub fn successfully_booted_patch_number() -> Option<usize> {
@@ -101,7 +101,9 @@ pub fn set_successfully_booted_patch_number(patch_number: Option<usize>) {
 /// or the two flip forever and each cycle hands the engine a patch that
 /// already failed.
 fn global_restart_failed_patches() -> &'static Mutex<HashSet<usize>> {
-    static INSTANCE: OnceCell<Mutex<HashSet<usize>>> = OnceCell::new();
+    // OnceLock rather than a const-initialized Mutex, because HashSet::new
+    // is not a const fn.
+    static INSTANCE: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
     INSTANCE.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
