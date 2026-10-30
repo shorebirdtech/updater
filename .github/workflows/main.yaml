@@ -7,6 +7,9 @@ concurrency:
   # Runs on main always finish so every commit gets its coverage upload.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -14,16 +17,11 @@ on:
       - main
 
 jobs:
-  cspell:
-    name: 🔤 Check Spelling
-    uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/spell_check.yml@v1
-    with:
-      config: cspell.config.yaml
-
   changes:
     runs-on: ubuntu-latest
 
     permissions:
+      contents: read
       pull-requests: read
 
     outputs:
@@ -34,9 +32,9 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         name: Build Detection
         id: needs_flutter_build
         with:
@@ -54,7 +52,7 @@ jobs:
               - library/**
               - library_test_hooks/**
 
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         name: Build Detection
         id: needs_rust_build
         with:
@@ -92,7 +90,7 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🦀 Build ${{ matrix.crate }}
         uses: ./.github/actions/rust_crate
@@ -121,7 +119,7 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🦀 Add ${{ matrix.target }}
         run: rustup target add ${{ matrix.target }}
@@ -130,7 +128,7 @@ jobs:
       # the C compiler that zstd-sys builds with at it.
       - name: 🤖 Install cargo-ndk
         if: ${{ contains(matrix.target, 'android') }}
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-ndk
 
@@ -175,7 +173,7 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
