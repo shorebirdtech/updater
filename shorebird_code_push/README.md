@@ -82,15 +82,19 @@ See the example for a complete working app.
 ### Applying a patch without relaunching the app
 
 By default, a downloaded patch takes effect the next time the app launches.
-`restartApp()` applies it immediately instead by restarting the app's Dart
-code in place (like a development hot restart: all in-memory state is lost
-and `main()` runs again, but the app itself stays open):
+`dangerouslyHotRestart()` applies it immediately instead by restarting the
+app's Dart code in place (like a development hot restart: all in-memory state
+is lost and `main()` runs again, but the app itself stays open).
+
+It is named `dangerously` because the user pays for it: whatever they were
+doing is gone, with no prompt and no undo. Nothing in Shorebird calls it for
+you, so pick the moment yourself:
 
 ```dart
 final status = await updater.checkForUpdate();
 if (status == UpdateStatus.restartRequired) {
   // Consider prompting the user first: the app's state resets.
-  final restarting = await updater.restartApp();
+  final restarting = await updater.dangerouslyHotRestart();
   if (!restarting) {
     // Hot restart isn't supported here (e.g. an engine that predates it or
     // an app running multiple Flutter engines). The patch will take effect
@@ -100,7 +104,7 @@ if (status == UpdateStatus.restartRequired) {
 ```
 
 Requires a Shorebird Flutter version with hot restart support on Android or
-iOS. On anything older `restartApp()` safely returns `false`.
+iOS. On anything older `dangerouslyHotRestart()` safely returns `false`.
 
 Plugins keep their native state across the restart while their Dart state is
 discarded, so `main()` runs again against native objects that believe they

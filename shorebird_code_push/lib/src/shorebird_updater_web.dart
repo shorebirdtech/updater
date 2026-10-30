@@ -26,5 +26,5 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   Future<void> update({UpdateTrack? track}) async {}
 
   @override
-  Future<bool> restartApp() async => false;
+  Future<bool> dangerouslyHotRestart() async => false;
 }

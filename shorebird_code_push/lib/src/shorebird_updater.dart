@@ -68,7 +68,8 @@ It can also occur when running on an unsupported platform (e.g. web).
 ''');
 }
 
-/// Log message when [ShorebirdUpdater.restartApp] cannot reach the engine.
+/// Log message when [ShorebirdUpdater.dangerouslyHotRestart] cannot reach
+/// the engine.
 ///
 /// Expected on an engine that predates hot restart support, where the FFI
 /// symbol is absent. Printed because the alternative is a bare `false`
@@ -84,7 +85,7 @@ void logRestartUnavailableMessage(Object error) {
 Shorebird could not request a restart: $error
 -------------------------------------------------------------------------------
 This is expected on a Shorebird engine that predates hot restart support.
-restartApp() returned false; the patch still applies on the next launch.
+dangerouslyHotRestart() returned false; the patch still applies on the next launch.
 ''');
 }
 
@@ -212,6 +213,12 @@ abstract class ShorebirdUpdater {
   /// Restarts the app's Dart code so the most recently downloaded patch takes
   /// effect immediately, without the user relaunching the app.
   ///
+  /// The name says `dangerously` because the cost is paid by whoever is using
+  /// the app at the time: everything on screen is thrown away mid-task, with
+  /// no prompt and no undo. Only the code that knows what the user is doing
+  /// can judge that this moment is a safe one, which is why nothing in
+  /// Shorebird ever calls this for you.
+  ///
   /// This tears down the running Dart isolate and boots a fresh one from the
   /// next boot patch (the patch reported by [readNextPatch], or the base
   /// release if the current patch was rolled back). It is the production
@@ -250,7 +257,7 @@ abstract class ShorebirdUpdater {
   /// Note: this restarts Dart code even if no new patch is waiting. Check
   /// [checkForUpdate] for [UpdateStatus.restartRequired] before calling this
   /// if you only want to restart when a patch is pending.
-  Future<bool> restartApp();
+  Future<bool> dangerouslyHotRestart();
 }
 
 /// A track to check for updates on.

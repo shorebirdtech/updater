@@ -640,7 +640,7 @@ void main() {
       });
     });
 
-    group('restartApp', () {
+    group('dangerouslyHotRestart', () {
       group('when updater is unavailable', () {
         setUp(() {
           when(updater.currentPatchNumber).thenThrow(Exception('oops'));
@@ -651,7 +651,7 @@ void main() {
           overridePrint((_) async {
             shorebirdUpdater = ShorebirdUpdaterImpl(updater: updater, run: run);
             await expectLater(
-              shorebirdUpdater.restartApp(),
+              shorebirdUpdater.dangerouslyHotRestart(),
               completion(isFalse),
             );
             verifyNever(updater.restartApp);
@@ -667,7 +667,10 @@ void main() {
         });
 
         test('returns true', () async {
-          await expectLater(shorebirdUpdater.restartApp(), completion(isTrue));
+          await expectLater(
+            shorebirdUpdater.dangerouslyHotRestart(),
+            completion(isTrue),
+          );
           verify(updater.restartApp).called(1);
         });
       });
@@ -680,7 +683,10 @@ void main() {
         });
 
         test('returns false', () async {
-          await expectLater(shorebirdUpdater.restartApp(), completion(isFalse));
+          await expectLater(
+            shorebirdUpdater.dangerouslyHotRestart(),
+            completion(isFalse),
+          );
           verify(updater.restartApp).called(1);
         });
       });
@@ -697,7 +703,10 @@ void main() {
         });
 
         test('returns false', () async {
-          await expectLater(shorebirdUpdater.restartApp(), completion(isFalse));
+          await expectLater(
+            shorebirdUpdater.dangerouslyHotRestart(),
+            completion(isFalse),
+          );
           verify(updater.restartApp).called(1);
         });
       });

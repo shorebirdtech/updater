@@ -150,7 +150,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 // immediately. Returns false if hot restart isn't supported
                 // in this environment (e.g. an older engine), in which case
                 // the patch takes effect on the next app launch instead.
-                final restarting = await _updater.restartApp();
+                final restarting = await _updater.dangerouslyHotRestart();
                 if (!mounted || restarting) return;
                 _showRestartFailedBanner();
               },

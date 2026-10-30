@@ -13,7 +13,7 @@ more than one launch cycle per process.
 ```
 package:shorebird_code_push          updater (Rust)              Shorebird engine (C++)
 ----------------------------         --------------              ----------------------
-ShorebirdUpdater.restartApp()
+ShorebirdUpdater.dangerouslyHotRestart()
   └─ shorebird_restart_app() ──────► restart::request_restart()
                                        └─ registered handler ──► restart host
                                                                    ├─ resolves next boot patch

@@ -132,7 +132,7 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
   }
 
   @override
-  Future<bool> restartApp() async {
+  Future<bool> dangerouslyHotRestart() async {
     if (!_isAvailable) return false;
 
     // Intentionally not run in a separate isolate, because a helper isolate

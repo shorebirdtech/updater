@@ -74,12 +74,12 @@ void main() {
       );
     });
 
-    group('restartApp', () {
+    group('dangerouslyHotRestart', () {
       test(
         'returns false',
         overridePrint((_) async {
           await expectLater(
-            shorebirdUpdater.restartApp(),
+            shorebirdUpdater.dangerouslyHotRestart(),
             completion(isFalse),
           );
         }),
