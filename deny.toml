@@ -1,0 +1,41 @@
+# cspell:words RUSTSEC seekable
+# cargo-deny checks for the workspace, run in CI (.github/workflows/main.yaml).
+# The updater is linked into every Shorebird app, so what we depend on and
+# where it comes from is checked on every PR: https://embarkstudios.github.io/cargo-deny/
+#
+# Run locally with `cargo deny check advisories bans sources`.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories, including unmaintained and unsound crates, fail CI.
+version = 2
+yanked = "deny"
+# An ignore entry that no longer matches fails, so it gets removed.
+unused-ignored-advisory = "deny"
+ignore = [
+    # zstd 0.13 / zstd-safe 7 / zstd-sys 2.0, pinned by comde. None of these
+    # reach us: comde only builds zstd::stream::read::Decoder::new and
+    # write::Encoder::new, never with_context, the write::Decoder or the
+    # seekable API, and we don't build for wasm. They go away when we drop comde for zstd 0.14 (arc step
+    # "Updater: drop comde, ..."), and these entries with it.
+    { id = "RUSTSEC-2026-0391", reason = "zstd with_context: unused, comde builds a fresh Decoder/Encoder" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd-safe seekable: feature not enabled" },
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe decompress_stream legacy frames: only write::Decoder is affected; comde uses read::Decoder" },
+    { id = "RUSTSEC-2026-0410", reason = "zstd-sys wasm allocator shim: we don't target wasm" },
+]
+
+[bans]
+# Duplicate versions are reported, not failed: most come from the Windows
+# target crates and dev-dependencies, and fixing them is upstream's job.
+multiple-versions = "warn"
+wildcards = "deny"
+# library_test_hooks depends on ../library by path; it's publish = false.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io. A git or other-registry dependency must be added here on
+# purpose.
+unknown-registry = "deny"
+unknown-git = "deny"
