@@ -1,14 +1,38 @@
 name: build_patch_artifacts
 
+# Releases in this repo are immutable: once published, a release's assets
+# can't be added or replaced. So pushing a patch-v* tag creates a draft
+# release, every job uploads its binary to the draft, and the draft is
+# published only after all uploads succeed.
+#
+# To release: git tag patch-vX.Y.Z && git push origin patch-vX.Y.Z
+# If an upload fails, use "Re-run failed jobs"; the draft is reused.
+# Don't publish a patch release from the UI: it would have no binaries,
+# and an immutable release's tag can never be reused.
+
 permissions:
   contents: write
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - "patch-v*"
 
 jobs:
+  create-draft:
+    runs-on: ubuntu-latest
+    name: 📝 Create Draft Release
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --verify-tag --title "patch ${TAG#patch-v}" --generate-notes
+
   upload-artifacts:
+    needs: create-draft
     strategy:
       matrix:
         include:
@@ -25,11 +49,29 @@ jobs:
     name: 🦀 Upload Artifacts
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: taiki-e/upload-rust-binary-action@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
         with:
           bin: "patch"
           target: ${{ matrix.target }}
           tar: none
           zip: all
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: upload-artifacts
+    runs-on: ubuntu-latest
+    name: 🚀 Publish Release
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Publishing can't be undone, so check every binary is there first.
+          count=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '[.assets[].name | select(endswith(".zip"))] | length')
+          if [ "$count" != 4 ]; then
+            echo "Expected 4 zips on the draft, found $count" >&2
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

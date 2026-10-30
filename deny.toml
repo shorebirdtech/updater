@@ -1,0 +1,30 @@
+# cargo-deny checks for the workspace, run in CI (.github/workflows/main.yaml).
+# The updater is linked into every Shorebird app, so what we depend on and
+# where it comes from is checked on every PR: https://embarkstudios.github.io/cargo-deny/
+#
+# Run locally with `cargo deny check advisories bans sources`.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories, including unmaintained and unsound crates, fail CI.
+version = 2
+yanked = "deny"
+# An ignore entry that no longer matches fails, so it gets removed.
+unused-ignored-advisory = "deny"
+ignore = []
+
+[bans]
+# Duplicate versions are reported, not failed: most come from the Windows
+# target crates and dev-dependencies, and fixing them is upstream's job.
+multiple-versions = "warn"
+wildcards = "deny"
+# library_test_hooks depends on ../library by path; it's publish = false.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io. A git or other-registry dependency must be added here on
+# purpose.
+unknown-registry = "deny"
+unknown-git = "deny"

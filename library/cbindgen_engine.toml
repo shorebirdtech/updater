@@ -28,3 +28,11 @@ after_includes = """
 
 [fn]
 prefix = "SHOREBIRD_EXPORT"
+
+# The engine-callback types get a prefix so their generic names cannot clash
+# with anything else the engine includes.
+[export.rename]
+"HttpHeader" = "ShorebirdHttpHeader"
+"HttpRequest" = "ShorebirdHttpRequest"
+"HttpResponseCallbacks" = "ShorebirdHttpResponseCallbacks"
+"EngineCallbacks" = "ShorebirdEngineCallbacks"

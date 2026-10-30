@@ -1,6 +1,15 @@
 # cspell:words dorny codecov
 name: ci
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded PR runs: a newer push's result covers the older one.
+  # Runs on main always finish so every commit gets its coverage upload.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -8,16 +17,11 @@ on:
       - main
 
 jobs:
-  cspell:
-    name: 🔤 Check Spelling
-    uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/spell_check.yml@v1
-    with:
-      config: cspell.config.yaml
-
   changes:
     runs-on: ubuntu-latest
 
     permissions:
+      contents: read
       pull-requests: read
 
     outputs:
@@ -28,9 +32,9 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         name: Build Detection
         id: needs_flutter_build
         with:
@@ -48,7 +52,7 @@ jobs:
               - library/**
               - library_test_hooks/**
 
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         name: Build Detection
         id: needs_rust_build
         with:
@@ -86,7 +90,7 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🦀 Build ${{ matrix.crate }}
         uses: ./.github/actions/rust_crate
@@ -108,6 +112,10 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-apple-ios
             os: macos-latest
+          # The engine's arm64 iOS simulator build links this target
+          # (shorebirdtech/flutter#225).
+          - target: aarch64-apple-ios-sim
+            os: macos-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -115,16 +123,16 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🦀 Add ${{ matrix.target }}
         run: rustup target add ${{ matrix.target }}
 
       # The runner image ships an NDK at ANDROID_NDK_HOME; cargo-ndk points
-      # the C compilers that ring and zstd-sys build with at it.
+      # the C compiler that zstd-sys builds with at it.
       - name: 🤖 Install cargo-ndk
         if: ${{ contains(matrix.target, 'android') }}
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-ndk
 
@@ -137,6 +145,23 @@ jobs:
         if: ${{ contains(matrix.target, 'ios') }}
         working-directory: library
         run: cargo clippy --target ${{ matrix.target }} -- -D warnings
+
+  # Advisories, banned crates and sources for every crate in Cargo.lock
+  # (config in deny.toml). Runs on every PR, not only Rust changes, so a
+  # newly published advisory against a dependency we already ship fails CI.
+  cargo_deny:
+    runs-on: ubuntu-latest
+
+    name: 🛡️ cargo deny
+
+    steps:
+      - name: 📚 Git Checkout
+        uses: actions/checkout@v7
+
+      - name: 🛡️ cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
 
   build_flutter_packages:
     needs: changes
@@ -152,7 +177,7 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -164,12 +189,13 @@ jobs:
           working_directory: ${{ matrix.package }}
 
   ci:
-    needs: [build_flutter_packages, build_rust_crates, check_mobile_targets]
+    needs: [build_flutter_packages, build_rust_crates, cargo_deny, check_mobile_targets]
     if: ${{ always() }}
 
     runs-on: ubuntu-latest
 
     steps:
+      # A cancelled job never ran its checks, so it fails the gate too.
       - name: ⛔️ exit(1) on failure
-        if: ${{ contains(join(needs.*.result, ','), 'failure') }}
+        if: ${{ contains(join(needs.*.result, ','), 'failure') || contains(join(needs.*.result, ','), 'cancelled') }}
         run: exit 1

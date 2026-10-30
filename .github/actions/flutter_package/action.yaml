@@ -37,7 +37,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: subosito/flutter-action@v2
+    - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
 
     - name: Install Dependencies
       working-directory: ${{ inputs.working_directory }}
@@ -82,7 +82,7 @@ runs:
       run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
 
     - name: Upload Coverage
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:
         # We use Codecov's carryforward flags to allow our PR testing to only
         # run affected packages, but also allow our coverage information from
@@ -92,7 +92,7 @@ runs:
         flags: ${{ steps.split.outputs.package_name }}
         token: ${{ inputs.codecov_token }}
 
-    - uses: VeryGoodOpenSource/very_good_coverage@v3
+    - uses: VeryGoodOpenSource/very_good_coverage@c953fca3e24a915e111cc6f55f03f756dcb3964c # v3.0.0
       with:
         path: ${{inputs.working_directory}}/coverage/lcov.info
         exclude: ${{inputs.coverage_excludes}}

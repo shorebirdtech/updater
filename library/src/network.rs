@@ -4,13 +4,14 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::string::ToString;
 
 use crate::config::{current_arch, current_platform, UpdateConfig};
 use crate::events::PatchEvent;
 use crate::file_errors::{FileOperation, IoResultExt};
+use crate::http::{find_header, Header, Request, ResponseHandler, SendFn, PLATFORM_SEND};
 
 pub fn patches_check_url(base_url: &str) -> String {
     format!("{base_url}/api/v1/patches/check")
@@ -70,10 +71,17 @@ pub fn patch_check_request_default(
     url: &str,
     request: PatchCheckRequest,
 ) -> anyhow::Result<PatchCheckResponse> {
+    patch_check_request_with(PLATFORM_SEND, url, request)
+}
+
+fn patch_check_request_with(
+    send: SendFn,
+    url: &str,
+    request: PatchCheckRequest,
+) -> anyhow::Result<PatchCheckResponse> {
     shorebird_info!("Sending patch check request: {}", request.log_line());
-    let result = ureq::post(url).send_json(&request);
-    let response = handle_network_result(result)?;
-    let parsed = response.into_body().read_json()?;
+    let body = post_json(send, url, &request, None)?;
+    let parsed = serde_json::from_slice(&body)?;
     shorebird_debug!("Patch check response: {:?}", parsed);
     Ok(parsed)
 }
@@ -85,42 +93,41 @@ pub fn download_to_path_default(
     dest: &Path,
     resume_from: u64,
 ) -> anyhow::Result<DownloadResult> {
-    let mut request = ureq::get(url);
-    if resume_from > 0 {
-        request = request.header("Range", &format!("bytes={resume_from}-"));
+    download_to_path_with(PLATFORM_SEND, url, dest, resume_from)
+}
+
+fn download_to_path_with(
+    send: SendFn,
+    url: &str,
+    dest: &Path,
+    resume_from: u64,
+) -> anyhow::Result<DownloadResult> {
+    let range = format!("bytes={resume_from}-");
+    let headers: &[(&str, &str)] = if resume_from > 0 {
+        &[("Range", &range)]
+    } else {
+        &[]
+    };
+    let mut download = DownloadHandler {
+        dest,
+        resume_from,
+        file: None,
+        content_length: None,
+    };
+    send_checked(
+        send,
+        &Request {
+            method: "GET",
+            url,
+            headers,
+            body: &[],
+            timeout: None,
+        },
+        &mut download,
+    )?;
+    if download.file.is_none() {
+        bail!("HTTP client completed without delivering a response");
     }
-    let result = request.call();
-    let response = handle_network_result(result)?;
-    let status = response.status();
-
-    // Determine total file size from headers.
-    let content_length = if status == 206 {
-        parse_content_range_total(response.headers())
-    } else {
-        // 200: Content-Length is the full file size.
-        response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-    };
-
-    // Only resume (append) when the server actually returned 206.
-    // If the server ignored our Range header and returned 200, start fresh.
-    let mut file = if status == 206 && resume_from > 0 {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .open(dest)
-            .with_file_context(FileOperation::WriteFile, dest)?;
-        f.seek(SeekFrom::Start(resume_from))
-            .with_file_context(FileOperation::WriteFile, dest)?;
-        f
-    } else {
-        // Fresh download (200 OK or server ignored Range): create/truncate.
-        File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
-    };
-
-    copy_body_to_file(&mut response.into_body().as_reader(), &mut file, dest)?;
 
     let total_bytes = std::fs::metadata(dest)
         .with_file_context(FileOperation::ReadFile, dest)?
@@ -128,7 +135,7 @@ pub fn download_to_path_default(
 
     Ok(DownloadResult {
         total_bytes,
-        content_length,
+        content_length: download.content_length,
     })
 }
 
@@ -137,13 +144,147 @@ pub fn download_to_path_default(
 const REPORT_EVENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub fn report_event_default(url: &str, request: CreatePatchEventRequest) -> anyhow::Result<()> {
-    let result = ureq::post(url)
-        .config()
-        .timeout_global(Some(REPORT_EVENT_TIMEOUT))
-        .build()
-        .send_json(&request);
-    handle_network_result(result)?;
+    report_event_with(PLATFORM_SEND, url, request)
+}
+
+fn report_event_with(
+    send: SendFn,
+    url: &str,
+    request: CreatePatchEventRequest,
+) -> anyhow::Result<()> {
+    post_json(send, url, &request, Some(REPORT_EVENT_TIMEOUT))?;
     Ok(())
+}
+
+/// The largest JSON response body we read, the limit `ureq` applies to
+/// `read_json`. Patch check responses are a few hundred bytes.
+const MAX_JSON_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// POSTs `request` as JSON and returns the response body.
+fn post_json<T: Serialize>(
+    send: SendFn,
+    url: &str,
+    request: &T,
+    timeout: Option<std::time::Duration>,
+) -> anyhow::Result<Vec<u8>> {
+    let body = serde_json::to_vec(request)?;
+    let mut response = BufferHandler { body: Vec::new() };
+    send_checked(
+        send,
+        &Request {
+            method: "POST",
+            url,
+            headers: &[("Content-Type", "application/json; charset=utf-8")],
+            body: &body,
+            timeout,
+        },
+        &mut response,
+    )?;
+    Ok(response.body)
+}
+
+/// Sends `request`, turning a non-2xx status into [`NetworkError::Server`]
+/// before `handler` sees the response, so no error body is ever read or
+/// written.
+fn send_checked(
+    send: SendFn,
+    request: &Request,
+    handler: &mut dyn ResponseHandler,
+) -> anyhow::Result<()> {
+    // Ask for the bytes as stored. Platform clients otherwise ask for gzip
+    // and decode it, and a decoded download fails its Content-Length check.
+    let mut headers = vec![("Accept-Encoding", "identity")];
+    headers.extend_from_slice(request.headers);
+    let request = Request {
+        headers: &headers,
+        ..*request
+    };
+    send(&request, &mut StatusCheck { inner: handler })
+}
+
+struct StatusCheck<'a> {
+    inner: &'a mut dyn ResponseHandler,
+}
+
+impl ResponseHandler for StatusCheck<'_> {
+    fn on_response(&mut self, status: u16, headers: &[Header]) -> anyhow::Result<()> {
+        if !(200..300).contains(&status) {
+            return Err(NetworkError::Server { status }.into());
+        }
+        self.inner.on_response(status, headers)
+    }
+
+    fn on_body(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        self.inner.on_body(data)
+    }
+}
+
+/// Collects a JSON response body in memory.
+struct BufferHandler {
+    body: Vec<u8>,
+}
+
+impl ResponseHandler for BufferHandler {
+    fn on_response(&mut self, _status: u16, _headers: &[Header]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_body(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        if self.body.len() + data.len() > MAX_JSON_RESPONSE_BYTES {
+            bail!("Response body exceeds {MAX_JSON_RESPONSE_BYTES} bytes");
+        }
+        self.body.extend_from_slice(data);
+        Ok(())
+    }
+}
+
+/// Streams a download into `dest`, appending only when the server honored
+/// the Range request.
+struct DownloadHandler<'a> {
+    dest: &'a Path,
+    resume_from: u64,
+    file: Option<File>,
+    content_length: Option<u64>,
+}
+
+impl ResponseHandler for DownloadHandler<'_> {
+    fn on_response(&mut self, status: u16, headers: &[Header]) -> anyhow::Result<()> {
+        let dest = self.dest;
+        // Determine total file size from headers.
+        self.content_length = if status == 206 {
+            parse_content_range_total(headers)
+        } else {
+            // 200: Content-Length is the full file size.
+            find_header(headers, "content-length").and_then(|v| v.parse::<u64>().ok())
+        };
+
+        // Only resume (append) when the server actually returned 206.
+        // If the server ignored our Range header and returned 200, start fresh.
+        self.file = Some(if status == 206 && self.resume_from > 0 {
+            let mut f = OpenOptions::new()
+                .write(true)
+                .open(dest)
+                .with_file_context(FileOperation::WriteFile, dest)?;
+            f.seek(SeekFrom::Start(self.resume_from))
+                .with_file_context(FileOperation::WriteFile, dest)?;
+            f
+        } else {
+            // Fresh download (200 OK or server ignored Range): create/truncate.
+            File::create(dest).with_file_context(FileOperation::CreateFile, dest)?
+        });
+        Ok(())
+    }
+
+    fn on_body(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        let dest = self.dest;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Body arrived before response headers"))?;
+        file.write_all(data)
+            .with_file_context(FileOperation::WriteFile, dest)?;
+        Ok(())
+    }
 }
 
 /// A typed network-layer failure.
@@ -184,55 +325,11 @@ impl std::fmt::Display for NetworkError {
 
 impl std::error::Error for NetworkError {}
 
-/// Maps a raw `ureq` result into our typed [`NetworkError`] (or preserves the
-/// underlying `ureq` error for the uncommon cases), returning the response on
-/// success.
-fn handle_network_result(
-    result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-) -> anyhow::Result<ureq::http::Response<ureq::Body>> {
-    match result {
-        Ok(response) => Ok(response),
-        Err(ureq::Error::StatusCode(code)) => Err(NetworkError::Server { status: code }.into()),
-        // Keep ureq's error as the cause, so logs and the failure event say
-        // why the server couldn't be reached (an untrusted certificate, a DNS
-        // failure, a refused connection) instead of only that it couldn't.
-        Err(
-            e @ (ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_)),
-        ) => Err(anyhow::Error::new(e).context(NetworkError::Transport)),
-        Err(e) => bail!(e),
-    }
-}
-
-/// Streams a response body into `file`, keeping read and write failures
-/// apart: a body that stops mid-download (the peer disconnected, the
-/// connection timed out) is a network failure, and only a failed write is a
-/// file failure. `std::io::copy` returns both as one `io::Error`, which
-/// reported every dropped connection as "Failed to write to file".
-fn copy_body_to_file(
-    body: &mut impl Read,
-    file: &mut impl Write,
-    dest: &Path,
-) -> anyhow::Result<()> {
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = match body.read(&mut buf) {
-            Ok(0) => return Ok(()),
-            Ok(n) => n,
-            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-            Err(e) => return Err(anyhow::Error::new(e).context(NetworkError::Transport)),
-        };
-        file.write_all(&buf[..n])
-            .with_file_context(FileOperation::WriteFile, dest)?;
-    }
-}
-
 /// Parses the total file size from a Content-Range header.
 /// Expected format: `bytes start-end/total` (e.g. `bytes 100-199/1000`).
 /// Returns `None` if the header is missing, malformed, or the total is `*`.
-fn parse_content_range_total(headers: &ureq::http::HeaderMap) -> Option<u64> {
-    headers
-        .get("content-range")
-        .and_then(|v| v.to_str().ok())
+fn parse_content_range_total(headers: &[Header]) -> Option<u64> {
+    find_header(headers, "content-range")
         .and_then(|v| v.rsplit('/').next())
         .and_then(|v| v.parse::<u64>().ok())
 }
@@ -284,10 +381,12 @@ pub struct Patch {
     pub hash_signature: Option<String>,
 }
 
-/// Any edits to this struct should be made carefully and in accordance
-/// with our privacy policy:
-/// <https://docs.shorebird.dev/privacy>
 /// The request body for the patch check endpoint.
+///
+/// Any edits to this struct should be made carefully and in accordance
+/// with our privacy policy, <https://shorebird.dev/privacy/>, and should
+/// keep the list of what Shorebird collects up to date:
+/// <https://docs.shorebird.dev/system/what-shorebird-collects/>
 #[derive(Serialize)]
 pub struct PatchCheckRequest {
     /// The Shorebird app_id built into the shorebird.yaml in the app.
@@ -449,7 +548,6 @@ pub fn download_to_path(
 #[cfg(test)]
 mod tests {
     use crate::{network::PatchCheckResponse, time};
-    use std::path::Path;
 
     use super::{patches_events_url, PatchEvent};
     use crate::events::EventType;
@@ -634,214 +732,386 @@ mod tests {
         assert!(debug.contains("report_event_fn"));
     }
 
+    use super::{Header, NetworkError, SendFn};
+    use crate::http::{engine_send, ureq_send};
+    use std::io::{Read, Write};
+
+    /// Both transports, so every network test runs each on every host. The
+    /// engine one runs through the test engine callbacks.
+    const TRANSPORTS: [(&str, SendFn); 2] = [("engine", engine_send), ("ureq", ureq_send)];
+
+    fn headers(pairs: &[(&str, &str)]) -> Vec<Header> {
+        pairs
+            .iter()
+            .map(|(name, value)| Header {
+                name: name.to_string(),
+                value: value.to_string(),
+            })
+            .collect()
+    }
+
     #[test]
     fn parse_content_range_total_valid() {
-        let mut headers = ureq::http::HeaderMap::new();
-        headers.insert("content-range", "bytes 100-199/1000".parse().unwrap());
+        let headers = headers(&[("Content-Range", "bytes 100-199/1000")]);
         assert_eq!(super::parse_content_range_total(&headers), Some(1000));
     }
 
     #[test]
     fn parse_content_range_total_missing() {
-        let headers = ureq::http::HeaderMap::new();
-        assert_eq!(super::parse_content_range_total(&headers), None);
+        assert_eq!(super::parse_content_range_total(&headers(&[])), None);
     }
 
     #[test]
     fn parse_content_range_total_unknown_size() {
-        let mut headers = ureq::http::HeaderMap::new();
-        headers.insert("content-range", "bytes 100-199/*".parse().unwrap());
+        let headers = headers(&[("content-range", "bytes 100-199/*")]);
         assert_eq!(super::parse_content_range_total(&headers), None);
+    }
+
+    fn patch_check_request() -> super::PatchCheckRequest {
+        super::PatchCheckRequest {
+            app_id: "app_id".to_string(),
+            channel: "stable".to_string(),
+            release_version: "1.0.0+1".to_string(),
+            platform: "android".to_string(),
+            arch: "aarch64".to_string(),
+            client_id: "client_id".to_string(),
+            current_patch_number: None,
+        }
+    }
+
+    fn event_request() -> super::CreatePatchEventRequest {
+        super::CreatePatchEventRequest {
+            event: PatchEvent {
+                app_id: "app_id".to_string(),
+                client_id: "client_id".to_string(),
+                arch: "arch".to_string(),
+                patch_number: 2,
+                platform: "platform".to_string(),
+                release_version: "release_version".to_string(),
+                identifier: EventType::PatchInstallSuccess,
+                timestamp: time::unix_timestamp(),
+                message: None,
+                failure_category: None,
+                event_id: None,
+            },
+        }
     }
 
     #[test]
     fn download_to_path_no_internet() {
-        let dest = std::path::Path::new("/tmp/updater_test_no_internet");
-        let result = super::download_to_path_default(
-            "http://asdfasdfasdfasdfasdf.asdfasdf/patch/1",
-            dest,
-            0,
-        );
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Network request failed; the server could not be reached."
-        );
+        for (name, send) in TRANSPORTS {
+            let dir = tempfile::tempdir().unwrap();
+            let err = super::download_to_path_with(
+                send,
+                "http://asdfasdfasdfasdfasdf.asdfasdf/patch/1",
+                &dir.path().join("patch"),
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Network request failed; the server could not be reached.",
+                "{name}"
+            );
+        }
     }
 
     #[test]
-    fn handle_network_result_ok() {
-        let body = ureq::Body::builder().mime_type("text/plain").data("");
-        let response = ureq::http::Response::builder()
-            .status(200)
-            .body(body)
+    fn patch_check_posts_json_and_parses_response() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            let mock = server
+                .mock("POST", "/api/v1/patches/check")
+                .match_header("content-type", "application/json; charset=utf-8")
+                .match_body(mockito::Matcher::PartialJsonString(
+                    r#"{"app_id":"app_id","channel":"stable"}"#.to_string(),
+                ))
+                .with_status(200)
+                .with_body(r#"{"patch_available":false,"rolled_back_patch_numbers":[2]}"#)
+                .create();
+            let response = super::patch_check_request_with(
+                send,
+                &super::patches_check_url(&server.url()),
+                patch_check_request(),
+            )
             .unwrap();
-
-        let result = super::handle_network_result(Ok(response));
-
-        assert!(result.is_ok());
+            mock.assert();
+            assert!(!response.patch_available, "{name}");
+            assert_eq!(response.rolled_back_patch_numbers, Some(vec![2]), "{name}");
+        }
     }
 
     #[test]
-    fn handle_network_result_http_status_not_ok() {
-        let result = super::handle_network_result(Err(ureq::Error::StatusCode(500)));
-
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert_eq!(err.to_string(), "Request failed with status: 500");
+    fn error_status_is_a_server_error() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("POST", "/api/v1/patches/check")
+                .with_status(500)
+                .with_body("oops")
+                .create();
+            let err = super::patch_check_request_with(
+                send,
+                &super::patches_check_url(&server.url()),
+                patch_check_request(),
+            )
+            .unwrap_err();
+            assert_eq!(err.to_string(), "Request failed with status: 500", "{name}");
+            assert_eq!(
+                err.downcast_ref::<NetworkError>(),
+                Some(&NetworkError::Server { status: 500 }),
+                "{name}"
+            );
+        }
     }
 
     #[test]
-    fn handle_network_result_keeps_transport_cause() {
-        // What ureq reports when a TLS-inspecting proxy presents a root that
-        // isn't in the updater's trust store.
-        let io = std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "invalid peer certificate: UnknownIssuer",
-        );
-        let err = super::handle_network_result(Err(ureq::Error::Io(io))).unwrap_err();
-
-        assert_eq!(
-            err.downcast_ref::<super::NetworkError>(),
-            Some(&super::NetworkError::Transport)
-        );
-        assert_eq!(
-            format!("{err:#}"),
-            "Network request failed; the server could not be reached.: \
-             io: invalid peer certificate: UnknownIssuer"
-        );
+    fn download_writes_a_fresh_file() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("GET", "/patch")
+                .with_status(200)
+                .with_body("hello world")
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            std::fs::write(&dest, "stale contents that are longer").unwrap();
+            let result =
+                super::download_to_path_with(send, &format!("{}/patch", server.url()), &dest, 0)
+                    .unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), b"hello world", "{name}");
+            assert_eq!(result.total_bytes, 11, "{name}");
+            assert_eq!(result.content_length, Some(11), "{name}");
+        }
     }
 
-    /// A body that yields `data`, then fails the way ureq does when the
-    /// server drops the connection mid-download.
-    struct DroppedBody<'a> {
-        data: &'a [u8],
+    #[test]
+    fn download_resumes_on_206() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            let mock = server
+                .mock("GET", "/patch")
+                .match_header("range", "bytes=6-")
+                .match_header("accept-encoding", "identity")
+                .with_status(206)
+                .with_header("content-range", "bytes 6-10/11")
+                .with_body("world")
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            std::fs::write(&dest, "hello ").unwrap();
+            let result =
+                super::download_to_path_with(send, &format!("{}/patch", server.url()), &dest, 6)
+                    .unwrap();
+            mock.assert();
+            assert_eq!(std::fs::read(&dest).unwrap(), b"hello world", "{name}");
+            assert_eq!(result.total_bytes, 11, "{name}");
+            assert_eq!(result.content_length, Some(11), "{name}");
+        }
     }
 
-    impl std::io::Read for DroppedBody<'_> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            if self.data.is_empty() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Peer disconnected",
-                ));
+    #[test]
+    fn download_starts_over_when_server_ignores_range() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("GET", "/patch")
+                .with_status(200)
+                .with_body("hello world")
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            std::fs::write(&dest, "hello ").unwrap();
+            let result =
+                super::download_to_path_with(send, &format!("{}/patch", server.url()), &dest, 6)
+                    .unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), b"hello world", "{name}");
+            assert_eq!(result.total_bytes, 11, "{name}");
+        }
+    }
+
+    #[test]
+    fn download_error_status_leaves_partial_file_alone() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("GET", "/patch")
+                .with_status(503)
+                .with_body("try later")
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            std::fs::write(&dest, "hello ").unwrap();
+            let err =
+                super::download_to_path_with(send, &format!("{}/patch", server.url()), &dest, 6)
+                    .unwrap_err();
+            assert_eq!(
+                err.downcast_ref::<NetworkError>(),
+                Some(&NetworkError::Server { status: 503 }),
+                "{name}"
+            );
+            assert_eq!(std::fs::read(&dest).unwrap(), b"hello ", "{name}");
+        }
+    }
+
+    /// Serves one connection on a local port with `respond`, which gets the
+    /// accepted stream once the request headers are read.
+    fn serve_once(respond: fn(&mut std::net::TcpStream)) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/patch", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                request.push(byte[0]);
             }
-            let n = self.data.len().min(buf.len());
-            buf[..n].copy_from_slice(&self.data[..n]);
-            self.data = &self.data[n..];
-            Ok(n)
-        }
+            respond(&mut stream);
+        });
+        url
     }
 
-    /// A file whose writes fail because the disk is full.
-    struct FullDisk;
-
-    impl std::io::Write for FullDisk {
-        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+    #[test]
+    fn download_cut_off_mid_body_is_network_and_keeps_the_bytes() {
+        for (name, send) in TRANSPORTS {
+            let url = serve_once(|stream| {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial");
+                // Dropping the stream closes the connection 93 bytes short.
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            let err = super::download_to_path_with(send, &url, &dest, 0).unwrap_err();
+            assert_eq!(
+                crate::updater::classify_failure(&err),
+                crate::updater::FailureCategory::Network,
+                "{name}: {err:#}"
+            );
+            // The bytes before the drop are kept, so the next attempt resumes.
+            assert_eq!(std::fs::read(&dest).unwrap(), b"partial", "{name}");
         }
     }
 
     #[test]
-    fn copy_body_to_file_copies_whole_body() {
-        let mut out = Vec::new();
-        super::copy_body_to_file(&mut &b"patch bytes"[..], &mut out, Path::new("dest")).unwrap();
-        assert_eq!(out, b"patch bytes");
+    fn handler_error_is_returned_as_is() {
+        struct FailingHandler;
+        impl super::ResponseHandler for FailingHandler {
+            fn on_response(&mut self, _: u16, _: &[Header]) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn on_body(&mut self, _: &[u8]) -> anyhow::Result<()> {
+                anyhow::bail!("disk full")
+            }
+        }
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("GET", "/patch")
+                .with_status(200)
+                .with_body("hello world")
+                .create();
+            let url = format!("{}/patch", server.url());
+            let request = super::Request {
+                method: "GET",
+                url: &url,
+                headers: &[],
+                body: &[],
+                timeout: None,
+            };
+            let err = send(&request, &mut FailingHandler).unwrap_err();
+            assert_eq!(format!("{err:#}"), "disk full", "{name}");
+        }
     }
 
     #[test]
-    fn copy_body_to_file_dropped_connection_is_network() {
-        let mut out = Vec::new();
-        let err = super::copy_body_to_file(
-            &mut DroppedBody { data: b"partial" },
-            &mut out,
-            Path::new("dest"),
+    fn unanswered_request_times_out_as_network() {
+        for (name, send) in TRANSPORTS {
+            let url = serve_once(|_| std::thread::sleep(std::time::Duration::from_secs(5)));
+            let request = super::Request {
+                method: "POST",
+                url: &url,
+                headers: &[],
+                body: b"{}",
+                timeout: Some(std::time::Duration::from_millis(200)),
+            };
+            let mut buffer = super::BufferHandler { body: Vec::new() };
+            let err = send(&request, &mut buffer).unwrap_err();
+            assert_eq!(
+                err.downcast_ref::<NetworkError>(),
+                Some(&NetworkError::Transport),
+                "{name}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn unreachable_host_keeps_its_cause() {
+        let err = super::report_event_with(
+            ureq_send,
+            &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
+            event_request(),
         )
         .unwrap_err();
-
-        // The bytes before the drop are kept, so the next attempt resumes.
-        assert_eq!(out, b"partial");
         assert_eq!(
-            crate::updater::classify_failure(&err),
-            crate::updater::FailureCategory::Network
+            err.downcast_ref::<NetworkError>(),
+            Some(&NetworkError::Transport)
         );
-        assert_eq!(
-            format!("{err:#}"),
-            "Network request failed; the server could not be reached.: Peer disconnected"
+        assert!(
+            format!("{err:#}")
+                .starts_with("Network request failed; the server could not be reached.: "),
+            "{err:#}"
         );
     }
 
     #[test]
-    fn copy_body_to_file_write_failure_is_file_error() {
-        let err =
-            super::copy_body_to_file(&mut &b"patch bytes"[..], &mut FullDisk, Path::new("dest"))
-                .unwrap_err();
-
-        assert_eq!(
-            crate::updater::classify_failure(&err),
-            crate::updater::FailureCategory::OutOfSpace
-        );
-        assert!(err
-            .to_string()
-            .starts_with("Failed to write to file 'dest'"));
+    fn oversized_json_response_is_rejected() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("POST", "/api/v1/patches/check")
+                .with_status(200)
+                .with_body(vec![b' '; super::MAX_JSON_RESPONSE_BYTES + 1])
+                .create();
+            let err = super::patch_check_request_with(
+                send,
+                &super::patches_check_url(&server.url()),
+                patch_check_request(),
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().starts_with("Response body exceeds"),
+                "{name}"
+            );
+        }
     }
 
     #[test]
-    fn handle_network_result_no_internet() {
-        let event = PatchEvent {
-            app_id: "app_id".to_string(),
-            client_id: "client_id".to_string(),
-            arch: "arch".to_string(),
-            patch_number: 2,
-            platform: "platform".to_string(),
-            release_version: "release_version".to_string(),
-            identifier: EventType::PatchInstallSuccess,
-            timestamp: time::unix_timestamp(),
-            message: None,
-            failure_category: None,
-            event_id: None,
-        };
-        let result = super::report_event_default(
-            // Make the request to a non-existent URL, which will trigger the
-            // same error as a lack of internet connection.
-            &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
-            super::CreatePatchEventRequest { event },
-        );
-
-        assert!(result.is_err());
-        let error = result.err().unwrap();
-        assert_eq!(
-            error.to_string(),
-            "Network request failed; the server could not be reached."
-        )
+    fn report_event_no_internet() {
+        for (name, send) in TRANSPORTS {
+            let err = super::report_event_with(
+                send,
+                // A host that doesn't exist fails the way being offline does.
+                &patches_events_url("http://asdfasdfasdfasdfasdf.asdfasdf"),
+                event_request(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Network request failed; the server could not be reached.",
+                "{name}"
+            );
+        }
     }
 
     #[test]
-    fn handle_network_result_unknown_error() {
-        let result = super::report_event_default(
-            // Make the request to an incorrectly formatted URL, which will
-            // trigger an error.
-            &patches_events_url("does_not_exist"),
-            super::CreatePatchEventRequest {
-                event: PatchEvent {
-                    app_id: "app_id".to_string(),
-                    client_id: "client_id".to_string(),
-                    arch: "arch".to_string(),
-                    patch_number: 2,
-                    platform: "platform".to_string(),
-                    release_version: "release_version".to_string(),
-                    identifier: EventType::PatchInstallSuccess,
-                    timestamp: time::unix_timestamp(),
-                    message: None,
-                    failure_category: None,
-                    event_id: None,
-                },
-            },
-        );
-
-        assert!(result.is_err());
+    fn report_event_malformed_url_fails() {
+        for (_, send) in TRANSPORTS {
+            let result = super::report_event_with(
+                send,
+                &patches_events_url("does_not_exist"),
+                event_request(),
+            );
+            assert!(result.is_err());
+        }
     }
 }

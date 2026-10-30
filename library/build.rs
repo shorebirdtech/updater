@@ -10,6 +10,15 @@ use std::path::{Path, PathBuf};
 fn main() {
     let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
+    // `engine_http`: HTTP goes through the engine's client (the platform's
+    // HTTP stack) rather than ureq. Keep in sync with the target-specific
+    // `ureq` dependency in Cargo.toml.
+    println!("cargo:rustc-check-cfg=cfg(engine_http)");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if matches!(target_os.as_str(), "ios" | "macos" | "android") {
+        println!("cargo:rustc-cfg=engine_http");
+    }
+
     // Each header is generated from a single source file. cbindgen scans
     // exactly that file and emits the `pub extern "C"` items it defines plus
     // the C types they reference. Since each bucket file is self-contained
