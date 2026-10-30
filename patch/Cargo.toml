@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 # Compression and decompression of patch files.
 bidiff = "1.0.0"
-zstd = { version = "0.13.2", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
 
 # Only used by string_patch tool:
 # I don't know how to make them per-target dependencies.

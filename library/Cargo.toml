@@ -42,7 +42,7 @@ serde_json = "1.0.93"
 sha2 = "0.11.0"
 uuid = { version = "1.18.1", features = ["v4"] }
 # For decompressing patch files.
-zstd = { version = "0.13.2", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
 # For reading libapp.so out of .apk files. Inflate only: zip's `deflate`
 # feature also pulls in zopfli, a compressor we never use.
 zip = { version = "9.1", default-features = false, features = [
