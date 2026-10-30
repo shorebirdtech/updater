@@ -1,14 +1,34 @@
 name: build_patch_artifacts
 
+# Releases in this repo are immutable: once published, a release's assets
+# can't be added or replaced. So pushing a patch-v* tag creates a draft
+# release, every job uploads its binary to the draft, and the draft is
+# published only after all uploads succeed.
+#
+# To release: git tag patch-vX.Y.Z && git push origin patch-vX.Y.Z
+
 permissions:
   contents: write
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - "patch-v*"
 
 jobs:
+  create-draft:
+    runs-on: ubuntu-latest
+    name: 📝 Create Draft Release
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+            --verify-tag --title "patch ${TAG#patch-v}" --generate-notes
+
   upload-artifacts:
+    needs: create-draft
     strategy:
       matrix:
         include:
@@ -33,3 +53,13 @@ jobs:
           tar: none
           zip: all
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: upload-artifacts
+    runs-on: ubuntu-latest
+    name: 🚀 Publish Release
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
