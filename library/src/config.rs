@@ -7,8 +7,7 @@ use crate::{ExternalFileProvider, UpdateError};
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use once_cell::sync::OnceCell;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -24,8 +23,8 @@ const DEFAULT_BASE_URL: &str = "https://api.shorebird.dev";
 const DEFAULT_CHANNEL: &str = "stable";
 
 fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
-    static INSTANCE: OnceCell<Mutex<Option<UpdateConfig>>> = OnceCell::new();
-    INSTANCE.get_or_init(|| Mutex::new(None))
+    static INSTANCE: Mutex<Option<UpdateConfig>> = Mutex::new(None);
+    &INSTANCE
 }
 
 /// Session-scoped patch number this process is using. Set by
@@ -39,8 +38,8 @@ fn global_config() -> &'static Mutex<Option<UpdateConfig>> {
 /// flutter_engine before `dart:ffi` is available, so the `None` window
 /// before launch start is not observable from Dart.
 fn global_running_patch() -> &'static Mutex<Option<usize>> {
-    static INSTANCE: OnceCell<Mutex<Option<usize>>> = OnceCell::new();
-    INSTANCE.get_or_init(|| Mutex::new(None))
+    static INSTANCE: Mutex<Option<usize>> = Mutex::new(None);
+    &INSTANCE
 }
 
 pub fn running_patch_number() -> Option<usize> {
@@ -117,7 +116,7 @@ pub struct UpdateConfig {
     pub libapp_path: PathBuf,
     pub base_url: String,
     pub network_hooks: NetworkHooks,
-    pub file_provider: Box<dyn ExternalFileProvider>,
+    pub file_provider: Arc<dyn ExternalFileProvider>,
     pub patch_public_key: Option<String>,
     pub patch_verification: PatchVerificationMode,
 }
@@ -160,7 +159,7 @@ pub fn set_config(
                 .unwrap_or(DEFAULT_BASE_URL)
                 .to_owned(),
             network_hooks,
-            file_provider,
+            file_provider: Arc::from(file_provider),
             patch_public_key: yaml.patch_public_key.to_owned(),
             patch_verification: yaml.patch_verification.unwrap_or_default(),
         };

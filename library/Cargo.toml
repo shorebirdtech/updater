@@ -24,27 +24,13 @@ anyhow = "1.0.103"
 base64 = "0.23.0"
 # For inflating compressed patch files.
 bipatch = "1.0.0"
-# Used for exposing C API
-# comde is a wrapper around several compression libraries.
-# We only use zstd and could depend on it directly instead.
-comde = { version = "0.3.1", default-features = false, features = [
-    "zstandard",
-] }
-dyn-clone = "1.0.16"
-# For decoding the hex-encoded hashes in Patch network responses.
-hex = "0.4.3"
 libc = "0.2.98"
 # For error!(), info!(), etc macros. `print` will not show up on Android.
-log = "0.4.14"
+log = { version = "0.4.14", features = ["std"] }
 # For mmap'ing libapp.so out of the APK without buffering it in RAM. This
 # matters on memory-constrained devices: reading the whole library into a
 # Vec<u8> can cost tens of MB and trigger OOM kills mid-patch.
 memmap2 = "0.9.11"
-# For implementing thread-local-storage of ResolvedConfig object.
-once_cell = "1.17.1"
-# Json serialization/de-serialization.
-# Pipe is a simple in-memory pipe implementation, there might be a std way too?
-pipe = "0.4.0"
 # Engine callbacks for the Dart integration tests (`test-hooks` only; see
 # src/test_engine_callbacks.rs). Production builds get signature checks, and
 # on iOS, macOS and Android HTTP, from the engine.
@@ -55,8 +41,13 @@ serde_json = "1.0.93"
 # For computing hashes of patch files for validation.
 sha2 = "0.11.0"
 uuid = { version = "1.18.1", features = ["v4"] }
-# For decompressing .apk files.
-zip = { version = "9.1", default-features = false, features = ["deflate"] }
+# For decompressing patch files.
+zstd = { version = "0.13.2", default-features = false }
+# For reading libapp.so out of .apk files. Inflate only: zip's `deflate`
+# feature also pulls in zopfli, a compressor we never use.
+zip = { version = "9.1", default-features = false, features = [
+    "deflate-flate2-zlib-rs",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # For logging to Android logcat.
@@ -67,8 +58,9 @@ log-panics = "2"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 # Send panics to syslog (instead of stderr).
 log-panics = "2"
-# Support for logging on iOS (https://developer.apple.com/documentation/oslog)
-oslog = "0.2.0"
+# Support for logging on iOS (https://developer.apple.com/documentation/oslog).
+# Without its `logger` feature (and dashmap); logging.rs has the log::Log impl.
+oslog = { version = "0.2.0", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 simple_logger = "5.0.0"

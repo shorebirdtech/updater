@@ -8,13 +8,7 @@ edition = "2021"
 [dependencies]
 # Compression and decompression of patch files.
 bidiff = "1.0.0"
-# Pipe is a simple in-memory pipe implementation, there might be a std way too?
-pipe = "0.4.0"
-# comde is a wrapper around several compression libraries.
-# We only use zstd and could depend on it directly instead.
-comde = { version = "0.3.0", default-features = false, features = [
-  "zstandard",
-] }
+zstd = { version = "0.13.2", default-features = false }
 
 # Only used by string_patch tool:
 # I don't know how to make them per-target dependencies.
@@ -22,5 +16,3 @@ comde = { version = "0.3.0", default-features = false, features = [
 # For computing hashes of patch files for validation.
 # Only used by the string_patch tool for now.
 sha2 = "0.11.0"
-# For encoding hashes for Patch network responses.
-hex = "0.4.3"

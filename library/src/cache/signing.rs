@@ -19,7 +19,7 @@ pub fn hash_file<P: AsRef<Path>>(path: P) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     let hash = hasher.finalize();
-    Ok(hex::encode(hash))
+    Ok(hash.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Verifies `signature` over a patch's `hash` against `public_key`, the

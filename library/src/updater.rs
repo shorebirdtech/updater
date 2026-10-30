@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{Context, Result};
-use dyn_clone::DynClone;
 
 use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
 use crate::cache::{PatchInfo, UpdaterState};
@@ -253,13 +252,10 @@ pub trait ReadSeek: Read + Seek {}
 
 /// Provides an interface to get an opaque ReadSeek object for a given path.
 /// This is used to provide a way to read the patch base file on iOS and macOS.
-pub trait ExternalFileProvider: Debug + Send + DynClone {
+/// Sync so the Clone-able UpdateConfig can share one behind an `Arc`.
+pub trait ExternalFileProvider: Debug + Send + Sync {
     fn open(&self) -> anyhow::Result<Box<dyn ReadSeek>>;
 }
-
-// This is required for ExternalFileProvider to be used as a field in the Clone-able
-// UpdateConfig struct.
-dyn_clone::clone_trait_object!(ExternalFileProvider);
 
 // On Android we don't use a direct path to libapp.so, but rather a data dir
 // and a hard-coded name for the libapp file which we look up in the
@@ -462,7 +458,11 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
     // Validate the expected string is a hex-encoded hash.
-    hex::decode(expected_string).context("Invalid hash string from server.")?;
+    if !expected_string.len().is_multiple_of(2)
+        || !expected_string.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        anyhow::bail!("Invalid hash string from server.");
+    }
     let hash = crate::cache::hash_file(path)
         .with_context(|| format!("Failed to hash file: {:?}", path))?;
     let hash_matches = hash == expected_string;
@@ -1187,14 +1187,12 @@ impl<W: std::io::Write> std::io::Write for CountingWriter<W> {
 /// Snapshot of all the byte counters that `inflate` keeps, used to format a
 /// single-line diagnostic string for every error path. Field order in the
 /// formatted output mirrors the data-flow direction: compressed input on disk
-/// → decompression thread → pipe → bipatch consumer → output file. The base
-/// reader counters live to the side because bipatch interleaves reads from
-/// the pipe and the base.
+/// → zstd decoder → bipatch → output file. The base reader counters live to
+/// the side because bipatch interleaves reads from the patch and the base.
 struct InflateDiagnostics {
     patch_file_size: u64,
     base_total_size: u64,
-    decompressed_into_pipe: u64,
-    decompressed_out_of_pipe: u64,
+    decompressed: u64,
     base_bytes_read: u64,
     base_seek_count: u64,
     base_last_seek_pos: u64,
@@ -1205,14 +1203,12 @@ impl Display for InflateDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "patch_file={}b base_size={}b \
-             decompressed_into_pipe={}b decompressed_out_of_pipe={}b \
+            "patch_file={}b base_size={}b decompressed={}b \
              base_read={}b base_last_seek_pos={} base_seeks={} \
              output_written={}b",
             self.patch_file_size,
             self.base_total_size,
-            self.decompressed_into_pipe,
-            self.decompressed_out_of_pipe,
+            self.decompressed,
             self.base_bytes_read,
             self.base_last_seek_pos,
             self.base_seek_count,
@@ -1224,29 +1220,20 @@ impl Display for InflateDiagnostics {
 /// Given a path to a patch file, and a base file, apply the patch to the base
 /// and write the result to the output path.
 ///
+/// The patch is zstd-compressed bipatch data; bipatch reads it through a
+/// streaming zstd decoder, so a zstd error surfaces as bipatch's error.
+///
 /// On any error, the returned `anyhow::Result` carries a diagnostic context
 /// line containing byte counters for every stream involved in the inflate
 /// pipeline. This lets in-the-wild failures (where we don't have a debugger)
 /// report exactly where in the pipeline a failure happened — was bipatch
 /// truncated mid-stream, did the base reader return short, did the output
 /// write fail, etc.
-///
-/// Error attribution: when both the patching side and the decompression
-/// thread report errors, the patching side is reported as the primary cause.
-/// The decompression error in that case is almost always a downstream
-/// BrokenPipe-style write failure caused by `fresh_r` being dropped after
-/// the bipatch reader/output writer errored — reporting it as primary (as
-/// older versions of this function did) hides the real root cause behind
-/// the misleading "Decompression of patch failed" message. The decompression
-/// error is still surfaced via `.with_context(...)` so a genuine zstd
-/// corruption error remains visible in the chain.
 fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Result<()>
 where
     RS: Read + Seek,
 {
-    use comde::de::Decompressor;
-    use comde::zstd::ZstdDecompressor;
-    use std::io::{BufReader, BufWriter, SeekFrom};
+    use std::io::{BufReader, BufWriter, SeekFrom, Write};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
@@ -1262,8 +1249,7 @@ where
         patch_file_size
     );
 
-    // Open all our files first for error clarity.  Otherwise we might see
-    // PipeReader/Writer errors instead of file open errors.
+    // Open all our files first for error clarity.
     let compressed_patch_r = BufReader::new(
         fs::File::open(patch_path).with_file_context(FileOperation::ReadFile, patch_path)?,
     );
@@ -1273,7 +1259,7 @@ where
     // Probe the base size by seeking to end, then reset. This also gives us
     // the first chance to discover problems with the base reader (e.g. an iOS
     // CFileProvider returning a bad handle) before we hand it off to bipatch
-    // where any error would surface obliquely through a downstream BrokenPipe.
+    // where any error would surface obliquely.
     let mut base_r = base_r;
     let base_total_size = base_r.seek(SeekFrom::End(0)).with_context(|| {
         format!(
@@ -1290,26 +1276,27 @@ where
 
     shorebird_debug!("Base file size: {} bytes", base_total_size);
 
-    // Atomic counters shared across the decompression thread and this thread.
-    let decompressed_into_pipe = Arc::new(AtomicU64::new(0));
-    let decompressed_out_of_pipe = Arc::new(AtomicU64::new(0));
+    let decompressed = Arc::new(AtomicU64::new(0));
     let base_bytes_read = Arc::new(AtomicU64::new(0));
     let base_seek_count = Arc::new(AtomicU64::new(0));
     let base_last_seek_pos = Arc::new(AtomicU64::new(0));
     let output_bytes_written = Arc::new(AtomicU64::new(0));
 
-    // Set up a pipe to connect the writing from the decompression thread
-    // to the reading of the decompressed patch data on this thread.
-    let (patch_r, patch_w) = pipe::pipe();
-
-    // Wrap each end of the pipe and the base/output with counting wrappers.
-    let patch_w_counted = CountingWriter {
-        inner: patch_w,
-        bytes_written: Arc::clone(&decompressed_into_pipe),
+    let snapshot = || InflateDiagnostics {
+        patch_file_size,
+        base_total_size,
+        decompressed: decompressed.load(Ordering::Relaxed),
+        base_bytes_read: base_bytes_read.load(Ordering::Relaxed),
+        base_seek_count: base_seek_count.load(Ordering::Relaxed),
+        base_last_seek_pos: base_last_seek_pos.load(Ordering::Relaxed),
+        output_bytes_written: output_bytes_written.load(Ordering::Relaxed),
     };
+
+    let patch_r = zstd::Decoder::with_buffer(compressed_patch_r)
+        .with_context(|| format!("Failed to start zstd decoder. {}", snapshot()))?;
     let patch_r_counted = CountingReader {
         inner: patch_r,
-        bytes_read: Arc::clone(&decompressed_out_of_pipe),
+        bytes_read: Arc::clone(&decompressed),
     };
     let base_r_counted = CountingReadSeek {
         inner: base_r,
@@ -1318,62 +1305,11 @@ where
         last_seek_pos: Arc::clone(&base_last_seek_pos),
     };
 
-    let decompress = ZstdDecompressor::new();
-    // Spawn a thread to run the decompression in parallel to the patching.
-    // decompress.copy will block when the pipe buffer is full and resume
-    // when the bipatch consumer drains data; when it returns the thread exits.
-    let decompress_handle =
-        std::thread::spawn(move || decompress.copy(compressed_patch_r, patch_w_counted));
-
-    // Closure to assemble the current counter snapshot. Captured by reference
-    // so we can format on demand from any error path.
-    let snapshot = || InflateDiagnostics {
-        patch_file_size,
-        base_total_size,
-        decompressed_into_pipe: decompressed_into_pipe.load(Ordering::Relaxed),
-        decompressed_out_of_pipe: decompressed_out_of_pipe.load(Ordering::Relaxed),
-        base_bytes_read: base_bytes_read.load(Ordering::Relaxed),
-        base_seek_count: base_seek_count.load(Ordering::Relaxed),
-        base_last_seek_pos: base_last_seek_pos.load(Ordering::Relaxed),
-        output_bytes_written: output_bytes_written.load(Ordering::Relaxed),
-    };
-
-    // Helper: join the decompression thread, returning the inner error (if
-    // any). The thread's body is `decompress.copy(...) -> std::io::Result<u64>`.
-    // Used from error paths that have already decided to surface a different
-    // upstream cause but still need to reap the thread.
-    fn drain_decompress(
-        handle: std::thread::JoinHandle<std::io::Result<u64>>,
-    ) -> Option<std::io::Error> {
-        match handle.join() {
-            Ok(Ok(_)) => None,
-            Ok(Err(e)) => Some(e),
-            Err(_) => None,
-        }
-    }
-
-    // bipatch::Reader::new takes ownership of patch_r and base_r. Reading the
-    // bipatch header (4-byte magic + 4-byte version) happens here, plus the
-    // initial seek-to-end on the base reader to learn its length, so this is
-    // the first place a malformed patch or a bad base reader can surface.
-    let mut fresh_r = match bipatch::Reader::new(patch_r_counted, base_r_counted) {
-        Ok(r) => r,
-        Err(e) => {
-            // The pipe's reader side was consumed by the failing Reader::new
-            // call (and dropped), so the decompression thread's next write
-            // gets BrokenPipe and the thread exits quickly. Reap the join
-            // handle so we don't leak it.
-            let dec_err = drain_decompress(decompress_handle);
-            let diag = snapshot();
-            return Err(e).with_context(|| {
-                let mut msg = format!("Failed to initialize bipatch reader. {}", diag);
-                if let Some(d) = dec_err {
-                    msg.push_str(&format!(" Decompression thread also errored: {:#}", d));
-                }
-                msg
-            });
-        }
-    };
+    // bipatch::Reader::new reads the bipatch header (4-byte magic + 4-byte
+    // version) and seeks the base reader to learn its length, so this is the
+    // first place a malformed patch or a bad base reader can surface.
+    let mut fresh_r = bipatch::Reader::new(patch_r_counted, base_r_counted)
+        .with_context(|| format!("Failed to initialize bipatch reader. {}", snapshot()))?;
 
     // Write out the resulting patched file to the new location, counting
     // bytes via the wrapper. BufWriter is on the inside so the byte count
@@ -1384,78 +1320,22 @@ where
         bytes_written: Arc::clone(&output_bytes_written),
     };
     let patch_result = std::io::copy(&mut fresh_r, &mut output_w_counted)
+        .and_then(|_| output_w_counted.flush())
         .with_file_context(FileOperation::WriteFile, output_path);
 
-    // IMPORTANT: Drop the reader side of the pipe before joining the
-    // decompression thread. The pipe has a bounded buffer — if patching
-    // failed, the decompression thread may be blocked on a write waiting
-    // for the reader to drain data. Without this drop, join() below would
-    // wait for the decompression thread forever (deadlock). Dropping the
-    // reader causes the decompression thread's write to fail with a
-    // broken-pipe error, allowing it to exit so join() can return.
-    drop(fresh_r);
-
-    // Always join the decompression thread to get its result.
-    let decompress_result = decompress_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("Decompression thread panicked. {}", snapshot()))?;
-
     let diag = snapshot();
-
-    // Error attribution: when both errored, prefer patch_result. The
-    // decompression side's error is overwhelmingly likely to be a downstream
-    // BrokenPipe caused by `fresh_r` being dropped after bipatch already
-    // failed; reporting it as the primary cause hides the real failure
-    // behind a misleading "Decompression of patch failed" message. A genuine
-    // zstd corruption error is still surfaced via `with_context` so it
-    // doesn't disappear entirely.
-    match (patch_result, decompress_result) {
-        (Ok(_), Ok(_)) => {
+    match patch_result {
+        Ok(()) => {
             // One info-level line per inflate, with the diagnostic blob
-            // appended. This is the same line count as before this change;
-            // the blob makes the line longer but enables cross-run forensic
-            // comparison (e.g. "did base_size change between this user's
-            // last working patch and the broken one?").
+            // appended, for cross-run forensic comparison (e.g. "did
+            // base_size change between this user's last working patch and
+            // the broken one?").
             shorebird_info!("Patch successfully applied to {:?}. {}", output_path, diag);
             Ok(())
         }
-        (Err(patch_err), Ok(_)) => {
-            shorebird_error!("Patch application failed; decompression OK. {}", diag);
+        Err(patch_err) => {
+            shorebird_error!("Patch application failed. {}", diag);
             Err(patch_err).with_context(|| format!("Patch application failed. {}", diag))
-        }
-        (Ok(_), Err(decompress_err)) => {
-            // Patch succeeded but decompression reported an error. This can
-            // happen if there are trailing bytes after the data bipatch
-            // consumed, or if the decompressor sees an error closing its
-            // stream after the consumer already finished. Treat as success
-            // with a warning — the output file is already written and will
-            // be hash-checked by the caller.
-            shorebird_info!(
-                "Patch applied OK; decompression thread reported a trailing error \
-                 (likely benign, output already produced): {:#}. {}",
-                decompress_err,
-                diag
-            );
-            Ok(())
-        }
-        (Err(patch_err), Err(decompress_err)) => {
-            // Both errored — the common in-the-wild failure shape. Report
-            // patch_err as the primary cause (the upstream one) and fold
-            // the decompression error into the context chain so a genuine
-            // zstd corruption error remains visible.
-            shorebird_error!(
-                "Patch application failed; decompression thread also errored downstream: {:#}. {}",
-                decompress_err,
-                diag
-            );
-            Err(patch_err).with_context(|| {
-                format!(
-                    "Patch application failed (decompression thread also errored \
-                     downstream, almost always BrokenPipe caused by the upstream \
-                     patch-side failure: {:#}). {}",
-                    decompress_err, diag
-                )
-            })
         }
     }
 }
@@ -2236,9 +2116,8 @@ patch_verification: bogus_mode
         let tmp_dir = TempDir::new().unwrap();
         let patch_path = tmp_dir.path().join("corrupt.patch");
         // Valid zstd magic but garbage content — passes validation but
-        // fails during decompression. The decompression thread errors
-        // immediately; the pipe closes; bipatch::Reader::new sees an
-        // empty/short stream and fails to read its header.
+        // fails during decompression, which bipatch::Reader::new hits when
+        // it reads its header.
         let mut data = vec![0x28, 0xB5, 0x2F, 0xFD];
         data.extend_from_slice(b"this is not valid zstd compressed data");
         fs::write(&patch_path, &data).unwrap();
@@ -2265,10 +2144,7 @@ patch_verification: bogus_mode
     }
 
     #[test]
-    fn inflate_when_both_streams_error_reports_patch_side_primary() {
-        use comde::com::Compressor;
-        use comde::zstd::ZstdCompressor;
-
+    fn inflate_reports_zstd_error_mid_patch() {
         let tmp_dir = TempDir::new().unwrap();
 
         // Build a fake uncompressed patch that starts with a valid bipatch
@@ -2280,17 +2156,11 @@ patch_verification: bogus_mode
         uncompressed.extend_from_slice(&0x1000u32.to_le_bytes()); // bipatch version
         uncompressed.extend_from_slice(&vec![0u8; 1024]); // padding the header expects
 
-        let mut compressed = std::io::Cursor::new(Vec::new());
-        let compressor = ZstdCompressor::new();
-        compressor
-            .compress(&mut compressed, &mut std::io::Cursor::new(&uncompressed))
-            .unwrap();
-        let mut compressed = compressed.into_inner();
+        let mut compressed = zstd::encode_all(&uncompressed[..], 21).unwrap();
 
-        // Append a corrupt second zstd frame. The decompressor finishes the
+        // Append a corrupt second zstd frame. The decoder finishes the
         // first frame (delivering the bipatch header), then errors on the
-        // garbage frame. Bipatch in turn errors when its source pipe goes
-        // away with less data than its state machine wants.
+        // garbage frame, which bipatch's read returns.
         compressed.extend_from_slice(&[0x28, 0xB5, 0x2F, 0xFD]); // zstd magic
         compressed.extend_from_slice(&[0xFF; 64]); // garbage
 
@@ -2303,23 +2173,15 @@ patch_verification: bogus_mode
         let err = super::inflate(&patch_path, base, &output_path).unwrap_err();
         let err_chain = format!("{:#}", err);
 
-        // Patch-side error is now reported as the primary cause; the
-        // decompression error is preserved in the context chain so a
-        // genuine zstd corruption stays visible to the next debugger.
         assert!(
             err_chain.contains("Patch application failed"),
-            "Expected patch-side error as primary cause, got: {}",
-            err_chain
-        );
-        assert!(
-            err_chain.contains("decompression"),
-            "Expected decompression error to be folded into the chain, got: {}",
+            "Expected patch application failure, got: {}",
             err_chain
         );
         // Diagnostic counters appear on every error path.
         assert!(
             err_chain.contains("patch_file=")
-                && err_chain.contains("decompressed_into_pipe=")
+                && err_chain.contains("decompressed=")
                 && err_chain.contains("output_written="),
             "Expected diagnostic byte counters, got: {}",
             err_chain
@@ -2348,8 +2210,7 @@ patch_verification: bogus_mode
         for needle in [
             "patch_file=",
             "base_size=",
-            "decompressed_into_pipe=",
-            "decompressed_out_of_pipe=",
+            "decompressed=",
             "base_read=",
             "base_last_seek_pos=",
             "base_seeks=",
