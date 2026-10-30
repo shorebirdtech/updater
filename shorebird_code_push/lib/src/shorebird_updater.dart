@@ -86,7 +86,8 @@ void logRestartUnavailableMessage(Object error) {
 Shorebird could not request a restart: $error
 -------------------------------------------------------------------------------
 This is expected on a Shorebird engine that predates hot restart support.
-dangerouslyHotRestart() returned false; the patch still applies on the next launch.
+dangerouslyHotRestart() returned false; the patch still applies on the
+next launch.
 ''');
 }
 
@@ -110,7 +111,7 @@ class Patch {
 /// withdrawal differently from a new patch cannot tell them apart otherwise.
 /// {@endtemplate}
 @immutable
-class PatchTransition {
+final class PatchTransition {
   /// {@macro patch_transition}
   const PatchTransition({required this.current, required this.next});
 
@@ -184,15 +185,18 @@ abstract class ShorebirdUpdater {
   /// code the app runs; whether to call [dangerouslyHotRestart], prompt
   /// first, or wait for the next launch is the app's call.
   ///
-  /// A new listener is told about a transition that is already waiting, so
-  /// subscribing after the [update] that produced one still reports it. While
-  /// subscribed, a listener is told when [update] installs a patch and when
-  /// [checkForUpdate] finds that the running patch was withdrawn. The same
+  /// An event fires whenever [update] or [checkForUpdate] finds that the
+  /// patch a restart would boot differs from the one running. A withdrawal is
+  /// the `next == null` case of that, not a separate kind of event. The same
   /// pending transition seen twice is emitted once.
   ///
-  /// Events arrive only from calls the app makes. Nothing polls in the
-  /// background, so an app that never calls [checkForUpdate] or [update]
-  /// never hears anything.
+  /// A new listener is told about a transition that is already waiting, so
+  /// subscribing after the [update] that produced one still reports it, as
+  /// does one the updater's own background thread installed before the
+  /// listener existed.
+  ///
+  /// Nothing polls. Past that read on subscribe, events follow the calls the
+  /// app makes.
   ///
   /// Emits nothing if the updater is not available (see [isAvailable]).
   Stream<PatchTransition> get patchTransitions;

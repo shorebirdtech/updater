@@ -121,6 +121,7 @@ somewhere else. Subscribe once, near where you know what the user is doing:
 
 ```dart
 _subscription = updater.patchTransitions.listen((transition) {
+  // transition.next is the patch a restart would boot.
   if (transition.next == null) {
     // A withdrawal: the patch the app is running has been pulled, and a
     // restart drops back to the base release.
@@ -132,9 +133,11 @@ _subscription = updater.patchTransitions.listen((transition) {
 ```
 
 A listener that subscribes after a patch has already landed still hears about
-it. Nothing polls in the background, so events only follow your own
-`update()` and `checkForUpdate()` calls, and nothing restarts the app unless
-you call `dangerouslyHotRestart()`.
+it, including one the updater's own background thread installed before you
+subscribed. Nothing
+polls: past that read on subscribe, events follow your own `update()` and
+`checkForUpdate()` calls. Nothing restarts the app unless you call
+`dangerouslyHotRestart()`.
 
 ### Tracks
 

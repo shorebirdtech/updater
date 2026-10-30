@@ -772,6 +772,54 @@ void main() {
           expect(first, hasLength(1));
           expect(second, equals(first));
         });
+
+        test('an install while it waits does not emit twice', () async {
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
+          result.ref.status = SHOREBIRD_UPDATE_INSTALLED;
+          addTearDown(() => calloc.free(result));
+          when(() => updater.update()).thenReturn(result);
+
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await shorebirdUpdater.update();
+          await pumpEventQueue();
+          expect(events, hasLength(1));
+
+          // A different patch is a different transition, so it does emit.
+          when(updater.nextPatchNumber).thenReturn(3);
+          await shorebirdUpdater.update();
+          await pumpEventQueue();
+          expect(events, hasLength(2));
+        });
+
+        test('a cancelled listener hears nothing more', () async {
+          final events = <PatchTransition>[];
+          await shorebirdUpdater.patchTransitions.listen(events.add).cancel();
+
+          when(() => updater.checkForDownloadableUpdate()).thenReturn(false);
+          await shorebirdUpdater.checkForUpdate();
+          await pumpEventQueue();
+          expect(events, isEmpty);
+        });
+
+        test('a failed read on subscribe leaves the listener alive', () async {
+          when(updater.nextPatchNumber).thenThrow(Exception('oops'));
+          final events = collect(shorebirdUpdater.patchTransitions);
+          await pumpEventQueue();
+          expect(events, isEmpty);
+
+          // The catch-up swallowed the failure rather than tearing the
+          // subscription down, so a later live event still arrives.
+          when(updater.nextPatchNumber).thenReturn(2);
+          when(() => updater.checkForDownloadableUpdate()).thenReturn(false);
+          await shorebirdUpdater.checkForUpdate();
+          await pumpEventQueue();
+          expect(events, [
+            const PatchTransition(
+              current: Patch(number: 1),
+              next: Patch(number: 2),
+            ),
+          ]);
+        });
       });
 
       group('when nothing is waiting', () {
@@ -802,6 +850,61 @@ void main() {
           expect(events, [
             const PatchTransition(current: Patch(number: 1), next: null),
           ]);
+        });
+      });
+
+      group('when the catch-up read resolves after a live event', () {
+        // Each patch read is its own isolate spawn, so the read a listener
+        // starts with can land after an install that was published while it
+        // was still in flight. The read captures its value up front and
+        // resolves late, which is the order that used to deliver a stale
+        // patch as the newest one.
+        var readLatency = Duration.zero;
+        Future<R> latentRun<R>(
+          FutureOr<R> Function() computation, {
+          String? debugName,
+        }) async {
+          // Captured on the way in, so a read already in flight keeps the
+          // latency it started with.
+          final latency = readLatency;
+          final value = await computation();
+          await Future<void>.delayed(latency);
+          return value;
+        }
+
+        setUp(() {
+          readLatency = Duration.zero;
+          when(updater.currentPatchNumber).thenReturn(1);
+          when(updater.nextPatchNumber).thenReturn(2);
+          final result = calloc.allocate<UpdateResult>(sizeOf<UpdateResult>());
+          result.ref.status = SHOREBIRD_UPDATE_INSTALLED;
+          addTearDown(() => calloc.free(result));
+          when(() => updater.update()).thenReturn(result);
+          shorebirdUpdater = ShorebirdUpdaterImpl(
+            updater: updater,
+            run: latentRun,
+          );
+        });
+
+        test('the live event is not overwritten by the stale read', () async {
+          readLatency = const Duration(milliseconds: 50);
+          final events = collect(shorebirdUpdater.patchTransitions);
+
+          readLatency = Duration.zero;
+          when(updater.nextPatchNumber).thenReturn(3);
+          await shorebirdUpdater.update();
+          await pumpEventQueue();
+          expect(events, [
+            const PatchTransition(
+              current: Patch(number: 1),
+              next: Patch(number: 3),
+            ),
+          ]);
+
+          // Long enough for the catch-up read, which captured next=2, to
+          // resolve.
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(events, hasLength(1));
         });
       });
 

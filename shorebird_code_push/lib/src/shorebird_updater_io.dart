@@ -64,18 +64,29 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
         controller.add(transition);
       }
 
-      final subscription = _transitions.stream.listen(send);
+      var sawLive = false;
+      final subscription = _transitions.stream.listen((transition) {
+        sawLive = true;
+        send(transition);
+      });
       controller.onCancel = subscription.cancel;
 
       // A patch can already be waiting from before this listener existed, so
       // a stream carrying only what it saw live would never mention the
       // update() that landed during startup.
+      //
+      // The catch-up read and a live event race, and each patch read is its
+      // own isolate spawn, so the read can resolve after an install that has
+      // already been published. A live event is never older than the read
+      // this listener started with, so one arriving retires the catch-up
+      // rather than being corrected by it.
+      //
       // A read that fails says nothing about whether a patch is waiting, and
       // the app's own readCurrentPatch/readNextPatch still report it, so the
       // catch-up stays silent rather than tearing down the subscription.
       _readTransition().then(
         (transition) {
-          if (controller.isClosed) return;
+          if (controller.isClosed || sawLive) return;
           if (transition.isPending) send(transition);
         },
         onError: (_, __) {},
@@ -134,8 +145,6 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
 
     await _install(track: track);
 
-    // An install is the one point where the next boot patch changes without
-    // the app asking anything, so it is where a subscriber has to be told.
     // Best-effort: the install already succeeded, and a patch that cannot be
     // read is not a reason to report that it failed.
     try {
