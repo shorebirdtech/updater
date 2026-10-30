@@ -44,6 +44,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.shorebird_code_push == 'true'
     uses: ./.github/workflows/_shorebird_ci_flutter.yaml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
       package_name: shorebird_code_push
       package_path: shorebird_code_push
@@ -57,6 +59,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.shorebird_code_push_example == 'true'
     uses: ./.github/workflows/_shorebird_ci_flutter.yaml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
       package_name: shorebird_code_push_example
       package_path: shorebird_code_push/example

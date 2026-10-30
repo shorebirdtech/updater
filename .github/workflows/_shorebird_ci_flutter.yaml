@@ -29,6 +29,9 @@ on:
         required: false
         default: ""
         type: string
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -70,6 +73,7 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           flags: ${{ inputs.package_name }}
+          token: ${{ secrets.CODECOV_TOKEN }}
           working-directory: ${{ inputs.package_path }}
       - name: Integration Tests
         if: inputs.has_integration_tests
