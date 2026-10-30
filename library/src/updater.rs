@@ -73,6 +73,9 @@ pub enum InitError {
     InvalidArgument(String, String),
     AlreadyInitialized,
     FailedToCleanUpFailedPatch,
+    /// The app is configured with a patch public key but the engine
+    /// registered no signature verifier, so patches could not be checked.
+    NoSignatureVerifier,
 }
 
 impl std::error::Error for InitError {}
@@ -87,6 +90,10 @@ impl Display for InitError {
             InitError::FailedToCleanUpFailedPatch => {
                 write!(f, "Failed to clean up after a failed patch.")
             }
+            InitError::NoSignatureVerifier => write!(
+                f,
+                "A patch public key is configured but no signature verifier is registered."
+            ),
         }
     }
 }
@@ -316,6 +323,7 @@ pub fn init(
     init_logging();
     let config = YamlConfig::from_yaml(yaml)
         .map_err(|err| InitError::InvalidArgument("yaml".to_string(), err.to_string()))?;
+    require_signature_verifier(&config, crate::engine_callbacks::has_signature_verifier())?;
 
     let libapp_path = libapp_path_from_settings(&app_config.original_libapp_paths)?;
     shorebird_debug!("libapp_path: {:?}", libapp_path);
@@ -334,6 +342,17 @@ pub fn init(
     }
 
     handle_prior_boot_failure_if_necessary()
+}
+
+/// Refuses to start an app with a patch public key when nothing can check
+/// signatures. Failing here leaves the app on its base release; failing later,
+/// at boot validation, would mark installed patches bad and delete them.
+fn require_signature_verifier(config: &YamlConfig, has_verifier: bool) -> Result<(), InitError> {
+    if config.patch_public_key.is_some() && !has_verifier {
+        shorebird_error!("Patch public key configured but no signature verifier registered");
+        return Err(InitError::NoSignatureVerifier);
+    }
+    Ok(())
 }
 
 /// If, at initialization time, we detect that we were in the process of booting a patch, report a
@@ -5234,5 +5253,19 @@ mod failure_classification_tests {
             UpdateError::CorruptPatch.to_string(),
             "Downloaded patch was invalid"
         );
+    }
+
+    #[test]
+    fn init_requires_a_verifier_when_a_public_key_is_configured() {
+        use super::{require_signature_verifier, InitError};
+        use crate::yaml::YamlConfig;
+        let signed = YamlConfig::from_yaml("app_id: 1234\npatch_public_key: abc\n").unwrap();
+        let unsigned = YamlConfig::from_yaml("app_id: 1234\n").unwrap();
+        assert!(matches!(
+            require_signature_verifier(&signed, false),
+            Err(InitError::NoSignatureVerifier)
+        ));
+        assert!(require_signature_verifier(&signed, true).is_ok());
+        assert!(require_signature_verifier(&unsigned, false).is_ok());
     }
 }
