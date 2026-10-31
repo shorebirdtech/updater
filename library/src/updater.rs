@@ -798,10 +798,29 @@ fn update_failure_event(
     event
 }
 
-/// Formats an error for an event's message: paths under the updater's own
-/// directories are made relative to them, then the result is truncated.
+/// Formats an error for an event's message: root cause first (see
+/// [`root_cause_first`]), paths under the updater's own directories made
+/// relative to them, then truncated.
 fn event_error_message(err: &anyhow::Error, config: &UpdateConfig) -> String {
-    truncate_error_message(&relativize_paths(&format!("{:#}", err), config))
+    truncate_error_message(&relativize_paths(&root_cause_first(err), config))
+}
+
+/// Formats an error chain with its root cause first, then the contexts
+/// around it from the outermost in, so `a: b: cause` reads `cause; a: b`.
+///
+/// `{:#}` puts the root cause last, where truncation cuts it: an inflate
+/// failure's context carries ~180 bytes of byte counters plus the output
+/// path, so the base or patch read error that explains it never reached the
+/// server. A single-error chain is unchanged.
+fn root_cause_first(err: &anyhow::Error) -> String {
+    let mut chain: Vec<String> = err.chain().map(|e| e.to_string()).collect();
+    let Some(root) = chain.pop() else {
+        return String::new();
+    };
+    if chain.is_empty() {
+        return root;
+    }
+    format!("{root}; {}", chain.join(": "))
 }
 
 /// Replaces the absolute directories the updater works in with placeholders,
@@ -2933,6 +2952,43 @@ patch_verification: bogus_mode
         *OFFERED_SIGNATURE.lock().unwrap() = Some(HELLO_TESTS_SIGNATURE.to_string());
         assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
         assert_installed_and_bootable()
+    }
+
+    #[test]
+    fn root_cause_first_leaves_a_single_error_alone() {
+        let err = anyhow::anyhow!("hash mismatch");
+        assert_eq!(super::root_cause_first(&err), "hash mismatch");
+    }
+
+    #[test]
+    fn root_cause_first_leads_with_the_root_cause() {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "failed to fill whole buffer",
+        );
+        let err = anyhow::Error::new(io)
+            .context("Failed to write to file 'out'")
+            .context("Patch application failed. patch_file=10b");
+        assert_eq!(
+            super::root_cause_first(&err),
+            "failed to fill whole buffer; Patch application failed. \
+             patch_file=10b: Failed to write to file 'out'"
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn event_error_message_keeps_root_cause_past_truncation() {
+        let config = config_with_dirs("/storage", "/code_cache", "/app/libapp.so");
+        let io = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "failed to fill whole buffer",
+        );
+        let err = anyhow::Error::new(io)
+            .context(format!("Patch application failed. {}", "x".repeat(400)));
+        let msg = super::event_error_message(&err, &config);
+        assert!(msg.len() <= 256, "{msg}");
+        assert!(msg.starts_with("failed to fill whole buffer; "), "{msg}");
     }
 
     #[test]
