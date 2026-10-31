@@ -207,8 +207,9 @@ mod test {
         let path = Path::new("/a/b/state.json");
         let first = super::temp_sibling_path(path);
         assert_eq!(first.parent(), path.parent());
-        assert!(first.to_str().unwrap().starts_with("/a/b/state.json."));
-        assert!(first.to_str().unwrap().ends_with(".tmp"));
+        let name = first.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("state.json."));
+        assert!(name.ends_with(".tmp"));
         assert_ne!(first, super::temp_sibling_path(path));
     }
 
