@@ -19,6 +19,12 @@ dart format --set-exit-if-changed .
 dart analyze --fatal-warnings lib test
 ```
 
+`shorebird_code_push` is gated at **100% line coverage**, excluding `**/*.g.dart`. The threshold is `very_good_workflows`' default rather than anything written in `.github/workflows/main.yaml`, so reading the workflow does not reveal it. `flutter test --coverage` writes `coverage/lcov.info` and enforces nothing, which means a missing `hashCode` or `toString` test fails CI and nothing local. Check it before pushing, which needs nothing installed:
+
+```bash
+awk '/^SF:/{f=substr($0,4); skip=(f ~ /\.g\.dart$/)} /^DA:/{if(skip)next; split(substr($0,4),a,","); t++; if(a[2]+0>0)h++; else print "uncovered: " f ":" a[1]} END{printf "%.2f%% (%d/%d lines)\n", 100*h/t, h, t}' coverage/lcov.info
+```
+
 Rust tests that call `shorebird_init` must run single-threaded — use the `#[serial]` attribute from `serial_test`. The global static config means concurrent `shorebird_init` calls stomp each other, so any test that touches init needs `#[serial]`.
 
 ## Workspace Layout
