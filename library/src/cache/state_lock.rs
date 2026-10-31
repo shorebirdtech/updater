@@ -25,8 +25,8 @@ pub struct StateLock {
 
 impl StateLock {
     /// Blocks until this process holds the lock. If the lock file can't be
-    /// opened or locked, logs and returns an unheld lock: state access goes
-    /// on as it did before there was a lock rather than failing.
+    /// opened or locked, logs and returns a lock that holds nothing: state
+    /// access goes on as it did before there was a lock rather than failing.
     pub fn acquire(cache_dir: &Path) -> Self {
         match Self::try_acquire(cache_dir) {
             Ok(file) => Self { _file: Some(file) },
@@ -49,8 +49,9 @@ impl StateLock {
     }
 }
 
-// libc rather than `File::lock`, whose Android support is newer than the
-// toolchains the engine may build with.
+// libc rather than `File::lock` on Unix: std's Android support for it is
+// recent (absent through 1.97), and the engine builds with whatever stable
+// is installed. Windows has had `File::lock` since it was stabilized (1.89).
 #[cfg(unix)]
 fn lock_exclusive(file: &File) -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
