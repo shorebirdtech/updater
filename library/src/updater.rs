@@ -805,22 +805,43 @@ fn event_error_message(err: &anyhow::Error, config: &UpdateConfig) -> String {
     truncate_error_message(&relativize_paths(&root_cause_first(err), config))
 }
 
-/// Formats an error chain with its root cause first, then the contexts
-/// around it from the outermost in, so `a: b: cause` reads `cause; a: b`.
+/// Formats an error chain with its cause first, then the contexts around it
+/// from the outermost in, so `a: b: cause` reads `cause; a: b`.
 ///
-/// `{:#}` puts the root cause last, where truncation cuts it: an inflate
-/// failure's context carries ~180 bytes of byte counters plus the output
-/// path, so the base or patch read error that explains it never reached the
-/// server. A single-error chain is unchanged.
+/// `{:#}` puts the cause last, where truncation cuts it: an inflate failure's
+/// context carries ~180 bytes of byte counters plus the output path, so the
+/// base or patch read error that explains it never reached the server.
+///
+/// The cause is the innermost error that isn't an [`UpdateError`] tag:
+/// `Err(UpdateError::CorruptPatch).context(detail)` leads with `detail`, as
+/// the tag is already sent as the event's `failure_category`. A context that
+/// ends by repeating the cause (as `with_file_context` does) drops the repeat.
+/// A single-error chain is unchanged.
 fn root_cause_first(err: &anyhow::Error) -> String {
-    let mut chain: Vec<String> = err.chain().map(|e| e.to_string()).collect();
-    let Some(root) = chain.pop() else {
-        return String::new();
+    let errors: Vec<&(dyn std::error::Error + 'static)> = err.chain().collect();
+    let Some(cause_index) = errors
+        .iter()
+        .rposition(|e| e.downcast_ref::<UpdateError>().is_none())
+    else {
+        return format!("{:#}", err);
     };
-    if chain.is_empty() {
-        return root;
+    let cause = errors[cause_index].to_string();
+    let rest: Vec<String> = errors
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != cause_index)
+        .map(|(_, e)| {
+            let text = e.to_string();
+            match text.strip_suffix(&format!(": {cause}")) {
+                Some(stripped) => stripped.to_string(),
+                None => text,
+            }
+        })
+        .collect();
+    if rest.is_empty() {
+        return cause;
     }
-    format!("{root}; {}", chain.join(": "))
+    format!("{cause}; {}", rest.join(": "))
 }
 
 /// Replaces the absolute directories the updater works in with placeholders,
@@ -2976,6 +2997,32 @@ patch_verification: bogus_mode
         );
     }
 
+    #[test]
+    fn root_cause_first_drops_a_repeated_cause() {
+        let io = std::io::Error::other("failed to fill whole buffer");
+        let err = anyhow::Error::new(io)
+            .context("Failed to write to file 'out': failed to fill whole buffer")
+            .context("Patch application failed.");
+        assert_eq!(
+            super::root_cause_first(&err),
+            "failed to fill whole buffer; Patch application failed.: \
+             Failed to write to file 'out'"
+        );
+    }
+
+    #[test]
+    fn root_cause_first_leads_with_the_detail_under_a_tag() {
+        let err = anyhow::Error::new(super::UpdateError::CorruptPatch)
+            .context("Update rejected: hash mismatch.")
+            .context("This app reports version 1.0.0, but the binary is different from the version 1.0.0");
+        assert_eq!(
+            super::root_cause_first(&err),
+            "Update rejected: hash mismatch.; This app reports version 1.0.0, \
+             but the binary is different from the version 1.0.0: \
+             Downloaded patch was invalid"
+        );
+    }
+
     #[serial]
     #[test]
     fn event_error_message_keeps_root_cause_past_truncation() {
@@ -5101,7 +5148,7 @@ mod failure_classification_tests {
             FailureCategory::Server
         );
         assert_eq!(
-            classify_failure(&anyhow::Error::new(UpdateError::CorruptPatch)),
+            classify_failure(&anyhow::Error::new(super::UpdateError::CorruptPatch)),
             FailureCategory::CorruptPatch
         );
     }
