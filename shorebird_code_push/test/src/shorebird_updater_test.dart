@@ -26,6 +26,45 @@ void main() {
       });
     });
 
+    group(PatchTransition, () {
+      test('overrides toString', () {
+        const transition = PatchTransition(
+          current: Patch(number: 1),
+          next: Patch(number: 2),
+        );
+        expect(
+          transition.toString(),
+          equals('PatchTransition(current: 1, next: 2)'),
+        );
+      });
+
+      test('reports a base release as null on both sides', () {
+        const transition = PatchTransition(current: null, next: null);
+        expect(
+          transition.toString(),
+          equals('PatchTransition(current: null, next: null)'),
+        );
+      });
+
+      test('hashes by patch number, so equal transitions collide', () {
+        // The stream dedupes by equality, so a hashCode that disagreed with
+        // == would let the same pending restart through twice.
+        const transition = PatchTransition(
+          current: Patch(number: 1),
+          next: Patch(number: 2),
+        );
+        const same = PatchTransition(
+          current: Patch(number: 1),
+          next: Patch(number: 2),
+        );
+        const withdrawal =
+            PatchTransition(current: Patch(number: 1), next: null);
+
+        expect(transition.hashCode, equals(same.hashCode));
+        expect(transition.hashCode, isNot(equals(withdrawal.hashCode)));
+      });
+    });
+
     group(UpdateException, () {
       test('overrides toString', () {
         const message = 'message';
