@@ -78,6 +78,7 @@ words:
   - retryability
   - rlib
   - roundtrips
+  - rposition
   - rsplit
   - RSASSA
   - rollforward
