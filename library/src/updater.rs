@@ -14,7 +14,7 @@ use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{Context, Result};
 
 use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
-use crate::cache::{PatchInfo, UpdaterState};
+use crate::cache::{PatchInfo, StateLock, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
@@ -295,7 +295,12 @@ static UNREADABLE_STATE: Mutex<Option<UnreadableState>> = Mutex::new(None);
 /// the first load that succeeds afterwards queues a `state_unreadable`
 /// failure event for it. The engine calls [`protected_data_available`] when
 /// iOS unlocks the files, which makes that load.
-fn load_state(config: &UpdateConfig) -> anyhow::Result<UpdaterState> {
+///
+/// The state is loaded under [`StateLock`], which the caller holds until it's
+/// done with the state, so a load, mutate and save is exclusive across
+/// processes as `with_config` makes it within one.
+pub(crate) fn load_state(config: &UpdateConfig) -> anyhow::Result<(StateLock, UpdaterState)> {
+    let lock = StateLock::acquire(&config.storage_dir);
     let result = UpdaterState::load_or_new_on_error(
         &config.storage_dir,
         &config.download_dir,
@@ -325,7 +330,7 @@ fn load_state(config: &UpdateConfig) -> anyhow::Result<UpdaterState> {
                 );
                 queue_or_send_event(&mut state, config, event);
             }
-            Ok(state)
+            Ok((lock, state))
         }
     }
 }
@@ -400,7 +405,7 @@ where
     F: FnOnce(&UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let state = load_state(config)?;
+        let (_lock, state) = load_state(config)?;
         f(&state)
     })
 }
@@ -410,7 +415,7 @@ where
     F: FnOnce(&mut UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let mut state = load_state(config)?;
+        let (_lock, mut state) = load_state(config)?;
         f(&mut state)
     })
 }
@@ -467,7 +472,7 @@ fn require_signature_verifier(config: &YamlConfig, has_verifier: bool) -> Result
 /// failure to boot for that patch and queue an event to report the failure.
 pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
-        let mut state = load_state(config)?;
+        let (_lock, mut state) = load_state(config)?;
         if let Some(patch) = state.currently_booting_patch() {
             let boot_time_info = state
                 .boot_started_at()
@@ -1497,7 +1502,7 @@ where
 /// nothing else would report why.
 pub fn validate_next_boot_patch() -> anyhow::Result<()> {
     with_config(|config| {
-        let mut state = load_state(config)?;
+        let (_lock, mut state) = load_state(config)?;
         let Some(patch_number) = state.next_boot_patch().map(|p| p.number) else {
             return Ok(());
         };
@@ -1528,7 +1533,7 @@ pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
     // Marked under the config lock, so protected_data_available can't send
     // the report between the failed load and the mark.
     with_config(|config| match load_state(config) {
-        Ok(mut state) => Ok(state.next_boot_patch()),
+        Ok((_lock, mut state)) => Ok(state.next_boot_patch()),
         Err(err) => {
             note_unreadable_state_booted_base();
             Err(err)
@@ -1567,7 +1572,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
 
     with_config(|config| {
-        let mut state = load_state(config)?;
+        let (_lock, mut state) = load_state(config)?;
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
             UpdateError::InvalidState("currently_booting_patch is None".to_string()),
@@ -1602,7 +1607,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
-        let mut state = load_state(config)?;
+        let (_lock, mut state) = load_state(config)?;
 
         // None means we didn't boot from a patch, so there's nothing to record.
         if let Some(booting_patch) = state.currently_booting_patch() {
@@ -5497,7 +5502,7 @@ mod unreadable_state_tests {
                 message: event_error_message(&err, config),
                 category: classify_failure(&err),
             };
-            let mut state = load_state(config)?;
+            let (_lock, mut state) = load_state(config)?;
             let event = unreadable_state_event(&mut state, config, &unreadable);
             assert_eq!(event.failure_category.as_deref(), Some("permission_denied"));
             let message = event.message.unwrap();
