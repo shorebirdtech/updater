@@ -14,7 +14,7 @@ use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{Context, Result};
 
 use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
-use crate::cache::{PatchInfo, UpdaterState};
+use crate::cache::{PatchInfo, StateLock, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
@@ -271,18 +271,27 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
     first.map(PathBuf::from)
 }
 
+/// Loads the state under [`StateLock`], which the caller holds until it's
+/// done with the state, so a load, mutate and save is exclusive across
+/// processes as `with_config` makes it within one.
+pub(crate) fn load_state(config: &UpdateConfig) -> (StateLock, UpdaterState) {
+    let lock = StateLock::acquire(&config.storage_dir);
+    let state = UpdaterState::load_or_new_on_error(
+        &config.storage_dir,
+        &config.download_dir,
+        &config.release_version,
+        config.patch_public_key.as_deref(),
+        config.patch_verification,
+    );
+    (lock, state)
+}
+
 pub fn with_state<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, state) = load_state(config);
         f(&state)
     })
 }
@@ -292,13 +301,7 @@ where
     F: FnOnce(&mut UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config);
         f(&mut state)
     })
 }
@@ -355,13 +358,7 @@ fn require_signature_verifier(config: &YamlConfig, has_verifier: bool) -> Result
 /// failure to boot for that patch and queue an event to report the failure.
 pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config);
         if let Some(patch) = state.currently_booting_patch() {
             let boot_time_info = state
                 .boot_started_at()
@@ -1350,13 +1347,7 @@ where
 /// nothing else would report why.
 pub fn validate_next_boot_patch() -> anyhow::Result<()> {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config);
         let Some(patch_number) = state.next_boot_patch().map(|p| p.number) else {
             return Ok(());
         };
@@ -1418,13 +1409,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
 
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config);
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
             UpdateError::InvalidState("currently_booting_patch is None".to_string()),
@@ -1459,13 +1444,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config);
 
         // None means we didn't boot from a patch, so there's nothing to record.
         if let Some(booting_patch) = state.currently_booting_patch() {

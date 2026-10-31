@@ -34,10 +34,15 @@ where
     //      state file used to be.
     // The sibling-write-then-rename pattern fixes both: the caller sees a
     // flush error (we unwrap `BufWriter` below), and on-disk `path` is only
-    // replaced by a fully-written sibling via an atomic `rename`.
+    // replaced by a fully-written sibling via an atomic `rename`. The temp
+    // file is synced before the rename, or after a power loss the rename can
+    // survive without the data, leaving a zero-filled file. Its name is
+    // unique to this write, so two processes writing one path can't truncate
+    // or interleave into the same temp file.
     let temp_path = temp_sibling_path(path_as_ref);
     let file = File::create(&temp_path).with_file_context(FileOperation::CreateFile, &temp_path)?;
     if let Err(err) = serialize_and_flush(serializable, file)
+        .and_then(|file| Ok(file.sync_all()?))
         .with_context(|| format!("failed to serialize to {temp_path:?}"))
     {
         // Best-effort cleanup so a failed write doesn't leave orphan temp files.
@@ -50,8 +55,9 @@ where
 
 /// Serializes `value` as pretty JSON into `writer`, then explicitly unwraps
 /// the internal `BufWriter` so any flush error surfaces to the caller instead
-/// of being silently discarded by `BufWriter`'s `Drop` impl.
-fn serialize_and_flush<S, W>(value: &S, writer: W) -> anyhow::Result<()>
+/// of being silently discarded by `BufWriter`'s `Drop` impl. Returns
+/// `writer`.
+fn serialize_and_flush<S, W>(value: &S, writer: W) -> anyhow::Result<W>
 where
     S: ?Sized + Serialize,
     W: Write,
@@ -63,15 +69,15 @@ where
     // dropped on the floor.
     buf_writer
         .into_inner()
-        .map_err(|e| anyhow::Error::new(e.into_error()))?;
-    Ok(())
+        .map_err(|e| anyhow::Error::new(e.into_error()))
 }
 
-/// Returns a sibling path in the same directory with a `.tmp` suffix,
-/// e.g. `/a/b/state.json` -> `/a/b/state.json.tmp`.
+/// Returns a sibling path in the same directory, unique to this call,
+/// e.g. `/a/b/state.json` -> `/a/b/state.json.<uuid>.tmp`.
 fn temp_sibling_path(path: &Path) -> PathBuf {
     let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("state");
-    path.with_file_name(format!("{file_name}.tmp"))
+    let nonce = uuid::Uuid::new_v4().simple();
+    path.with_file_name(format!("{file_name}.{nonce}.tmp"))
 }
 
 pub fn read<D, P>(path: &P) -> anyhow::Result<D>
@@ -152,7 +158,7 @@ mod test {
         )
         .unwrap();
         assert!(path.exists());
-        assert!(!temp_dir.path().join("state.json.tmp").exists());
+        assert_eq!(file_names(temp_dir.path()), vec!["state.json"]);
     }
 
     #[test]
@@ -184,7 +190,26 @@ mod test {
         let reloaded: TestStruct = super::read(&path).unwrap();
         assert!(reloaded == original);
         // Temp file was cleaned up.
-        assert!(!temp_dir.path().join("state.json.tmp").exists());
+        assert_eq!(file_names(temp_dir.path()), vec!["state.json"]);
+    }
+
+    fn file_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn temp_sibling_paths_are_unique_per_write() {
+        let path = Path::new("/a/b/state.json");
+        let first = super::temp_sibling_path(path);
+        assert_eq!(first.parent(), path.parent());
+        assert!(first.to_str().unwrap().starts_with("/a/b/state.json."));
+        assert!(first.to_str().unwrap().ends_with(".tmp"));
+        assert_ne!(first, super::temp_sibling_path(path));
     }
 
     // Regression test for the bug where `BufWriter`'s `Drop` impl silently
@@ -217,7 +242,8 @@ mod test {
         let result = super::serialize_and_flush(&value, FailingWriter);
         assert!(result.is_err());
         assert!(result
-            .unwrap_err()
+            .err()
+            .unwrap()
             .to_string()
             .contains("simulated flush failure"));
     }

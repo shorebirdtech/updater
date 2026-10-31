@@ -637,4 +637,76 @@ mod tests {
             .unwrap();
         assert!(state.is_known_bad_patch(1));
     }
+
+    const WRITER_DIR_ENV: &str = "SHOREBIRD_TEST_STATE_WRITER_DIR";
+    const WRITER_TAG_ENV: &str = "SHOREBIRD_TEST_STATE_WRITER_TAG";
+    const WRITES_PER_PROCESS: usize = 20;
+
+    /// The body of each process `concurrent_processes_lose_no_events`
+    /// spawns. Run on its own, it returns at once.
+    #[test]
+    fn state_writer_process() {
+        let Ok(dir) = std::env::var(WRITER_DIR_ENV) else {
+            return;
+        };
+        let tag = std::env::var(WRITER_TAG_ENV).unwrap();
+        let dir = PathBuf::from(dir);
+        for i in 0..WRITES_PER_PROCESS {
+            // What `with_mut_state` does: lock, load, mutate, save.
+            let _lock = crate::cache::StateLock::acquire(&dir);
+            let mut state = UpdaterState::load_or_new_on_error(
+                &dir,
+                &dir.join("downloads"),
+                "1.0.0+1",
+                None,
+                PatchVerificationMode::default(),
+            );
+            let mut queued = event(i);
+            queued.event_id = Some(format!("{tag}-{i}"));
+            state.queue_event(queued).unwrap();
+        }
+    }
+
+    #[test]
+    fn concurrent_processes_lose_no_events() {
+        // Two processes (as with an Android `android:process` service)
+        // queueing events into one cache dir: each read-modify-write must
+        // see the other's, and the file must stay parseable throughout.
+        const { assert!(2 * WRITES_PER_PROCESS <= MAX_QUEUED_EVENTS) };
+        let tmp = TempDir::new().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let writers: Vec<_> = ["a", "b"]
+            .iter()
+            .map(|tag| {
+                std::process::Command::new(&exe)
+                    .args([
+                        "--exact",
+                        "cache::updater_state::tests::state_writer_process",
+                        "--test-threads=1",
+                    ])
+                    .env(WRITER_DIR_ENV, tmp.path())
+                    .env(WRITER_TAG_ENV, tag)
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for mut writer in writers {
+            assert!(writer.wait().unwrap().success());
+        }
+
+        let state = load(&tmp, "1.0.0+1");
+        let mut ids: Vec<String> = state
+            .copy_events(MAX_QUEUED_EVENTS)
+            .into_iter()
+            .map(|e| e.event_id.unwrap())
+            .collect();
+        ids.sort();
+        let mut expected: Vec<String> = ["a", "b"]
+            .iter()
+            .flat_map(|tag| (0..WRITES_PER_PROCESS).map(move |i| format!("{tag}-{i}")))
+            .collect();
+        expected.sort();
+        assert_eq!(ids, expected);
+    }
 }
