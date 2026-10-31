@@ -420,6 +420,11 @@ pub struct PatchCheckRequest {
     /// this field instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_patch_number: Option<usize>,
+    /// Module version for add-to-app releases (AAR/iOS framework).
+    /// When present, used instead of release_version for patch lookup.
+    /// The release_version still contains the host app's version for analytics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_version: Option<String>,
 }
 
 /// Hand-written so `client_id` cannot reach a log through a `{:?}` render of
@@ -464,6 +469,7 @@ impl PatchCheckRequest {
             arch: current_arch().to_string(),
             client_id: client_id.to_string(),
             current_patch_number,
+            module_version: config.module_version.clone(),
         }
     }
 
@@ -716,6 +722,7 @@ mod tests {
                 arch: "".to_string(),
                 client_id: "".to_string(),
                 current_patch_number: None,
+                module_version: None,
             },
         );
         assert!(result.is_err());
