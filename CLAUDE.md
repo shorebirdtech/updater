@@ -1,16 +1,16 @@
 - Issues for this repo live in `shorebirdtech/shorebird`, labels `updater` and `package_code_push`. PRs come here.
 - Rust tests that call `shorebird_init` need `#[serial]`: the config is a global.
-- `include/*.h` come from `cbindgen` in `library/build.rs`; `updater_bindings.g.dart` comes from `ffigen`. Don't hand-edit either.
+- `library/include/*.h` come from `cbindgen` in `library/build.rs`; `updater_bindings.g.dart` comes from `ffigen`. Don't hand-edit either.
 - Fail open: any error leaves the app on its installed version.
 
 ## FFI compatibility
 
-The Dart package and the Rust library in the engine ship independently, in either skew, with no version negotiation. Every change to `library/src/c_api/dart.rs` states its fallback for both skews. `c_api/engine.rs` ships with the engine and is exempt.
+The Dart package and the Rust library in the engine ship independently, in either skew, with no version negotiation; the pubspec's Flutter SDK floor bounds only the oldest engine. Every change to `library/src/c_api/dart.rs` states its fallback for both skews. `c_api/engine.rs` ships with the engine and is exempt.
 
-- Dart probes a new C symbol with `DynamicLibrary.providesSymbol` before calling it and falls back when absent; ffigen bindings throw on a missing symbol.
+- Dart probes a new C symbol (`DynamicLibrary.providesSymbol` or a guarded lookup) before calling it and falls back when absent; ffigen bindings throw on a missing symbol.
 - Existing structs, `UpdateResult` included, have frozen layouts. New data goes in a new struct from a new symbol.
 - Existing symbols never change behavior.
-- Status codes are append-only. Add only error codes: old Dart treats any code outside its success allowlist as failure.
+- Status codes are append-only, never renumbered. Add only error codes: old Dart treats any code outside its success allowlist as failure. `SHOREBIRD_UPDATE_IN_PROGRESS` (4) is the one existing exception.
 - Failure categories stay internal until a structured-result symbol exposes them; see `FailureCategory` in `library/src/updater.rs` and `NetworkError` in `library/src/network.rs`.
 
 ## Landing a PR
