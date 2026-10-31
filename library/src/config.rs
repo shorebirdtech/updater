@@ -4,10 +4,11 @@ use crate::network::NetworkHooks;
 use crate::updater::AppConfig;
 use crate::yaml::{PatchVerificationMode, YamlConfig};
 use crate::{ExternalFileProvider, UpdateError};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // cbindgen looks for const, ignore these so it doesn't warn about them.
 
@@ -54,6 +55,80 @@ pub fn set_running_patch_number(patch_number: Option<usize>) {
         .expect("Failed to acquire running_patch lock.") = patch_number;
 }
 
+/// The patch this process has booted all the way to a reported success,
+/// if any. Session-scoped for the same reason `running_patch` is, and
+/// deliberately separate from the on-disk `last_booted_patch`: that one
+/// survives a reboot, so it cannot say whether the *live* process ever
+/// got the patch running. Telling a hot restart from a fresh cold boot
+/// needs exactly that distinction, and getting it wrong in the
+/// permissive direction disables crash recovery on a patch that is
+/// killing the app.
+///
+/// Unlike `running_patch`, a later launch failure does not clear this.
+/// A patch that booted does not stop having booted because a subsequent
+/// cycle failed, and the engine's recovery relaunch back onto it is a
+/// repeat cycle, not a first boot.
+fn global_successfully_booted_patch() -> &'static Mutex<Option<usize>> {
+    static INSTANCE: Mutex<Option<usize>> = Mutex::new(None);
+    &INSTANCE
+}
+
+pub fn successfully_booted_patch_number() -> Option<usize> {
+    *global_successfully_booted_patch()
+        .lock()
+        .expect("Failed to acquire successfully_booted_patch lock.")
+}
+
+pub fn set_successfully_booted_patch_number(patch_number: Option<usize>) {
+    *global_successfully_booted_patch()
+        .lock()
+        .expect("Failed to acquire successfully_booted_patch lock.") = patch_number;
+}
+
+/// Every patch this process tried and failed to hot restart into.
+///
+/// Session-scoped, and deliberately never written to disk. The evidence
+/// only says the live process could not bring a second isolate up on the
+/// patch, which the engine can fail at for reasons the patch has no part
+/// in. A cold boot onto the same patch may well work, so the patch stays
+/// `Installed` and keeps its artifacts; the ordinary first-cycle
+/// breadcrumb condemns it on that boot if it really is broken.
+///
+/// Excluding it for the rest of this process is what keeps the engine's
+/// recovery relaunch from failing the same way again. A set rather than
+/// one slot because the relaunch can fail too: recording the fallback's
+/// failure must not readmit the patch whose failure caused the fallback,
+/// or the two flip forever and each cycle hands the engine a patch that
+/// already failed.
+fn global_restart_failed_patches() -> &'static Mutex<HashSet<usize>> {
+    // OnceLock rather than a const-initialized Mutex, because HashSet::new
+    // is not a const fn.
+    static INSTANCE: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    INSTANCE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub fn restart_failed_patch(patch_number: usize) -> bool {
+    global_restart_failed_patches()
+        .lock()
+        .expect("Failed to acquire restart_failed_patches lock.")
+        .contains(&patch_number)
+}
+
+pub fn add_restart_failed_patch(patch_number: usize) {
+    global_restart_failed_patches()
+        .lock()
+        .expect("Failed to acquire restart_failed_patches lock.")
+        .insert(patch_number);
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn clear_restart_failed_patches() {
+    global_restart_failed_patches()
+        .lock()
+        .expect("Failed to acquire restart_failed_patches lock.")
+        .clear();
+}
+
 /// Unit tests should call this to reset the config between tests.
 /// Also exposed (via the `test-hooks` Cargo feature) to the
 /// `library_test_hooks` cdylib so Dart-side integration tests can reset
@@ -67,6 +142,9 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
+    set_successfully_booted_patch_number(None);
+    clear_restart_failed_patches();
+    crate::restart::set_restart_handler(None);
 }
 
 pub fn check_initialized_and_call<F, R>(

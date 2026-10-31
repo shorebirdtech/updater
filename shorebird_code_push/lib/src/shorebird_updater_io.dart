@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/generated/updater_bindings.g.dart';
+import 'package:shorebird_code_push/src/patch_transitions.dart';
 import 'package:shorebird_code_push/src/shorebird_updater.dart';
 import 'package:shorebird_code_push/src/updater.dart';
 
@@ -79,22 +80,40 @@ class ShorebirdUpdaterImpl implements ShorebirdUpdater {
     if (isUpdateAvailable) return UpdateStatus.outdated;
 
     // If no new update is available for download, see if a new patch exists
-    // on disk that requires a restart.
+    // on disk that requires a restart. A restart is required when the current
+    // and next patches differ, which covers both the "new patch downloaded"
+    // case and the "current patch was rolled back" case, where next is null
+    // and the app has to restart to revert to the base release.
+    final transition = await _readTransition();
+    if (!transition.isPending) return UpdateStatus.upToDate;
+    patchTransitionPublisher.add(transition);
+    return UpdateStatus.restartRequired;
+  }
+
+  Future<PatchTransition> _readTransition() async {
     final (current, next) = await (readCurrentPatch(), readNextPatch()).wait;
-    // A restart is required when the current and next patches differ. This
-    // covers both the "new patch downloaded" case (next differs from current)
-    // and the "current patch was rolled back" case (current is non-null but
-    // next is null, meaning the app needs to restart to revert to the base
-    // release).
-    return current?.number != next?.number
-        ? UpdateStatus.restartRequired
-        : UpdateStatus.upToDate;
+    return PatchTransition(current: current, next: next);
   }
 
   @override
   Future<void> update({UpdateTrack? track}) async {
     if (!_isAvailable) return;
 
+    await _install(track: track);
+
+    // Best-effort: the install already succeeded, and a patch that cannot be
+    // read is not a reason to report that it failed.
+    try {
+      final transition = await _readTransition();
+      if (transition.isPending) patchTransitionPublisher.add(transition);
+      // A ReadPatchException is the expected failure, but the read crosses an
+      // isolate boundary, so catch everything rather than let an unforeseen
+      // error reach a caller whose install worked.
+      // ignore: avoid_catches_without_on_clauses
+    } catch (_) {}
+  }
+
+  Future<void> _install({UpdateTrack? track}) async {
     final result = await _run(() => _updater.update(track: track));
 
     const unknownErrorMessage = 'An unknown error occurred.';

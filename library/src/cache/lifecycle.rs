@@ -146,6 +146,16 @@ pub struct ReleasePointers {
 
     /// Unix timestamp (seconds) when `currently_booting_patch` was set.
     pub boot_started_at: Option<u64>,
+
+    /// Whether `currently_booting_patch` was armed by a repeat launch
+    /// cycle, meaning the live process had already booted that same patch
+    /// to a success before asking for another cycle. Crash recovery needs
+    /// this on disk because it runs in a *later* process, where the
+    /// in-memory evidence that the patch once ran is gone. The two patch
+    /// pointers cannot carry it: after a first success, every ordinary
+    /// cold boot also has `currently_booting_patch == last_booted_patch`.
+    #[serde(default)]
+    pub boot_is_repeat_cycle: bool,
 }
 
 /// Per-release patch lifecycle and storage. Owns
@@ -196,6 +206,26 @@ impl PatchLifecycle {
 
     pub fn pointers(&self) -> &ReleasePointers {
         &self.pointers
+    }
+
+    /// The patch this process should actually boot: `next_boot_patch`,
+    /// minus a patch a hot restart in this process already failed to
+    /// bring up. The exclusion lives in a session-scoped global rather
+    /// than on disk, so the patch is retried on the next cold boot.
+    ///
+    /// Every reader of the boot target goes through here, including
+    /// [`arm_boot_breadcrumb`]'s check that the engine is booting the
+    /// patch we named — after a failed restart, the patch we named is
+    /// the fallback, not the one in `pointers`.
+    pub fn effective_next_boot_patch(&self) -> Option<usize> {
+        let is_excluded = crate::config::restart_failed_patch;
+        match self.pointers.next_boot_patch {
+            Some(n) if is_excluded(n) => self.pointers.last_booted_patch.filter(|&lb| {
+                !is_excluded(lb)
+                    && matches!(self.read_state(lb), Some(PatchState::Installed { .. }))
+            }),
+            other => other,
+        }
     }
 
     /// Returns the on-disk state for patch `n`, or `None` if the patch has
@@ -569,27 +599,73 @@ impl PatchLifecycle {
     /// Records that this process is starting to boot patch `n`. The
     /// breadcrumb in `pointers.currently_booting_patch` survives a process
     /// crash, which is how we detect boot-time crashes on the next init
-    /// (see [`detect_boot_crash_on_init`]).
+    /// (see `handle_prior_boot_failure_if_necessary` in `updater.rs`).
     ///
     /// Sanity-checks that `n` matches `next_boot_patch` — guards against
     /// the engine reporting that it's booting some patch other than the
     /// one we said to boot. Carries forward the same defensive check the
     /// prior `PatchManager::record_boot_start_for_patch` had.
     pub fn record_boot_start(&mut self, n: usize) -> Result<()> {
+        self.arm_boot_breadcrumb(n, false)
+    }
+
+    /// Validates `n` and arms the breadcrumb in one write. Two writes
+    /// would leave a kill between them holding a breadcrumb with the
+    /// wrong repeat flag, which is the exact state this mechanism
+    /// exists to avoid.
+    fn arm_boot_breadcrumb(&mut self, n: usize, is_repeat: bool) -> Result<()> {
         match self.read_state(n) {
             Some(PatchState::Installed { .. }) => {}
             other => {
                 bail!("record_boot_start({n}) expected Installed, got {other:?}");
             }
         }
-        match self.pointers.next_boot_patch {
+        match self.effective_next_boot_patch() {
             Some(next) if next == n => {}
             Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
             None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
         }
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
+        self.pointers.boot_is_repeat_cycle = is_repeat;
         self.save_pointers()
+    }
+
+    /// Records the start of a *repeat* launch cycle for patch `n`, the
+    /// shape a hot restart takes: this process already booted `n` to a
+    /// success and is bringing up a fresh isolate on it.
+    ///
+    /// Same breadcrumb as [`record_boot_start`], flagged so that a later
+    /// process's crash recovery spares the patch instead of marking it
+    /// bad. A patch that has run is not condemned by a death we cannot
+    /// attribute to it, and a restart that fails for the patch's own sake
+    /// still reaches `record_boot_failure` through `report_launch_failure`.
+    pub fn record_repeat_boot_start(&mut self, n: usize) -> Result<()> {
+        self.arm_boot_breadcrumb(n, true)
+    }
+
+    /// Drops the boot-in-progress breadcrumb without judging the patch.
+    /// Crash recovery uses this on the repeat-cycle path.
+    pub fn clear_boot_breadcrumb(&mut self) -> Result<()> {
+        self.pointers.currently_booting_patch = None;
+        self.pointers.boot_started_at = None;
+        self.pointers.boot_is_repeat_cycle = false;
+        self.save_pointers()
+    }
+
+    /// Records that a hot restart could not bring up patch `n`, without
+    /// judging the patch.
+    ///
+    /// Drops the breadcrumb and excludes `n` from the boot target for
+    /// the rest of this process, so the engine's recovery relaunch lands
+    /// on the last patch that booted (or the base release). The patch
+    /// keeps its `Installed` state and its artifacts: a restart can fail
+    /// for reasons that are the engine's, and a cold boot onto the same
+    /// patch is how we find out. Condemning it here would delete the
+    /// bytes and make that retry impossible.
+    pub fn record_restart_failure(&mut self, n: usize) -> Result<()> {
+        crate::config::add_restart_failed_patch(n);
+        self.clear_boot_breadcrumb()
     }
 
     /// Records a successful boot. Promotes `currently_booting_patch` to
@@ -603,6 +679,7 @@ impl PatchLifecycle {
         self.pointers.last_booted_patch = Some(n);
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
+        self.pointers.boot_is_repeat_cycle = false;
         self.save_pointers()?;
         self.cleanup_older_than(n);
         Ok(())
@@ -620,7 +697,8 @@ impl PatchLifecycle {
     /// `mark_bad` runs *before* clearing the breadcrumb so a crash
     /// between the two leaves a still-set `currently_booting_patch`
     /// pointing at an already-Bad patch. Next init's
-    /// `detect_boot_crash_on_init` re-runs this path; `mark_bad` is
+    /// `handle_prior_boot_failure_if_necessary` re-runs this path;
+    /// `mark_bad` is
     /// idempotent on Bad → Bad. Reverse the order and a crash strands
     /// an `Installed` patch with no breadcrumb — the next boot retries
     /// it silently.
@@ -628,21 +706,9 @@ impl PatchLifecycle {
         self.mark_bad(n, BadReason::BootCrash)?;
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
+        self.pointers.boot_is_repeat_cycle = false;
         self.save_pointers()?;
         self.recompute_next_boot()
-    }
-
-    /// Called at init. If `currently_booting_patch` is still set from a
-    /// prior process, that boot crashed without recording success or
-    /// failure — transition the patch to `Bad{BootCrash}` and recompute
-    /// `next_boot_patch`. Returns the patch number that was recovered,
-    /// if any.
-    pub fn detect_boot_crash_on_init(&mut self) -> Result<Option<usize>> {
-        let Some(n) = self.pointers.currently_booting_patch else {
-            return Ok(None);
-        };
-        self.record_boot_failure(n)?;
-        Ok(Some(n))
     }
 
     /// Validates that `next_boot_patch` is bootable (its on-disk size
@@ -654,7 +720,11 @@ impl PatchLifecycle {
         public_key: Option<&str>,
         mode: PatchVerificationMode,
     ) -> Result<()> {
-        let Some(n) = self.pointers.next_boot_patch else {
+        // The effective target, not `pointers`: after a failed restart the
+        // patch the engine is about to load is the fallback, and validating
+        // the excluded patch instead would both skip the check on the patch
+        // that boots and blame it for the other one's failure.
+        let Some(n) = self.effective_next_boot_patch() else {
             return Ok(());
         };
         if let Err(e) = self.validate_installed_patch(n, public_key, mode) {
@@ -1180,6 +1250,7 @@ mod tests {
                 last_booted_patch: Some(2),
                 currently_booting_patch: None,
                 boot_started_at: None,
+                boot_is_repeat_cycle: false,
             };
             lifecycle.save_pointers().unwrap();
         }
@@ -1875,36 +1946,6 @@ mod tests {
 
         assert_eq!(lifecycle.pointers().last_booted_patch, Some(3));
         assert_eq!(lifecycle.pointers().next_boot_patch, None);
-    }
-
-    #[test]
-    fn detect_boot_crash_on_init_recovers_when_breadcrumb_set() {
-        let tmp = TempDir::new().unwrap();
-        // First "process": records boot start, then "crashes" without
-        // recording success or failure.
-        {
-            let mut lifecycle = reload_at(tmp.path());
-            install_state(&lifecycle, 1, 100);
-            lifecycle.pointers.next_boot_patch = Some(1);
-            lifecycle.save_pointers().unwrap();
-            lifecycle.record_boot_start(1).unwrap();
-            // Drop without record_boot_success/failure.
-        }
-        // Second "process": init detects the breadcrumb and marks Bad.
-        let mut lifecycle = reload_at(tmp.path());
-        let recovered = lifecycle.detect_boot_crash_on_init().unwrap();
-        assert_eq!(recovered, Some(1));
-        assert!(matches!(
-            lifecycle.read_state(1),
-            Some(PatchState::Bad { .. })
-        ));
-        assert!(lifecycle.pointers().currently_booting_patch.is_none());
-    }
-
-    #[test]
-    fn detect_boot_crash_on_init_is_noop_when_no_breadcrumb() {
-        let (_tmp, mut lifecycle) = fixture();
-        assert_eq!(lifecycle.detect_boot_crash_on_init().unwrap(), None);
     }
 
     #[test]

@@ -284,11 +284,36 @@ impl UpdaterState {
         self.lifecycle.record_boot_start(patch_number)
     }
 
+    /// Records the start of a repeat launch cycle for `patch_number`,
+    /// the shape a hot restart takes. See
+    /// [`PatchLifecycle::record_repeat_boot_start`].
+    pub fn record_repeat_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.lifecycle.record_repeat_boot_start(patch_number)
+    }
+
+    /// Whether the in-flight boot is a repeat launch cycle rather than a
+    /// first boot of the patch.
+    pub fn boot_is_repeat_cycle(&self) -> bool {
+        self.lifecycle.pointers().boot_is_repeat_cycle
+    }
+
+    /// Drops the boot-in-progress breadcrumb without judging the patch.
+    pub fn clear_boot_breadcrumb(&mut self) -> Result<()> {
+        self.lifecycle.clear_boot_breadcrumb()
+    }
+
     /// Records that patch `patch_number` failed to boot. Marks it
     /// `Bad{BootCrash}` and recomputes `next_boot_patch`. Clears the
     /// boot breadcrumb regardless of whether it matched.
     pub fn record_boot_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
         self.lifecycle.record_boot_failure(patch_number)
+    }
+
+    /// Records that a hot restart could not bring up `patch_number`,
+    /// without condemning it. See
+    /// [`PatchLifecycle::record_restart_failure`].
+    pub fn record_restart_failure_for_patch(&mut self, patch_number: usize) -> Result<()> {
+        self.lifecycle.record_restart_failure(patch_number)
     }
 
     /// Records that the in-flight boot succeeded.
@@ -328,8 +353,7 @@ impl UpdaterState {
 
     pub fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         self.lifecycle
-            .pointers()
-            .next_boot_patch
+            .effective_next_boot_patch()
             .map(|n| self.patch_info(n))
     }
 

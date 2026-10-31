@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
@@ -28,10 +30,15 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final _updater = ShorebirdUpdater();
+  // Experimental on purpose: the surface may move onto the updater itself
+  // when the next major version of the package settles.
+  // ignore: experimental_member_use
+  late final _hotRestart = ShorebirdHotRestart(updater: _updater);
   late final bool _isUpdaterAvailable;
   var _currentTrack = UpdateTrack.stable;
   var _isCheckingForUpdates = false;
   Patch? _currentPatch;
+  StreamSubscription<PatchTransition>? _transitions;
 
   @override
   void initState() {
@@ -47,6 +54,20 @@ class _MyHomePageState extends State<MyHomePage> {
       // If an error occurs, we log it for now.
       debugPrint('Error reading current patch: $error');
     });
+
+    // Ask to be told when a patch is waiting on a restart, from this check or
+    // any other. The app decides what to do about it: here, offer the user the
+    // choice rather than take their screen away from them.
+    _transitions = _hotRestart.patchTransitions.listen((_) {
+      if (!mounted) return;
+      _showRestartBanner();
+    });
+  }
+
+  @override
+  void dispose() {
+    _transitions?.cancel();
+    super.dispose();
   }
 
   Future<void> _checkForUpdate() async {
@@ -142,7 +163,40 @@ class _MyHomePageState extends State<MyHomePage> {
       ..hideCurrentMaterialBanner()
       ..showMaterialBanner(
         MaterialBanner(
-          content: const Text('A new patch is ready! Please restart your app.'),
+          content: const Text('A new patch is ready!'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                // Restart the app's Dart code so the patch takes effect
+                // immediately. Returns false if hot restart isn't supported
+                // in this environment (e.g. an older engine), in which case
+                // the patch takes effect on the next app launch instead.
+                final restarting = await _hotRestart.dangerouslyHotRestart();
+                if (!mounted || restarting) return;
+                _showRestartFailedBanner();
+              },
+              child: const Text('Restart now'),
+            ),
+            TextButton(
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              },
+              child: const Text('Later'),
+            ),
+          ],
+        ),
+      );
+  }
+
+  void _showRestartFailedBanner() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentMaterialBanner()
+      ..showMaterialBanner(
+        MaterialBanner(
+          content: const Text(
+            'Restarting is not supported here. '
+            'The patch will take effect the next time the app is launched.',
+          ),
           actions: [
             TextButton(
               onPressed: () {

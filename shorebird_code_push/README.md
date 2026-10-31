@@ -79,6 +79,73 @@ class _MyHomePageState extends State<MyHomePage> {
 
 See the example for a complete working app.
 
+### Applying a patch without relaunching the app
+
+By default, a downloaded patch takes effect the next time the app launches.
+`ShorebirdHotRestart` applies it immediately instead by restarting the app's
+Dart code in place (like a development hot restart: all in-memory state is
+lost and `main()` runs again, but the app itself stays open).
+
+The call is named `dangerously` because the user pays for it: whatever they
+were doing is gone, with no prompt and no undo. Nothing in Shorebird calls it
+for you, so pick the moment yourself:
+
+```dart
+final hotRestart = ShorebirdHotRestart(updater: updater);
+
+final status = await updater.checkForUpdate();
+if (status == UpdateStatus.restartRequired) {
+  // Consider prompting the user first: the app's state resets.
+  final restarting = await hotRestart.dangerouslyHotRestart();
+  if (!restarting) {
+    // Hot restart isn't supported here (e.g. an engine that predates it or
+    // an app running multiple Flutter engines). The patch will take effect
+    // on the next app launch instead.
+  }
+}
+```
+
+Requires a Shorebird Flutter version with hot restart support on Android or
+iOS. On anything older `dangerouslyHotRestart()` safely returns `false`.
+
+`ShorebirdHotRestart` is marked experimental. It lives on its own class rather
+than on `ShorebirdUpdater` so that adding it breaks nobody, and it may move
+onto the updater itself in the next major version.
+
+Plugins keep their native state across the restart while their Dart state is
+discarded, so `main()` runs again against native objects that believe they
+are still in use. A plugin written only for a cold start can double-register
+listeners or serve the new isolate state belonging to the old one. Exercise a
+restart against the plugins your app uses before putting it behind a button a
+user can press.
+
+### Hearing about a patch from anywhere in the app
+
+`ShorebirdHotRestart.patchTransitions` reports every patch waiting on a
+restart, whether
+it arrived from your own `update()` call or turned up on a `checkForUpdate()`
+somewhere else. Subscribe once, near where you know what the user is doing:
+
+```dart
+_subscription = hotRestart.patchTransitions.listen((transition) {
+  // transition.next is the patch a restart would boot.
+  if (transition.next == null) {
+    // A withdrawal: the patch the app is running has been pulled, and a
+    // restart drops back to the base release.
+  }
+  // Your call, not Shorebird's. Prompt, wait for an idle screen, or ignore
+  // it and let the next launch pick the patch up.
+  showRestartPrompt();
+});
+```
+
+A listener that subscribes after a patch has already landed still hears about
+it, including one the updater's own background thread installed before you
+subscribed. Nothing
+polls: past that read on subscribe, events follow your own `update()` and
+`checkForUpdate()` calls. Nothing restarts the app unless you call
+`dangerouslyHotRestart()`.
+
 ### Tracks
 
 Shorebird supports publishing patches to different tracks, which can be

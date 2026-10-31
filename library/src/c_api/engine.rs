@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use super::{allocate_c_string, free_c_string, log_on_error, to_rust};
 use crate::c_api::c_file::CFileProvider;
+use crate::restart;
 use crate::updater;
 
 /// Struct containing configuration parameters for the updater.
@@ -340,6 +341,25 @@ pub extern "C" fn shorebird_report_launch_failure() {
     );
 }
 
+/// Report that a hot restart could not bring up the patch it was
+/// relaunching into: the isolate snapshot would not resolve, the patch
+/// would not load, or the relaunch itself failed.
+///
+/// Use this rather than `shorebird_report_launch_failure` for a failure
+/// of the restart mechanism. It rolls the boot target back so the
+/// recovery relaunch lands on the last patch that booted, but leaves the
+/// patch installed and un-tombstoned, because a restart can fail for
+/// reasons the patch has no part in and a cold boot onto it is how we
+/// find out. The exclusion lasts for this process only.
+#[no_mangle]
+pub extern "C" fn shorebird_report_restart_failure() {
+    log_on_error(
+        updater::report_restart_failure,
+        "reporting restart failure",
+        (),
+    );
+}
+
 /// Report that the app launched successfully. The Shell constructor calls
 /// this once per process when the VM has finished booting; it pairs with
 /// `shorebird_report_launch_start` to mark a patch as having booted cleanly.
@@ -350,4 +370,15 @@ pub extern "C" fn shorebird_report_launch_success() {
         "reporting launch success",
         (),
     );
+}
+
+/// Registers the engine's restart handler, used to service
+/// `shorebird_restart_app` requests from `package:shorebird_code_push`.
+/// The handler must tear down and relaunch the app's Dart isolate, loading
+/// the current next-boot patch, and return true if the restart was
+/// scheduled. Pass null to unregister (e.g. if the last engine capable of
+/// restarting is destroyed).
+#[no_mangle]
+pub extern "C" fn shorebird_set_restart_handler(handler: Option<extern "C" fn() -> bool>) {
+    restart::set_restart_handler(handler);
 }
