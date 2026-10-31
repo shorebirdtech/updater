@@ -282,7 +282,7 @@ where
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
         f(&state)
     })
 }
@@ -298,7 +298,7 @@ where
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
         f(&mut state)
     })
 }
@@ -361,7 +361,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
         if let Some(patch) = state.currently_booting_patch() {
             let boot_time_info = state
                 .boot_started_at()
@@ -1356,7 +1356,7 @@ pub fn validate_next_boot_patch() -> anyhow::Result<()> {
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
         let Some(patch_number) = state.next_boot_patch().map(|p| p.number) else {
             return Ok(());
         };
@@ -1424,7 +1424,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
             UpdateError::InvalidState("currently_booting_patch is None".to_string()),
@@ -1465,7 +1465,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
 
         // None means we didn't boot from a patch, so there's nothing to record.
         if let Some(booting_patch) = state.currently_booting_patch() {
@@ -1677,7 +1677,7 @@ mod tests {
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
             assert_eq!(state.next_boot_patch().unwrap().number, 1);
             Ok(())
         })?;
@@ -2006,7 +2006,7 @@ patch_verification: bogus_mode
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
             assert_eq!(
                 state.last_successfully_booted_patch().unwrap().number,
                 patch_number
@@ -2038,7 +2038,7 @@ patch_verification: bogus_mode
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
             // And no longer what this process is running.
@@ -2274,7 +2274,7 @@ patch_verification: bogus_mode
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
 
             state.record_boot_failure_for_patch(1)?;
 

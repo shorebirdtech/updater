@@ -90,13 +90,21 @@ fn generate_client_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn is_file_not_found(error: &anyhow::Error) -> bool {
-    for cause in error.chain() {
+/// True if `error` is a failure to read the file rather than to parse what
+/// was read: a permission error, an I/O error, anything but not-found. iOS
+/// refuses reads of protected files while a device that hasn't been unlocked
+/// since boot launches the app in the background. The file is fine and will
+/// read again later, so it must not be treated as corrupt.
+fn is_read_failure(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
         if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
-            return io_error.kind() == std::io::ErrorKind::NotFound;
+            return io_error.kind() != std::io::ErrorKind::NotFound;
         }
-    }
-    false
+        if let Some(json_error) = cause.downcast_ref::<serde_json::Error>() {
+            return json_error.classify() == serde_json::error::Category::Io;
+        }
+        false
+    })
 }
 
 impl UpdaterState {
@@ -207,13 +215,20 @@ impl UpdaterState {
         state
     }
 
+    /// Loads the state in `cache_dir`, or starts a new one (wiping any
+    /// per-release files) when the release version changed, there is no
+    /// state file, or it doesn't parse.
+    ///
+    /// Returns an error, touching nothing on disk, when the state file is
+    /// there but can't be read (see [`is_read_failure`]). Starting over then
+    /// would delete installed patches that are only unreadable for now.
     pub fn load_or_new_on_error(
         cache_dir: &Path,
         download_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
-    ) -> Self {
+    ) -> Result<Self> {
         match Self::load(cache_dir, download_dir, patch_public_key, verification_mode) {
             Ok(loaded) => {
                 if loaded.serialized_state.release_version != release_version {
@@ -222,7 +237,7 @@ impl UpdaterState {
                         loaded.serialized_state.release_version,
                         release_version
                     );
-                    return Self::create_new_and_save(
+                    return Ok(Self::create_new_and_save(
                         cache_dir,
                         download_dir,
                         release_version,
@@ -230,15 +245,20 @@ impl UpdaterState {
                         verification_mode,
                         loaded.client_id(),
                         loaded.serialized_state.queued_events,
-                    );
+                    ));
                 }
-                loaded
+                Ok(loaded)
+            }
+            Err(e) if is_read_failure(&e) => {
+                shorebird_error!(
+                    "Can't read state file, leaving installed patches in place: {:#}",
+                    e
+                );
+                Err(e)
             }
             Err(e) => {
-                if !is_file_not_found(&e) {
-                    shorebird_info!("No existing state file found: {:#}, creating new state.", e);
-                }
-                Self::create_new_and_save(
+                shorebird_info!("No usable state file ({:#}), creating new state.", e);
+                Ok(Self::create_new_and_save(
                     cache_dir,
                     download_dir,
                     release_version,
@@ -246,7 +266,7 @@ impl UpdaterState {
                     verification_mode,
                     generate_client_id(),
                     Vec::new(),
-                )
+                ))
             }
         }
     }
@@ -422,6 +442,7 @@ mod tests {
             None,
             PatchVerificationMode::default(),
         )
+        .unwrap()
     }
 
     #[test]
@@ -554,6 +575,56 @@ mod tests {
 
         let mut reloaded = load(&tmp, "1.0.0+2");
         assert!(reloaded.next_boot_patch().is_none());
+    }
+
+    #[test]
+    fn unreadable_state_file_keeps_installed_patches() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load(&tmp, "1.0.0+1");
+        install_fake_patch_into(&mut state, 1).unwrap();
+        state.save().unwrap();
+        let artifact = state.lifecycle.installed_artifact_path(1);
+
+        // A directory where the file should be: it exists but every read of
+        // it fails, as a protected file does before first unlock.
+        let state_path = tmp.path().join(STATE_FILE_NAME);
+        let saved = std::fs::read(&state_path).unwrap();
+        std::fs::remove_file(&state_path).unwrap();
+        std::fs::create_dir(&state_path).unwrap();
+
+        let result = UpdaterState::load_or_new_on_error(
+            tmp.path(),
+            &tmp.path().join("downloads"),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
+        assert!(result.is_err());
+        assert!(artifact.exists(), "installed patch should survive");
+
+        // Once the file reads again, the patch is still the one to boot.
+        std::fs::remove_dir(&state_path).unwrap();
+        std::fs::write(&state_path, saved).unwrap();
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert_eq!(reloaded.client_id(), state.client_id());
+        assert_eq!(reloaded.next_boot_patch().map(|p| p.number), Some(1));
+    }
+
+    #[test]
+    fn read_failure_is_not_a_missing_or_corrupt_file() {
+        use crate::file_errors::{FileOperation, IoResultExt};
+        use std::io::{Error, ErrorKind};
+        let path = Path::new("state.json");
+        let denied: std::io::Result<()> = Err(Error::new(ErrorKind::PermissionDenied, "denied"));
+        let denied = denied.with_file_context(FileOperation::ReadFile, path);
+        assert!(is_read_failure(&denied.unwrap_err()));
+
+        let missing: std::io::Result<()> = Err(Error::new(ErrorKind::NotFound, "missing"));
+        let missing = missing.with_file_context(FileOperation::ReadFile, path);
+        assert!(!is_read_failure(&missing.unwrap_err()));
+
+        let corrupt = serde_json::from_str::<SerializedState>("garbage").unwrap_err();
+        assert!(!is_read_failure(&anyhow::Error::new(corrupt)));
     }
 
     #[test]
