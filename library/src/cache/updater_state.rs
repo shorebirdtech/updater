@@ -90,6 +90,41 @@ fn generate_client_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+fn is_uuid(s: &str) -> bool {
+    uuid::Uuid::try_parse(s).is_ok()
+}
+
+impl SerializedState {
+    /// Replaces a `client_id` that isn't a UUID and drops queued events
+    /// whose `client_id` or `event_id` isn't one. A state file that once
+    /// saved an id zeroed in memory (36 NULs, still valid JSON) would
+    /// otherwise send it on every launch, and `client_id` lives for the
+    /// whole install. `app_id` is left alone: it comes from shorebird.yaml,
+    /// read again each launch, so a zeroed one can't stick. Returns whether
+    /// anything changed.
+    fn discard_invalid_ids(&mut self) -> bool {
+        let mut changed = false;
+        if !is_uuid(&self.client_id) {
+            shorebird_warn!("client_id in state file is not a UUID, generating a new one.");
+            self.client_id = generate_client_id();
+            changed = true;
+        }
+        let queued = self.queued_events.len();
+        self.queued_events.retain(|event| {
+            is_uuid(&event.client_id) && event.event_id.as_deref().is_none_or(is_uuid)
+        });
+        let dropped = queued - self.queued_events.len();
+        if dropped > 0 {
+            shorebird_warn!(
+                "Dropped {} queued events with ids that are not UUIDs.",
+                dropped
+            );
+            changed = true;
+        }
+        changed
+    }
+}
+
 fn is_file_not_found(error: &anyhow::Error) -> bool {
     for cause in error.chain() {
         if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
@@ -135,8 +170,9 @@ impl UpdaterState {
         verification_mode: PatchVerificationMode,
     ) -> Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
-        let serialized_state = disk_io::read(&path)?;
-        Ok(Self {
+        let mut serialized_state: SerializedState = disk_io::read(&path)?;
+        let repaired = serialized_state.discard_invalid_ids();
+        let state = Self {
             cache_dir: cache_dir.to_path_buf(),
             lifecycle: PatchLifecycle::load_or_default(
                 cache_dir.to_path_buf(),
@@ -145,7 +181,13 @@ impl UpdaterState {
             patch_public_key: patch_public_key.map(|s| s.to_owned()),
             verification_mode,
             serialized_state,
-        })
+        };
+        if repaired {
+            if let Err(e) = state.save() {
+                shorebird_warn!("Error saving repaired state {:?}, ignoring.", e);
+            }
+        }
+        Ok(state)
     }
 
     /// Initializes a new UpdaterState and saves it to disk. Wipes the
@@ -493,11 +535,24 @@ mod tests {
         assert_eq!(next.client_id(), original_client_id);
     }
 
+    const CLIENT_ID: &str = "11111111-2222-4333-8444-555555555555";
+    const ZEROED_UUID: &str =
+        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+    fn write_state(tmp: &TempDir, client_id: &str, queued_events: Vec<PatchEvent>) {
+        let state = SerializedState {
+            client_id: client_id.to_string(),
+            release_version: "1.0.0+1".to_string(),
+            queued_events,
+        };
+        disk_io::write(&state, &tmp.path().join(STATE_FILE_NAME)).unwrap();
+    }
+
     fn event(patch_number: usize) -> PatchEvent {
         PatchEvent {
             app_id: "app_id".to_string(),
             arch: "aarch64".to_string(),
-            client_id: "client_id".to_string(),
+            client_id: CLIENT_ID.to_string(),
             identifier: crate::events::EventType::PatchInstallSuccess,
             patch_number,
             platform: "android".to_string(),
@@ -505,7 +560,7 @@ mod tests {
             timestamp: 1,
             message: None,
             failure_category: None,
-            event_id: Some(format!("id-{patch_number}")),
+            event_id: Some(format!("00000000-0000-4000-8000-{patch_number:012}")),
         }
     }
 
@@ -541,6 +596,56 @@ mod tests {
         // Removing an event that's gone already is a no-op.
         state.remove_event(&event(1)).unwrap();
         assert_eq!(load(&tmp, "1.0.0+1").copy_events(10), vec![event(2)]);
+    }
+
+    #[test]
+    fn zeroed_client_id_is_replaced_on_load() {
+        let tmp = TempDir::new().unwrap();
+        write_state(&tmp, ZEROED_UUID, vec![]);
+        let state = load(&tmp, "1.0.0+1");
+        let client_id = state.client_id();
+        assert!(is_uuid(&client_id));
+        // The replacement was saved, so the next launch keeps it.
+        assert_eq!(load(&tmp, "1.0.0+1").client_id(), client_id);
+    }
+
+    #[test]
+    fn valid_client_id_is_kept_on_load() {
+        let tmp = TempDir::new().unwrap();
+        write_state(&tmp, CLIENT_ID, vec![]);
+        assert_eq!(load(&tmp, "1.0.0+1").client_id(), CLIENT_ID);
+    }
+
+    #[test]
+    fn queued_events_with_invalid_ids_are_dropped_on_load() {
+        let tmp = TempDir::new().unwrap();
+        let zeroed_client_id = PatchEvent {
+            client_id: ZEROED_UUID.to_string(),
+            ..event(3)
+        };
+        let zeroed_event_id = PatchEvent {
+            event_id: Some(ZEROED_UUID.to_string()),
+            ..event(4)
+        };
+        // Queued by an updater that predates `event_id`.
+        let no_event_id = PatchEvent {
+            event_id: None,
+            ..event(5)
+        };
+        write_state(
+            &tmp,
+            CLIENT_ID,
+            vec![
+                event(1),
+                zeroed_client_id,
+                zeroed_event_id,
+                no_event_id.clone(),
+            ],
+        );
+        assert_eq!(
+            load(&tmp, "1.0.0+1").copy_events(10),
+            vec![event(1), no_event_id]
+        );
     }
 
     #[test]
