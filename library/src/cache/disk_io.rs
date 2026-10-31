@@ -82,7 +82,11 @@ where
     shorebird_debug!("Reading from {:?}", path.as_ref());
 
     let path_as_ref = path.as_ref();
-    if !path_as_ref.exists() {
+    // `exists()` is false on any stat error; only not-found means missing.
+    if !path_as_ref
+        .try_exists()
+        .with_file_context(FileOperation::ReadFile, path_as_ref)?
+    {
         bail!("File {} does not exist", path_as_ref.display());
     }
 
