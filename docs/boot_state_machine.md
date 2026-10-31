@@ -63,6 +63,18 @@ release.
        ▼
     Shell::Shell() constructor, Dart VM created
        │
+       └─► report_launch_paused()  [once per process]
+       │   └─► currently_booting_patch = None (running_patch unchanged)
+       │
+       ▼
+    Engine::Run(), first engine to launch its root isolate
+       │
+       └─► report_launch_resumed()  [once per process]
+       │   └─► currently_booting_patch = running_patch
+       │
+       ▼
+    Launch window closes (5 s, or the app leaves the foreground)
+       │
        └─► report_launch_success()  [once per process, guarded in the engine]
        │   ├─► last_booted_patch = currently_booting_patch
        │   ├─► currently_booting_patch = None
@@ -87,6 +99,27 @@ If the app crashes between `report_launch_start()` and
 4. Marks that patch `Bad { BootCrash }` and clears the breadcrumb
 5. Recomputes `next_boot_patch`: `last_booted_patch` if it is still
    `Installed`, otherwise the base release
+
+### Paused and Resumed
+
+The engine reports a launch in two phases, so that an engine that is built
+and never run doesn't leave the patch armed, while a crash building the root
+isolate or in the first seconds of Dart is still caught:
+
+1. `report_launch_start()` where the patch's snapshot is first resolved arms
+   the breadcrumb, as above.
+2. `report_launch_paused()` when the Shell is built clears the breadcrumb
+   without promoting the patch. `running_patch` is unchanged.
+3. `report_launch_resumed()` when the first engine launches its root isolate
+   arms the breadcrumb again for `running_patch`, whatever `next_boot_patch`
+   says by then.
+4. `report_launch_success()` when the engine's launch window closes (a few
+   seconds after the root isolate launches, or earlier if the app leaves the
+   foreground).
+
+While the breadcrumb is armed, `promote_to_next_boot` doesn't retire the
+booting patch, because the app's own Dart code can install a newer patch
+during the window.
 
 ### Patch Load Failure
 
@@ -124,18 +157,20 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
    Shell never resolves a snapshot, so it does not record a boot that never
    happened and cannot trigger false crash detection.
 
-2. **`report_launch_success()` in the Shell constructor**: Called after the
-   Dart VM is created, indicating the patch loaded successfully.
+2. **`report_launch_success()` when the launch window closes**: After the
+   root isolate was built from the patch, main ran, and the app stayed up in
+   the foreground for the window. Paused at the Shell and resumed at the root
+   isolate launch keep a never-run engine from leaving the patch armed.
 
 3. **The update thread after `report_launch_success()`**: The thread must not
    run while a boot is in progress. Its patch check reports `running_patch`,
    which is only set at `report_launch_start()`; a check sent earlier omits
-   `current_patch_number`. And an install that completes during a first boot
-   would retire the patch being booted (`promote_to_next_boot` only protects
-   `last_booted_patch`) and leave the breadcrumb naming a patch that never
-   ran. After success the booted patch is `last_booted_patch`, so installs
-   are safe. There is no reason to check earlier: an update only applies at
-   the next launch.
+   `current_patch_number`. There is no reason to check earlier: an update
+   only applies at the next launch. The app's own Dart code can still call
+   `update()` during the launch window, so an install there doesn't retire
+   the booting patch (`promote_to_next_boot` skips it while the breadcrumb
+   names it), and a server rollback of the booting patch clears the
+   breadcrumb (`forget_booting`), so success promotes nothing.
 
 ### Invariants
 
@@ -143,7 +178,8 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
    set
 2. **Crash recovery runs once per process**: Only on first successful `init()`
 3. **One boot cycle per process**: The engine's `Updater` shim calls
-   `report_launch_start()` and `report_launch_success()` /
+   `report_launch_start()`, `report_launch_paused()`,
+   `report_launch_resumed()` and `report_launch_success()` /
    `report_launch_failure()` at most once each, so a second engine in the same
    process (add-to-app) cannot re-report a boot or relabel the running patch
 4. **One update thread per process**: Started from the once-guarded success
@@ -166,6 +202,12 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
   none)
 - If `next_boot_patch` exists, sets `currently_booting_patch`
 - In production, called only once per process; the engine guards it
+
+### `report_launch_paused()`
+- Clears the breadcrumb without promoting; no-op without one
+
+### `report_launch_resumed()`
+- Arms the breadcrumb for `running_patch`; no-op on the base release
 
 ### `report_launch_success()`
 - Clears `currently_booting_patch`
