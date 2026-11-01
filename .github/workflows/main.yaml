@@ -45,6 +45,7 @@ jobs:
               - ./.github/actions/flutter_package/action.yaml
               - shorebird_code_push/**
               - Cargo.lock
+              - rust-toolchain.toml
               # Integration tests under shorebird_code_push/test/integration
               # build and load the library_test_hooks cdylib, which
               # re-exports the production updater C API. A change to
@@ -63,16 +64,19 @@ jobs:
               - ./.github/actions/rust_crate/action.yaml
               - Cargo.lock
               - Cargo.toml
+              - rust-toolchain.toml
               - library/**
             patch:
               - ./.github/actions/rust_crate/action.yaml
               - Cargo.lock
               - Cargo.toml
+              - rust-toolchain.toml
               - patch/**
             library_test_hooks:
               - ./.github/actions/rust_crate/action.yaml
               - Cargo.lock
               - Cargo.toml
+              - rust-toolchain.toml
               - library/**
               - library_test_hooks/**
               # tests/fixture_corpus.rs replays the fixture corpus.
