@@ -29,6 +29,14 @@ on:
         required: false
         default: ""
         type: string
+      coverage_excludes:
+        required: false
+        default: ""
+        type: string
+      min_coverage:
+        required: false
+        default: ""
+        type: string
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -69,12 +77,28 @@ jobs:
       - if: inputs.has_unit_tests
         working-directory: ${{ inputs.package_path }}
         run: flutter test --coverage
+      # Generated code is excluded from the gate below, so keep it out of the
+      # uploaded report too or Codecov's project status reads a drop.
+      - name: Exclude Generated Code from Coverage
+        if: inputs.has_unit_tests && inputs.coverage_excludes != ''
+        working-directory: ${{ inputs.package_path }}
+        run: |
+          mv coverage/lcov.info coverage/lcov.info.bak
+          sudo apt-get -y install lcov
+          lcov --remove coverage/lcov.info.bak "${{ inputs.coverage_excludes }}" -o coverage/lcov.info
       - if: inputs.has_unit_tests
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           flags: ${{ inputs.package_name }}
           token: ${{ secrets.CODECOV_TOKEN }}
           working-directory: ${{ inputs.package_path }}
+      - name: Check Coverage
+        if: inputs.has_unit_tests && inputs.min_coverage != ''
+        uses: VeryGoodOpenSource/very_good_coverage@c953fca3e24a915e111cc6f55f03f756dcb3964c # v3.0.0
+        with:
+          path: ${{ inputs.package_path }}/coverage/lcov.info
+          exclude: ${{ inputs.coverage_excludes }}
+          min_coverage: ${{ inputs.min_coverage }}
       - name: Integration Tests
         if: inputs.has_integration_tests
         working-directory: ${{ inputs.package_path }}

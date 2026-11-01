@@ -2,6 +2,12 @@
 # Run `shorebird_ci verify` to check for dep graph drift.
 name: Shorebird CI
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded PR runs: a newer push's result covers the older one.
+  # Runs on main always finish so every commit gets its coverage upload.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # paths-filter lists a PR's changed files through the API on pull_request.
 permissions:
   contents: read
@@ -35,8 +41,20 @@ jobs:
         with:
           filters: |
             shorebird_code_push:
+              - .github/workflows/shorebird_ci.yaml
+              - .github/workflows/_shorebird_ci_flutter.yaml
               - shorebird_code_push/**
+              - Cargo.lock
+              # Integration tests under shorebird_code_push/test/integration
+              # build and load the library_test_hooks cdylib, which
+              # re-exports the production updater C API. A change to
+              # either crate can break the suite, so run the package's CI
+              # on those paths too.
+              - library/**
+              - library_test_hooks/**
             shorebird_code_push_example:
+              - .github/workflows/shorebird_ci.yaml
+              - .github/workflows/_shorebird_ci_flutter.yaml
               - shorebird_code_push/**
               - shorebird_code_push/example/**
 
@@ -54,6 +72,8 @@ jobs:
       subpackages: "example"
       flutter_version: ""
       has_integration_tests: false
+      coverage_excludes: "**/*.g.dart"
+      min_coverage: "100"
 
   shorebird_code_push_example:
     needs: changes
