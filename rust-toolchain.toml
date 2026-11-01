@@ -1,0 +1,10 @@
+# `cargo fmt`'s output and clippy's lint set both move between toolchains, so
+# whichever rustc a contributor or a runner image happened to have is what
+# decided whether this tree was formatted and lint-clean. Naming one version
+# here makes that answer the same everywhere. A new stable that reformats the
+# tree or adds a lint is then a deliberate bump of this file.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+# llvm-tools-preview is what `cargo llvm-cov` reads coverage with.
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
