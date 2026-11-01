@@ -46,7 +46,12 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
+          # No version from the caller means the pin in .fvmrc, not stable.
+          # dart format's output moves between Flutter versions, so a runner
+          # ahead of a contributor fails the format step below on files the
+          # branch never touched.
           flutter-version: ${{ inputs.flutter_version || '' }}
+          flutter-version-file: ${{ inputs.flutter_version && '' || '.fvmrc' }}
           channel: ${{ inputs.flutter_version && '' || 'stable' }}
       - name: Setup Bloc Tools
         if: inputs.has_bloc_lint

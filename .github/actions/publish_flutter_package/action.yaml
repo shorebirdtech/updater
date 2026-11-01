@@ -14,6 +14,10 @@ runs:
 
     - name: 🐦 Setup Flutter
       uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      with:
+        # The same pin the checks ran under, so a published version is not
+        # built by an SDK nothing verified it against.
+        flutter-version-file: .fvmrc
 
     - name: 🪪 Get Id Token
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
