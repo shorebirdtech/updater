@@ -38,6 +38,14 @@ runs:
   using: "composite"
   steps:
     - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      with:
+        # Pinned rather than floating on stable. dart format's output moves
+        # between Flutter versions, so a runner one release ahead of a
+        # contributor fails the format step on files the branch never touched,
+        # and nothing names the version that would have passed. .fvmrc is the
+        # one place it lives: flutter-action reads it, `fvm use` installs it,
+        # and tool/agent-verify.sh compares the local SDK against it.
+        flutter-version-file: .fvmrc
 
     - name: Install Dependencies
       working-directory: ${{ inputs.working_directory }}

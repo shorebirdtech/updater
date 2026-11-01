@@ -1,4 +1,5 @@
 - Issues for this repo live in `shorebirdtech/shorebird`, labels `updater` and `package_code_push`. PRs come here.
+- `tool/agent-verify.sh [rust|dart]` is the gate: the checks CI runs, under the toolchains CI uses. It adds `~/.cargo/bin` for cargo, and takes the Flutter in `.fvmrc` through `fvm use` or `FLUTTER_ROOT` rather than PATH's answer. Exit `3` means a check was skipped, which is not a pass: the Dart half skips `dart format` on an SDK that is not the pinned one, because the two disagree about the output. Bump `.fvmrc` to move CI.
 - Rust tests that call `shorebird_init` need `#[serial]`: the config is a global.
 - `library/include/*.h` come from `cbindgen` in `library/build.rs`; `updater_bindings.g.dart` comes from `ffigen`. Don't hand-edit either.
 - Fail open: any error leaves the app on its installed version.
