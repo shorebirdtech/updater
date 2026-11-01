@@ -36,9 +36,15 @@ jobs:
           filters: |
             shorebird_code_push:
               - shorebird_code_push/**
+              - .fvmrc
+              - .github/workflows/shorebird_ci.yaml
+              - .github/workflows/_shorebird_ci_flutter.yaml
             shorebird_code_push_example:
               - shorebird_code_push/**
               - shorebird_code_push/example/**
+              - .fvmrc
+              - .github/workflows/shorebird_ci.yaml
+              - .github/workflows/_shorebird_ci_flutter.yaml
 
   shorebird_code_push:
     needs: changes

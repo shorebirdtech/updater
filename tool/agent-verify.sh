@@ -141,10 +141,10 @@ if [[ " ${halves[*]} " == *" dart "* ]]; then
       skipped+=('the integration suite, no cargo to build library_test_hooks')
     fi
 
-    # An unreadable pin is a skip and not a licence to format: jq yields the
-    # string `null` for a file without the key, and the sed fallback yields
-    # nothing for a file that is not JSON at all. Formatting under an SDK
-    # nothing compared is the outcome this script exists to prevent.
+    # An unreadable pin is a skip, and format does not run without one. jq
+    # yields the string `null` for a file with no such key, and the sed
+    # fallback yields nothing for a file that is not JSON at all. Formatting
+    # under an SDK nothing compared is what this script exists to prevent.
     pin="$(jq -r '.flutter' .fvmrc 2>/dev/null ||
       sed -n 's/.*"flutter"[^"]*"\([^"]*\)".*/\1/p' .fvmrc)"
     [[ $pin == 'null' ]] && pin=''
