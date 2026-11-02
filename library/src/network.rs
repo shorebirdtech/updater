@@ -81,7 +81,7 @@ fn patch_check_request_with(
 ) -> anyhow::Result<PatchCheckResponse> {
     shorebird_info!("Sending patch check request: {}", request.log_line());
     let body = post_json(send, url, &request, None)?;
-    let parsed = serde_json::from_slice(&body)?;
+    let parsed = serde_json::from_slice(&body).map_err(from_patch_check_body_error)?;
     shorebird_debug!("Patch check response: {:?}", parsed);
     Ok(parsed)
 }
@@ -184,8 +184,9 @@ fn post_json<T: Serialize>(
 }
 
 /// Sends `request`, turning a non-2xx status into [`NetworkError::Server`]
-/// before `handler` sees the response, so no error body is ever read or
-/// written.
+/// before `handler` sees the response, so `handler` never reads or writes an
+/// error body. A JSON error body is read (up to [`MAX_ERROR_BODY_BYTES`]) for
+/// the server's own `{code, message}`; any other is never waited on.
 fn send_checked(
     send: SendFn,
     request: &Request,
@@ -199,23 +200,72 @@ fn send_checked(
         headers: &headers,
         ..*request
     };
-    send(&request, &mut StatusCheck { inner: handler })
+    let mut check = StatusCheck {
+        inner: handler,
+        error: None,
+    };
+    let result = send(&request, &mut check);
+    match check.error {
+        // The server answered with an error status; that's the failure,
+        // whether or not its body arrived whole.
+        Some(ErrorResponse { status, body }) => Err(NetworkError::Server {
+            status,
+            error: serde_json::from_slice(&body).ok(),
+        }
+        .into()),
+        None => result,
+    }
+}
+
+/// Error bodies are a short JSON object; read no more than this of one.
+const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
+
+struct ErrorResponse {
+    status: u16,
+    body: Vec<u8>,
 }
 
 struct StatusCheck<'a> {
     inner: &'a mut dyn ResponseHandler,
+    /// Set when the status isn't 2xx and the body is JSON, which may be ours.
+    error: Option<ErrorResponse>,
 }
 
 impl ResponseHandler for StatusCheck<'_> {
     fn on_response(&mut self, status: u16, headers: &[Header]) -> anyhow::Result<()> {
-        if !(200..300).contains(&status) {
-            return Err(NetworkError::Server { status }.into());
+        if (200..300).contains(&status) {
+            return self.inner.on_response(status, headers);
         }
-        self.inner.on_response(status, headers)
+        // Only our JSON body explains anything; stop at once for any other
+        // (a load balancer's HTML page, a CDN's XML) rather than wait on it.
+        let is_json =
+            find_header(headers, "content-type").is_some_and(|v| v.starts_with("application/json"));
+        if !is_json {
+            return Err(NetworkError::Server {
+                status,
+                error: None,
+            }
+            .into());
+        }
+        self.error = Some(ErrorResponse {
+            status,
+            body: Vec::new(),
+        });
+        Ok(())
     }
 
     fn on_body(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        self.inner.on_body(data)
+        let Some(error) = &mut self.error else {
+            return self.inner.on_body(data);
+        };
+        if error.body.len() + data.len() > MAX_ERROR_BODY_BYTES {
+            // Too big to be ours: give up on it; send_checked reports the
+            // status alone.
+            error.body.clear();
+            bail!("Error body exceeds {MAX_ERROR_BODY_BYTES} bytes");
+        }
+        error.body.extend_from_slice(data);
+        Ok(())
     }
 }
 
@@ -299,11 +349,26 @@ impl ResponseHandler for DownloadHandler<'_> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NetworkError {
     /// The server was reached but responded with a non-success HTTP status.
-    Server { status: u16 },
+    /// `error` is the server's own explanation, when the body was ours.
+    Server {
+        status: u16,
+        error: Option<ServerError>,
+    },
     /// The request never reached the server (offline, DNS failure, connection
     /// refused), or the connection failed mid-response (the peer disconnected,
     /// a timeout).
     Transport,
+    /// A success status whose body wasn't JSON, so something other than our
+    /// server answered (a captive portal or a proxy).
+    UnexpectedResponse,
+}
+
+/// The `{code, message}` body our server sends with an error status, such as
+/// `patches_check_limit_exceeded` when an app is over its install limit.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct ServerError {
+    pub code: String,
+    pub message: String,
 }
 
 impl std::fmt::Display for NetworkError {
@@ -312,18 +377,52 @@ impl std::fmt::Display for NetworkError {
         // and the server-bound failure diagnostic event. They must stay generic
         // across all network operations (patch check, download, event report).
         match self {
-            NetworkError::Server { status } => write!(f, "Request failed with status: {status}"),
+            NetworkError::Server {
+                status,
+                error: Some(error),
+            } => write!(f, "{} (status {status}): {}", error.code, error.message),
+            // No endpoint the updater calls answers 429; it comes from
+            // infrastructure in front of the server shedding load.
+            NetworkError::Server {
+                status: 429,
+                error: None,
+            } => write!(f, "The server is busy (status 429); try again later."),
+            NetworkError::Server {
+                status,
+                error: None,
+            } => write!(f, "Request failed with status: {status}"),
             NetworkError::Transport => {
                 write!(
                     f,
                     "Network request failed; the server could not be reached."
                 )
             }
+            NetworkError::UnexpectedResponse => write!(
+                f,
+                "The response was not from the Shorebird server; a captive portal or proxy may be answering in its place."
+            ),
         }
     }
 }
 
 impl std::error::Error for NetworkError {}
+
+/// Classifies a 2xx patch check body that didn't parse.
+fn from_patch_check_body_error(error: serde_json::Error) -> anyhow::Error {
+    match error.classify() {
+        // Not JSON at all: something between the device and us (a captive
+        // portal, a filtering proxy) answered, not our server.
+        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+            anyhow::Error::new(error).context(NetworkError::UnexpectedResponse)
+        }
+        // JSON, but not the shape we expect: our server's bug, not the network.
+        serde_json::error::Category::Data => {
+            anyhow::Error::new(error).context(crate::updater::UpdateError::BadServerResponse)
+        }
+        // Parsing an in-memory slice does no IO; kept for exhaustiveness.
+        serde_json::error::Category::Io => anyhow::Error::new(error),
+    }
+}
 
 /// Parses the total file size from a Content-Range header.
 /// Expected format: `bytes start-end/total` (e.g. `bytes 100-199/1000`).
@@ -859,7 +958,152 @@ mod tests {
             assert_eq!(err.to_string(), "Request failed with status: 500", "{name}");
             assert_eq!(
                 err.downcast_ref::<NetworkError>(),
-                Some(&NetworkError::Server { status: 500 }),
+                Some(&NetworkError::Server {
+                    status: 500,
+                    error: None
+                }),
+                "{name}"
+            );
+        }
+    }
+
+    /// Answers the patch check on a mock server with `status`, `content_type`
+    /// and `body`, and returns the error the check fails with.
+    fn patch_check_error(
+        send: SendFn,
+        status: usize,
+        content_type: &str,
+        body: impl AsRef<[u8]>,
+    ) -> anyhow::Error {
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/api/v1/patches/check")
+            .with_status(status)
+            .with_header("content-type", content_type)
+            .with_body(body)
+            .create();
+        super::patch_check_request_with(
+            send,
+            &super::patches_check_url(&server.url()),
+            patch_check_request(),
+        )
+        .unwrap_err()
+    }
+
+    #[test]
+    fn patch_check_over_the_limit_keeps_the_servers_error() {
+        // What the patch check answers when an app is over its install limit.
+        let body = r#"{"code":"patches_check_limit_exceeded","message":"The number of installs for this app has exceeded the limit.","details":"app_id: abc"}"#;
+        for (name, send) in TRANSPORTS {
+            let err = patch_check_error(send, 403, "application/json", body);
+            assert_eq!(
+                err.downcast_ref::<NetworkError>(),
+                Some(&NetworkError::Server {
+                    status: 403,
+                    error: Some(super::ServerError {
+                        code: "patches_check_limit_exceeded".to_string(),
+                        message: "The number of installs for this app has exceeded the limit."
+                            .to_string(),
+                    }),
+                }),
+                "{name}"
+            );
+            assert_eq!(
+                err.to_string(),
+                "patches_check_limit_exceeded (status 403): \
+                 The number of installs for this app has exceeded the limit.",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn error_body_that_is_not_ours_is_ignored() {
+        for (name, send) in TRANSPORTS {
+            let err = patch_check_error(send, 502, "text/html", "<html>Bad Gateway</html>");
+            assert_eq!(err.to_string(), "Request failed with status: 502", "{name}");
+            // JSON, but not our shape.
+            let err = patch_check_error(send, 500, "application/json", r#"{"error":"x"}"#);
+            assert_eq!(err.to_string(), "Request failed with status: 500", "{name}");
+        }
+    }
+
+    #[test]
+    fn oversized_error_body_reports_the_status_alone() {
+        for (name, send) in TRANSPORTS {
+            let body = vec![b' '; super::MAX_ERROR_BODY_BYTES + 1];
+            let err = patch_check_error(send, 503, "application/json", body);
+            assert_eq!(
+                err.downcast_ref::<NetworkError>(),
+                Some(&NetworkError::Server {
+                    status: 503,
+                    error: None
+                }),
+                "{name}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn status_429_says_the_server_is_busy() {
+        for (name, send) in TRANSPORTS {
+            let err = patch_check_error(send, 429, "text/plain", "Too Many Requests");
+            assert_eq!(
+                err.to_string(),
+                "The server is busy (status 429); try again later.",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn patch_check_answered_by_a_captive_portal_is_unexpected_response() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("POST", "/api/v1/patches/check")
+                .with_status(200)
+                .with_header("content-type", "text/html")
+                .with_body("<html>Sign in to Wi-Fi</html>")
+                .create();
+            let err = super::patch_check_request_with(
+                send,
+                &super::patches_check_url(&server.url()),
+                patch_check_request(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.downcast_ref::<NetworkError>(),
+                Some(&NetworkError::UnexpectedResponse),
+                "{name}"
+            );
+            assert_eq!(
+                crate::updater::classify_failure(&err),
+                crate::updater::FailureCategory::Network,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn patch_check_with_json_of_the_wrong_shape_is_a_bad_server_response() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("POST", "/api/v1/patches/check")
+                .with_status(200)
+                .with_body(r#"{"patch_available":"yes"}"#)
+                .create();
+            let err = super::patch_check_request_with(
+                send,
+                &super::patches_check_url(&server.url()),
+                patch_check_request(),
+            )
+            .unwrap_err();
+            assert!(err.downcast_ref::<NetworkError>().is_none(), "{name}");
+            assert_eq!(
+                crate::updater::classify_failure(&err),
+                crate::updater::FailureCategory::Server,
                 "{name}"
             );
         }
@@ -948,7 +1192,35 @@ mod tests {
                     .unwrap_err();
             assert_eq!(
                 err.downcast_ref::<NetworkError>(),
-                Some(&NetworkError::Server { status: 503 }),
+                Some(&NetworkError::Server {
+                    status: 503,
+                    error: None
+                }),
+                "{name}"
+            );
+            assert_eq!(std::fs::read(&dest).unwrap(), b"hello ", "{name}");
+        }
+    }
+
+    #[test]
+    fn download_json_error_body_is_not_written_to_the_file() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("GET", "/patch")
+                .with_status(404)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"code":"not_found","message":"No such patch."}"#)
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            std::fs::write(&dest, "hello ").unwrap();
+            let err =
+                super::download_to_path_with(send, &format!("{}/patch", server.url()), &dest, 6)
+                    .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "not_found (status 404): No such patch.",
                 "{name}"
             );
             assert_eq!(std::fs::read(&dest).unwrap(), b"hello ", "{name}");
