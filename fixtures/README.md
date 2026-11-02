@@ -53,9 +53,11 @@ fixtures/
 ```
 
 Groups: `state_load` (reading and migrating on-disk state at init),
-`boot` (launch start/success/failure, crash recovery, boot-time validation),
+`boot` (launch start/success/failure, crash recovery, boot-time validation,
+two engines in one process),
 `patch_check` (requests, responses, errors, rollbacks, event queue),
-`update` (download, resume, inflate, install, failures),
+`update` (download, resume, inflate, install, failures, overlapping
+`update` calls),
 `signing` (`patch_public_key` and `patch_verification`, from check through
 the next boot).
 
@@ -112,7 +114,8 @@ A runner:
    queued exchange has been served (up to 10 s; some requests come from
    background threads after the call returns), wait for the updater's
    background event sends to finish, then check `expect_files` and
-   `expect_tree`.
+   `expect_tree`. Steps marked `background` and `await` steps work as
+   described under [Overlapping calls](#overlapping-calls).
 7. After the last step, waits 200 ms and fails on any request nobody
    expected. The server keeps listening for the rest of the run: a request
    that reaches it after its case has finished (a background thread that
@@ -148,7 +151,8 @@ otherwise.
   "http": [ <exchange>, ... ],
   "expect": <matcher>,
   "expect_files": { "<path>": <file expectation> },
-  "expect_tree": ["app/libapp.so", "storage/state.json"]
+  "expect_tree": ["app/libapp.so", "storage/state.json"],
+  "background": true
 }
 ```
 
@@ -168,6 +172,7 @@ Every key is optional. `call` is one of:
 | `next_boot_patch_path` | `shorebird_next_boot_patch_path` | `null`, or the path relative to the case root with `/` separators |
 | `check_for_downloadable_update` | `shorebird_check_for_downloadable_update(channel or NULL)` | bool |
 | `update` | `shorebird_update_with_result(channel or NULL)` | `{"status": <int>, "message": <string or null>}` |
+| `await` | none: waits for the `background` call (below) | that call's result |
 
 A step without `call` only writes or checks files.
 
@@ -176,6 +181,33 @@ disk before the `restart` is what the next process finds. A kill in the middle
 of an operation that the C API cannot interrupt (between the download and the
 install, say) is written as a case whose `files` hold the state that kill
 leaves behind.
+
+Two engines in one process (add-to-app) need nothing more: they are one
+process making each engine's calls in turn (`init`, `validate_next_boot_patch`,
+`next_boot_patch_path`, and the launch reports the engine does not skip).
+
+### Overlapping calls
+
+A case can hold one call open while it makes others, to pin down what the
+updater does when calls overlap (an `update()` from Dart while the engine's
+update thread is still running, say):
+
+- `"background": true` on a step starts its call on another thread. The
+  step's last HTTP exchange must have `"hold": true` in its response, and no
+  other may: the server takes that request but holds its response. The step
+  ends once the held request has arrived (the call is then mid-flight, at a
+  known point) and fails if the call returns first. The held request must be
+  one the call sends itself, not one from a background thread (an event
+  flush): `await` fails if the call returned before the release. It cannot
+  have `expect`. One background call at a time.
+- Later steps run while it waits. Each must return within 10 s; a call that
+  waits for the background one fails the case.
+- `{"call": "await"}` (with only `http`, `write_files` and expectations)
+  queues its own `http` (what the background call sends
+  after the held request), releases the held response, waits for the
+  background call to return, and compares its result with `expect`.
+
+A background call never awaited fails the case.
 
 ### HTTP exchanges
 
@@ -198,7 +230,8 @@ the case (and is answered 500).
     "body": <file spec>,
     "headers": {"Content-Range": "bytes 20-62/63"},
     "close_after_bytes": 20,
-    "drop_connection": false
+    "drop_connection": false,
+    "hold": true
   }
 }
 ```
@@ -215,6 +248,8 @@ added.
 The connection is always closed after the response. `close_after_bytes` sends
 the headers for the full body but only the first N body bytes, then closes (an
 interrupted download). `drop_connection` closes without sending anything.
+`hold` answers only once an `await` step releases it (see
+[Overlapping calls](#overlapping-calls)).
 
 ### File specs (what to write)
 
@@ -336,6 +371,10 @@ edits the case:
 
 - `state_load/state_json_missing_field_resets`: a `state.json` that fails to
   parse for any reason resets, including its `client_id`.
+- `boot/second_launch_start_in_process_boots_new_patch`: a second
+  `report_launch_start` in one process, after an install, records the new
+  patch as booting though the first engine still runs the old one. The
+  engine reports launches once per process so this never happens; the case
+  pins why it must.
 
-Not covered: Android's split-APK base lookup (the runner uses the desktop path); concurrent
-`update` calls (`UpdateInProgress`).
+Not covered: Android's split-APK base lookup (the runner uses the desktop path).

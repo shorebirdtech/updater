@@ -1,0 +1,227 @@
+{
+  "description": "Two engines in one process (add-to-app): the first boots patch 1 and its update thread installs 2. A second engine configured afterwards gets 2 from next_boot_patch_path, while current_boot_patch_number stays 1 and init returns false. If that engine reports no launch (the engine reports once per process), nothing records 2 as booting: the next process boots 2 as a first boot.",
+  "base": {
+    "file": "bipatch/text_edit/base.bin"
+  },
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": 1,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": "storage/patches/1/dlc.vmcode"
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "report_launch_success"
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001",
+              "current_patch_number": 1
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 2,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/2.bin"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/patches/2.bin",
+            "headers": {
+              "range": null
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "file": "bipatch/text_edit/patch.bin"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "event_id": "<uuid>",
+                "type": "__patch_download__",
+                "patch_number": 2,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": null
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        }
+      ],
+      "expect": {
+        "status": 1,
+        "message": "Update installed"
+      },
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 2,
+            "last_booted_patch": 1,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    },
+    {
+      "call": "init",
+      "expect": false
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": "storage/patches/2/dlc.vmcode"
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 2
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 1,
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 2,
+            "last_booted_patch": 1,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    },
+    {
+      "call": "restart"
+    },
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "report_launch_start",
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 2,
+            "last_booted_patch": 1,
+            "currently_booting_patch": 2,
+            "boot_started_at": "<number>"
+          }
+        }
+      }
+    },
+    {
+      "call": "report_launch_success",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/events",
+            "json": {
+              "event": {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "event_id": "<uuid>",
+                "type": "__patch_install__",
+                "patch_number": 2,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": null
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "text": ""
+          }
+        }
+      ],
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 2,
+            "last_booted_patch": 2,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    }
+  ]
+}

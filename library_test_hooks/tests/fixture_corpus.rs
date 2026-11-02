@@ -184,6 +184,13 @@ struct ServerState {
     errors: Vec<String>,
     /// Set when the case has finished; later requests go to `LATE_REQUESTS`.
     closed: bool,
+    /// Requests whose response is `hold`: how many have arrived, and how
+    /// many of those a `release` has let through.
+    holds_seen: usize,
+    holds_released: usize,
+    /// Set once the runner gives up on a background call: every hold, even
+    /// one that arrives later, is answered at once.
+    release_all: bool,
 }
 
 struct FakeServer {
@@ -360,6 +367,21 @@ impl FakeServer {
                             match guard.queue.pop_front() {
                                 Some(exchange) => {
                                     match match_request(&exchange.request, &request) {
+                                        Ok(()) if exchange.response["hold"] == true => {
+                                            // Answer only once a later step
+                                            // releases it, or the runner has
+                                            // given up on holding.
+                                            let ticket = guard.holds_seen;
+                                            guard.holds_seen += 1;
+                                            if guard.release_all {
+                                                guard.holds_released = guard.holds_seen;
+                                            }
+                                            state.1.notify_all();
+                                            while guard.holds_released <= ticket {
+                                                guard = state.1.wait(guard).unwrap();
+                                            }
+                                            Some(exchange.response)
+                                        }
                                         Ok(()) => Some(exchange.response),
                                         Err(e) => {
                                             guard.errors.push(e);
@@ -398,6 +420,47 @@ impl FakeServer {
     /// recorded instead of refused.
     fn close(&self) {
         self.state.0.lock().unwrap().closed = true;
+        self.release_all_holds();
+    }
+
+    fn holds_seen(&self) -> usize {
+        self.state.0.lock().unwrap().holds_seen
+    }
+
+    /// Waits until more than `seen` held requests have arrived, or until
+    /// `gave_up` returns true (checked every 10 ms), or the timeout. Returns
+    /// whether the hold was reached.
+    fn wait_for_hold(&self, seen: usize, timeout: Duration, gave_up: impl Fn() -> bool) -> bool {
+        let (lock, cvar) = &*self.state;
+        let deadline = Instant::now() + timeout;
+        let mut guard = lock.lock().unwrap();
+        while guard.holds_seen <= seen {
+            if Instant::now() >= deadline || gave_up() {
+                return false;
+            }
+            guard = cvar
+                .wait_timeout(guard, Duration::from_millis(10))
+                .unwrap()
+                .0;
+        }
+        true
+    }
+
+    /// Lets every held request that has arrived get its response.
+    fn release_holds(&self) {
+        let mut guard = self.state.0.lock().unwrap();
+        guard.holds_released = guard.holds_seen;
+        self.state.1.notify_all();
+    }
+
+    /// Like `release_holds`, and a held request that arrives later is
+    /// answered at once: for giving up on a background call that may not
+    /// have reached its hold yet.
+    fn release_all_holds(&self) {
+        let mut guard = self.state.0.lock().unwrap();
+        guard.release_all = true;
+        guard.holds_released = guard.holds_seen;
+        self.state.1.notify_all();
     }
 
     fn base_url(&self) -> String {
@@ -415,12 +478,15 @@ impl FakeServer {
     }
 
     /// Waits for every queued exchange to be consumed and every connection to
-    /// finish, then returns (and clears) the errors seen so far.
+    /// finish (except those held for a background call), then returns (and
+    /// clears) the errors seen so far.
     fn wait_idle(&self, timeout: Duration) -> Vec<String> {
         let (lock, cvar) = &*self.state;
         let deadline = Instant::now() + timeout;
         let mut guard = lock.lock().unwrap();
-        while !(guard.queue.is_empty() && guard.in_flight == 0) {
+        while !(guard.queue.is_empty()
+            && guard.in_flight == guard.holds_seen - guard.holds_released)
+        {
             let now = Instant::now();
             if now >= deadline {
                 break;
@@ -618,6 +684,7 @@ fn channel_ptr(channel: &Option<CString>) -> *const c_char {
     channel.as_ref().map_or(std::ptr::null(), |c| c.as_ptr())
 }
 
+#[derive(Clone)]
 struct CaseEnv {
     root: PathBuf,
     libapp: PathBuf,
@@ -747,6 +814,7 @@ const CALLS_WITH_RESULT: &[&str] = &[
     "next_boot_patch_path",
     "check_for_downloadable_update",
     "update",
+    "await",
 ];
 const CALLS_WITHOUT_RESULT: &[&str] = &[
     "restart",
@@ -813,12 +881,65 @@ fn validate_case(case: &Value) -> Vec<String> {
                 "expect",
                 "expect_files",
                 "expect_tree",
+                "background",
             ],
             &at,
             p,
         );
         let call = step["call"].as_str().unwrap_or_default();
+        if call == "await" {
+            check_keys(
+                step,
+                &[
+                    "call",
+                    "write_files",
+                    "http",
+                    "expect",
+                    "expect_files",
+                    "expect_tree",
+                ],
+                &at,
+                p,
+            );
+        }
         let has_result = CALLS_WITH_RESULT.contains(&call);
+        let background = step.get("background").is_some();
+        let holds: Vec<usize> = step["http"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, e)| e["response"].get("hold").is_some())
+            .map(|(j, _)| j)
+            .collect();
+        let http_len = step["http"].as_array().map_or(0, Vec::len);
+        if background {
+            if step["background"] != true {
+                p.push(format!("{at}: background must be true"));
+            }
+            if call.is_empty() || call == "await" || call == "restart" {
+                p.push(format!("{at}: \"{call}\" cannot run in the background"));
+            }
+            if step.get("expect").is_some() {
+                p.push(format!(
+                    "{at}: a background call's result is checked by its await step"
+                ));
+            }
+            if holds != [http_len.saturating_sub(1)] || http_len == 0 {
+                p.push(format!(
+                    "{at}: a background step's last exchange, and only that one, must hold"
+                ));
+            }
+        } else if !holds.is_empty() {
+            p.push(format!("{at}: only a background step's exchange may hold"));
+        }
+        for (j, exchange) in step["http"].as_array().into_iter().flatten().enumerate() {
+            if let Some(hold) = exchange["response"].get("hold") {
+                if hold != true {
+                    p.push(format!("{at}.http[{j}].response: hold must be true"));
+                }
+            }
+        }
         if !has_result && !CALLS_WITHOUT_RESULT.contains(&call) && !call.is_empty() {
             p.push(format!("{at}: unknown call \"{call}\""));
         }
@@ -848,6 +969,7 @@ fn validate_case(case: &Value) -> Vec<String> {
                     "headers",
                     "close_after_bytes",
                     "drop_connection",
+                    "hold",
                 ],
                 &format!("{at}.response"),
                 p,
@@ -922,6 +1044,8 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
 
     updater::testing_reset_config();
     let mut errors = Vec::new();
+    // The call started by a `background` step, until its `await`.
+    let mut background: Option<std::thread::JoinHandle<Result<Option<Value>, String>>> = None;
     let steps = case["steps"].as_array().cloned().unwrap_or_default();
     for (i, step) in steps.iter().enumerate() {
         let label = format!(
@@ -934,7 +1058,71 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
         if let Some(http) = step.get("http").and_then(Value::as_array) {
             server.enqueue(http);
         }
-        match run_call(&env, step, &case) {
+        let result = if step["call"] == "await" {
+            match background.take() {
+                // The held request must be one the call itself sends: if it
+                // came from another thread (an event flush), the call has
+                // already returned and the case tested no overlap.
+                Some(handle) if handle.is_finished() => {
+                    server.release_all_holds();
+                    let _ = handle.join();
+                    Err(
+                        "the background call returned before its held response was released: \
+                         the held request must be one the call itself sends"
+                            .to_string(),
+                    )
+                }
+                Some(handle) => {
+                    server.release_holds();
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("background call panicked".to_string()))
+                }
+                None => Err("await with no background call running".to_string()),
+            }
+        } else if step["background"] == true {
+            if background.is_some() {
+                Err("a background call is already running".to_string())
+            } else {
+                let seen = server.holds_seen();
+                let (env, step, case) = (env.clone(), step.clone(), case.clone());
+                let handle = std::thread::spawn(move || run_call(&env, &step, &case));
+                if server.wait_for_hold(seen, REQUEST_TIMEOUT, || handle.is_finished()) {
+                    background = Some(handle);
+                    Ok(None)
+                } else {
+                    server.release_all_holds();
+                    let returned = handle.join();
+                    Err(format!(
+                        "the background call never reached its held request (it returned {returned:?})"
+                    ))
+                }
+            }
+        } else if background.is_some() {
+            // A call that waits for the background one would wait for ever
+            // (its held request is only released by `await`): give up on it.
+            let (env, step, case) = (env.clone(), step.clone(), case.clone());
+            let handle = std::thread::spawn(move || run_call(&env, &step, &case));
+            let deadline = Instant::now() + REQUEST_TIMEOUT;
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let timed_out = !handle.is_finished();
+            if timed_out {
+                server.release_all_holds();
+            }
+            match handle.join() {
+                Ok(Ok(result)) if !timed_out => Ok(result),
+                Ok(Ok(_)) => Err(format!(
+                    "the call did not return within {REQUEST_TIMEOUT:?}: it waited for the background call"
+                )),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("call panicked".to_string()),
+            }
+        } else {
+            run_call(&env, step, &case)
+        };
+        match result {
             Ok(Some(actual)) => {
                 if let Some(expected) = step.get("expect") {
                     if let Err(e) = match_json(expected, &actual, "result") {
@@ -964,6 +1152,13 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
         }
         if !errors.is_empty() {
             break;
+        }
+    }
+    if let Some(handle) = background.take() {
+        server.release_all_holds();
+        let _ = handle.join();
+        if errors.is_empty() {
+            errors.push("a background call was never awaited".to_string());
         }
     }
     std::thread::sleep(QUIET_PERIOD);
