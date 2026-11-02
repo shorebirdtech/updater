@@ -1825,7 +1825,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
 
         lifecycle.record_boot_pause().unwrap();
 
@@ -1855,10 +1855,10 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         lifecycle.record_boot_pause().unwrap();
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
 
         let reloaded = reload_at(tmp.path());
         assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
@@ -1875,7 +1875,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(2);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
 
         assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
         assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
@@ -2015,11 +2015,11 @@ mod tests {
     fn record_boot_resume_errs_unless_installed() {
         let (_tmp, mut lifecycle) = fixture();
         // Unknown patch.
-        assert!(lifecycle.record_boot_resume(1).is_err());
+        assert!(lifecycle.record_boot_resume(1, None).is_err());
         // Bad patch: never armed again.
         install_state(&lifecycle, 2, 100);
         lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
-        assert!(lifecycle.record_boot_resume(2).is_err());
+        assert!(lifecycle.record_boot_resume(2, None).is_err());
         assert_eq!(lifecycle.pointers().currently_booting_patch, None);
     }
 
@@ -2029,7 +2029,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
 
         lifecycle.forget_booting(2).unwrap();
         assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
@@ -2045,6 +2045,102 @@ mod tests {
         ));
     }
 
+    /// `fixture()` with patch 1 installed and next to boot.
+    fn fixture_booting_1() -> (TempDir, PatchLifecycle) {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        (tmp, lifecycle)
+    }
+
+    #[test]
+    fn breadcrumb_holds_the_process_token_until_cleared() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        lifecycle.record_boot_start(1, Some("p1")).unwrap();
+        assert_eq!(
+            reload_at(tmp.path())
+                .pointers()
+                .boot_process_token
+                .as_deref(),
+            Some("p1")
+        );
+
+        lifecycle.record_boot_pause().unwrap();
+        assert_eq!(reload_at(tmp.path()).pointers().boot_process_token, None);
+
+        lifecycle.record_boot_resume(1, Some("p1")).unwrap();
+        assert_eq!(
+            reload_at(tmp.path())
+                .pointers()
+                .boot_process_token
+                .as_deref(),
+            Some("p1")
+        );
+    }
+
+    #[test]
+    fn record_boot_killed_keeps_the_patch_up_to_the_cap() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        for kills in 1..=MAX_BOOT_KILLS {
+            lifecycle.record_boot_start(1, Some("p")).unwrap();
+            assert!(lifecycle.record_boot_killed().unwrap());
+            let reloaded = reload_at(tmp.path());
+            assert_eq!(reloaded.pointers().boot_kills, kills);
+            assert_eq!(reloaded.pointers().currently_booting_patch, None);
+            assert_eq!(reloaded.pointers().boot_process_token, None);
+            assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
+            assert!(matches!(
+                reloaded.read_state(1),
+                Some(PatchState::Installed { .. })
+            ));
+        }
+
+        // Past the cap it refuses and changes nothing; the caller then
+        // treats the death as a crash.
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        assert!(!lifecycle.record_boot_killed().unwrap());
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().boot_kills, MAX_BOOT_KILLS);
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+    }
+
+    #[test]
+    fn record_boot_success_resets_kills() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        assert!(lifecycle.record_boot_killed().unwrap());
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        lifecycle.record_boot_success().unwrap();
+        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, 0);
+    }
+
+    #[test]
+    fn record_boot_failure_resets_kills() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        assert!(lifecycle.record_boot_killed().unwrap());
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        lifecycle.record_boot_failure(1).unwrap();
+        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, 0);
+    }
+
+    /// A `pointers.json` written by an updater from before process tokens
+    /// loads, and its breadcrumb (no token) can't be matched to a kill.
+    #[test]
+    fn pointers_without_token_or_kills_load() {
+        let (tmp, lifecycle) = fixture_booting_1();
+        std::fs::write(
+            lifecycle.pointers_path(),
+            r#"{"next_boot_patch":1,"last_booted_patch":null,"currently_booting_patch":1,"boot_started_at":5}"#,
+        )
+        .unwrap();
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert_eq!(reloaded.pointers().boot_process_token, None);
+        assert_eq!(reloaded.pointers().boot_kills, 0);
+    }
+
     #[test]
     fn promote_to_next_boot_keeps_the_booting_patch() {
         // Patch 1 is booting for the first time (never booted, so not
@@ -2053,7 +2149,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         install_state(&lifecycle, 2, 200);
 
         lifecycle.promote_to_next_boot(2).unwrap();
@@ -2091,7 +2187,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         lifecycle.pointers.next_boot_patch = None;
         lifecycle.save_pointers().unwrap();
 
@@ -2107,7 +2203,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         install_state(&lifecycle, 2, 200);
         lifecycle.promote_to_next_boot(2).unwrap();
 
