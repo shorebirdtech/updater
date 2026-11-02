@@ -495,8 +495,9 @@ impl PatchLifecycle {
     /// signature verification: writes a `Bad{InvalidSignature}` tombstone
     /// carrying the refused pair (so `decide_start` skips only that pair)
     /// and removes any partial or complete download left by an earlier
-    /// offer. `n` is never `Installed` here, since `decide_start` skips
-    /// installed patches before the check.
+    /// offer. `n` is never `Installed` here: `decide_start` skips the
+    /// installed next-boot patch, and `reselect_installed_patch` uninstalls
+    /// any other installed patch before downloading it again.
     pub fn record_signature_refused(
         &self,
         n: usize,

@@ -1312,6 +1312,24 @@ mod test {
         assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
     }
 
+    /// An installed patch whose artifact is missing is downloaded again.
+    #[serial]
+    #[test]
+    fn installed_patch_with_missing_artifact_is_downloaded_again() {
+        let tmp_dir = TempDir::new().unwrap();
+        boot_patch_2_from_stable(&tmp_dir);
+        update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
+        restart_two_track_app(&tmp_dir);
+
+        let patch_2 = crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2);
+        std::fs::remove_file(&patch_2).unwrap();
+
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 2);
+        assert!(patch_2.exists());
+        assert_eq!(DOWNLOADS.load(Ordering::SeqCst), 3);
+    }
+
     /// The running patch's file is in use, so when its bytes no longer hash
     /// to the offered hash it is left in place: update fails and changes
     /// nothing. Check still reports an update, since it doesn't hash the

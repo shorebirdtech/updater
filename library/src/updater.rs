@@ -999,8 +999,9 @@ fn download_and_install_patch(
 /// download path, nothing is tombstoned, because the installed bytes were
 /// accepted under an earlier offer and may be the patch the app is running.
 ///
-/// Installed bytes that don't hash to the offer (corrupted on disk, or a
-/// patch number re-uploaded with different contents) are replaced by a
+/// Installed bytes that don't hash to the offer or can't be read (corrupted
+/// or missing on disk, or a patch number re-uploaded with different
+/// contents) are replaced by a
 /// fresh download, unless they are the running patch, whose file is in
 /// use; then this returns an error and changes nothing.
 ///
@@ -1019,14 +1020,20 @@ fn reselect_installed_patch(
 
     let installed_path =
         lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch.number);
-    let installed_hash = crate::cache::hash_file(&installed_path)
-        .with_context(|| format!("Failed to hash installed patch {}", patch.number))?;
-    if installed_hash != patch.hash {
+    // An artifact that can't be read is treated like one that doesn't match.
+    let matches_offer = match crate::cache::hash_file(&installed_path) {
+        Ok(hash) => hash == patch.hash,
+        Err(e) => {
+            shorebird_error!("Failed to hash installed patch {}: {:?}", patch.number, e);
+            false
+        }
+    };
+    if !matches_offer {
         let running = with_state(|state| Ok(state.running_patch().map(|p| p.number)))?;
         if running == Some(patch.number) {
             anyhow::bail!(
-                "Installed patch {} does not match the offered patch, and it is the \
-                running patch, so it was left in place.",
+                "Installed patch {} does not match the offered patch or could not be \
+                read, and it is the running patch, so it was left in place.",
                 patch.number
             );
         }
