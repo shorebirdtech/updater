@@ -36,6 +36,11 @@ mod test_engine_callbacks;
 #[cfg(feature = "test-hooks")]
 pub use test_engine_callbacks::callbacks as testing_engine_callbacks;
 
+/// Waits for event flushes the updater started on background threads, so a
+/// test can check the state they leave on disk.
+#[cfg(feature = "test-hooks")]
+pub use updater::testing_wait_for_event_flushes;
+
 // Take all public items from the updater namespace and make them public.
 pub use self::updater::*;
 

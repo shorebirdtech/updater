@@ -105,10 +105,13 @@ A runner:
    (contents of `keys/fixture_public_key.b64`) in every string of the case.
 4. Writes `files` under the case root.
 5. Resets the updater to a just-started process (no config, no running patch).
+   Each `init` first registers `EngineCallbacks`, as the engine does: an HTTP
+   client and an RSA signature verifier.
 6. Runs `steps` in order. For each step: write `write_files`, queue `http`,
    make the `call` and compare its result with `expect`, wait until every
    queued exchange has been served (up to 10 s; some requests come from
-   background threads after the call returns), then check `expect_files` and
+   background threads after the call returns), wait for the updater's
+   background event sends to finish, then check `expect_files` and
    `expect_tree`.
 7. After the last step, waits 200 ms and fails on any request nobody
    expected. The server keeps listening for the rest of the run: a request
@@ -331,10 +334,6 @@ Some of what the corpus pins down is current behavior rather than a choice
 anyone would defend. A port must match it; changing it is its own PR that
 edits the case:
 
-- `patch_check/queued_events_sent_before_check`: only the first 3 queued
-  events are sent, but the whole queue is cleared.
-- `patch_check/event_send_failure_does_not_block_check`: an event that fails
-  to send is dropped, not re-queued.
 - `state_load/state_json_missing_field_resets`: a `state.json` that fails to
   parse for any reason resets, including its `client_id`.
 

@@ -648,6 +648,10 @@ fn call_init(env: &CaseEnv, step: &Value, case: &Value) -> Value {
         seek: base_seek,
         close: base_close,
     };
+    // The engine registers its HTTP client and signature verifier before
+    // init; stand in for it with the test ones.
+    let engine_callbacks = updater::testing_engine_callbacks();
+    unsafe { engine::shorebird_set_engine_callbacks(&engine_callbacks) };
     Value::Bool(engine::shorebird_init(&params, callbacks, yaml.as_ptr()))
 }
 
@@ -941,6 +945,9 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
         for e in server.wait_idle(REQUEST_TIMEOUT) {
             errors.push(format!("{label}: {e}"));
         }
+        // An event flush removes what the server took from the queue after
+        // its last request; let it finish before reading the state file.
+        updater::testing_wait_for_event_flushes();
         if let Some(files) = step.get("expect_files").and_then(Value::as_object) {
             for e in check_files(&root, files) {
                 errors.push(format!("{label}: {e}"));

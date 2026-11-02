@@ -764,7 +764,7 @@ fn queue_or_send_event(state: &mut UpdaterState, config: &UpdateConfig, event: P
 
 /// Waits for every flush [`spawn_event_flush`] started.
 #[cfg(any(test, feature = "test-hooks"))]
-pub(crate) fn testing_wait_for_event_flushes() {
+pub fn testing_wait_for_event_flushes() {
     let threads: Vec<_> = EVENT_FLUSH_THREADS
         .lock()
         .unwrap_or_else(|e| e.into_inner())

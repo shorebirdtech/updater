@@ -1,5 +1,5 @@
 {
-  "description": "Queued events are sent (at most 3, oldest first) before the patch check, then the whole queue is cleared, even events that were not sent.",
+  "description": "Up to 3 queued events are sent, oldest first, before the patch check. Each leaves the queue once the server has it; the rest wait for the next flush.",
   "files": {
     "storage/state.json": {
       "json": {
@@ -161,7 +161,19 @@
           "json": {
             "client_id": "00000000-0000-4000-8000-000000000001",
             "release_version": "1.0.0+1",
-            "queued_events": []
+            "queued_events": [
+              {
+                "app_id": "fixture-app-id",
+                "arch": "x86_64",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "type": "__patch_install_failure__",
+                "patch_number": 4,
+                "platform": "linux",
+                "release_version": "1.0.0+1",
+                "timestamp": 1700000000,
+                "message": "e4"
+              }
+            ]
           }
         }
       }
