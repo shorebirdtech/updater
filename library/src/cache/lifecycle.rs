@@ -403,14 +403,19 @@ pub enum DownloadAction {
     /// Bytes for this exact url+hash are fully on disk. Skip the network
     /// request entirely and proceed to install.
     Complete,
+    /// The patch is installed on disk but isn't `next_boot_patch` (the
+    /// device moved to another patch since installing it, e.g. by
+    /// switching tracks). Skip the network request and make it the
+    /// next-boot patch again.
+    Reselect,
     /// The patch is in a terminal state and shouldn't be re-fetched.
     Skip(SkipReason),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkipReason {
-    /// Already installed; `should_install_patch` returns NoUpdate to
-    /// avoid downloading the patch we're already running.
+    /// Already installed and already `next_boot_patch`; the update
+    /// returns NoUpdate, since there is nothing left to do.
     AlreadyInstalled,
     /// Tombstoned in this release. Subsequent attempts short-circuit.
     KnownBad,
@@ -467,9 +472,10 @@ impl PatchLifecycle {
                 }
             }
             Some(PatchState::Downloaded { .. }) => DownloadAction::Fresh,
-            Some(PatchState::Installed { .. }) => {
+            Some(PatchState::Installed { .. }) if self.pointers.next_boot_patch == Some(n) => {
                 DownloadAction::Skip(SkipReason::AlreadyInstalled)
             }
+            Some(PatchState::Installed { .. }) => DownloadAction::Reselect,
             // A signature refusal condemns only the exact (hash, signature)
             // pair refused, not the patch number: anyone able to send a bad
             // offer could otherwise block the genuine patch N on this device.
@@ -1408,20 +1414,31 @@ mod tests {
     }
 
     #[test]
-    fn decide_start_skips_installed() {
-        let (_tmp, lifecycle) = fixture();
-        lifecycle
-            .write_state(
-                1,
-                &PatchState::Installed {
-                    signature: None,
-                    size: 1000,
-                },
-            )
-            .unwrap();
+    fn decide_start_skips_installed_next_boot_patch() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 1000);
+        lifecycle.promote_to_next_boot(1).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "u", "h", None),
             DownloadAction::Skip(SkipReason::AlreadyInstalled)
+        );
+    }
+
+    #[test]
+    fn decide_start_reselects_installed_patch_that_is_not_next_boot() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 1000);
+        install_state(&lifecycle, 2, 1000);
+        lifecycle.promote_to_next_boot(1).unwrap();
+        assert_eq!(
+            lifecycle.decide_start(2, "u", "h", None),
+            DownloadAction::Reselect
+        );
+        // With no next-boot patch at all, an installed patch is reselected too.
+        lifecycle.pointers.next_boot_patch = None;
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", None),
+            DownloadAction::Reselect
         );
     }
 

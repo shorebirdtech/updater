@@ -447,9 +447,15 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
                 patch.hash_signature.as_deref(),
             ))
         })?;
+        // `Reselect` counts as available: nothing is fetched, but the
+        // patch only becomes next boot once `update` runs, and callers
+        // that see `false` here don't run it.
         Ok(matches!(
             action,
-            DownloadAction::Fresh | DownloadAction::Resume { .. } | DownloadAction::Complete
+            DownloadAction::Fresh
+                | DownloadAction::Resume { .. }
+                | DownloadAction::Complete
+                | DownloadAction::Reselect
         ))
     } else {
         Ok(false)
@@ -614,7 +620,11 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let patch_number = patch.number;
-    let result = download_and_install_patch(&config, &patch, action);
+    let result = if action == DownloadAction::Reselect {
+        reselect_installed_patch(&config, &patch)
+    } else {
+        download_and_install_patch(&config, &patch, action)
+    };
 
     if let Err(ref err) = result {
         // Queue a diagnostic event for the failed update attempt.
@@ -971,6 +981,47 @@ fn download_and_install_patch(
     }
 
     install_downloaded_patch(config, patch, &download_path)
+}
+
+/// Makes an already-installed patch the next-boot patch again, without
+/// fetching it. This is the path for a device that moved to a different
+/// patch (say, by switching to a track whose latest patch is lower) and is
+/// now offered this one again.
+///
+/// The offer gets the same checks a download does, against the bytes
+/// already on disk: its signature must verify, and the installed artifact
+/// must hash to the offered hash. A failure returns an error and changes
+/// no state. The patch is neither tombstoned nor removed, because it may
+/// be the patch the app is running. Bad patches never get here:
+/// `decide_start` skips them.
+///
+/// No `PatchDownload` event is sent, since nothing was downloaded.
+fn reselect_installed_patch(
+    config: &UpdateConfig,
+    patch: &crate::network::Patch,
+) -> anyhow::Result<UpdateStatus> {
+    crate::cache::check_patch_signature(
+        &patch.hash,
+        patch.hash_signature.as_deref(),
+        config.patch_public_key.as_deref(),
+    )
+    .context(UpdateError::InvalidSignature)?;
+
+    let installed_path =
+        lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch.number);
+    check_hash(&installed_path, &patch.hash).with_context(|| {
+        format!(
+            "Installed patch {} does not match the offered patch.",
+            patch.number
+        )
+    })?;
+
+    with_mut_state(|state| state.lifecycle_mut().promote_to_next_boot(patch.number))?;
+    shorebird_info!(
+        "Patch {} is already installed. It will be launched when the app next restarts.",
+        patch.number
+    );
+    Ok(UpdateStatus::UpdateInstalled)
 }
 
 /// Inflates the compressed bytes at `download_path` into the lifecycle's
