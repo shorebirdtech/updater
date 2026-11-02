@@ -4,7 +4,8 @@ name: ci
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Cancel superseded PR runs: a newer push's result covers the older one.
-  # Runs on main always finish so every commit gets a full result.
+  # Runs on main always finish so each commit has its own pass or fail,
+  # which shows which commit broke main.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

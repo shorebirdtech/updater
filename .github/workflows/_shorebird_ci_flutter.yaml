@@ -65,7 +65,7 @@ jobs:
         run: bloc lint .
       - if: inputs.has_unit_tests
         working-directory: ${{ inputs.package_path }}
-        run: flutter test --coverage
+        run: flutter test
       - name: Integration Tests
         if: inputs.has_integration_tests
         working-directory: ${{ inputs.package_path }}
