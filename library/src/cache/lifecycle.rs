@@ -731,7 +731,9 @@ impl PatchLifecycle {
     /// Sets `next_boot_patch` to a freshly Installed patch. Replaces any
     /// prior `next_boot_patch` that was Installed-but-never-booted (those
     /// are forgotten via [`cleanup`]); a Bad tombstone in that slot is
-    /// preserved.
+    /// preserved. A prior `next_boot_patch` that is booting right now
+    /// (`currently_booting_patch`, between launch start and launch
+    /// success) is kept, since the engine is loading its file.
     pub fn promote_to_next_boot(&mut self, n: usize) -> Result<()> {
         if !matches!(self.read_state(n), Some(PatchState::Installed { .. })) {
             bail!("promote_to_next_boot({n}) requires Installed state");
@@ -739,8 +741,9 @@ impl PatchLifecycle {
         // If we're replacing an Installed-but-never-booted previous
         // next_boot, retire it. cleanup handles tombstones correctly.
         let last_booted = self.pointers.last_booted_patch;
+        let booting = self.pointers.currently_booting_patch;
         if let Some(prev) = self.pointers.next_boot_patch {
-            if prev != n && Some(prev) != last_booted {
+            if prev != n && Some(prev) != last_booted && Some(prev) != booting {
                 self.cleanup(prev)?;
             }
         }
@@ -1627,6 +1630,23 @@ mod tests {
         lifecycle.save_pointers().unwrap();
         // Engine claims to boot 1 but our pointer says 2.
         assert!(lifecycle.record_boot_start(1).is_err());
+    }
+
+    #[test]
+    fn promote_to_next_boot_keeps_the_booting_patch() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 100);
+        lifecycle.promote_to_next_boot(1).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        // Patch 1 is booting for the first time, so it isn't last booted yet.
+        lifecycle.promote_to_next_boot(2).unwrap();
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+        assert!(lifecycle.installed_artifact_path(1).exists());
     }
 
     #[test]

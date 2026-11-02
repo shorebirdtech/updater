@@ -84,7 +84,8 @@ enum UpdateStatus {
   /// The app is up to date (e.g. running the latest patch.)
   upToDate,
 
-  /// A new update is available for download.
+  /// A new update is available to install: call `update` to download it,
+  /// or, if it is already on disk, to make it the next-boot patch.
   outdated,
 
   /// The app is up to date, but a restart is required for the update to take

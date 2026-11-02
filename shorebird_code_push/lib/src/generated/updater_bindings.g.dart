@@ -2384,7 +2384,7 @@ class UpdaterBindings {
   ///
   /// Returns true if an update exists that has not yet been downloaded, or if
   /// the offered patch is already installed but isn't the next-boot patch (so
-  /// `shorebird_update_with_result` would make it next boot without
+  /// `shorebird_update_with_result` would make it next boot, usually without
   /// downloading it).
   bool shorebird_check_for_downloadable_update(
     ffi.Pointer<ffi.Char> c_channel,

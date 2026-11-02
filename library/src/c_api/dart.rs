@@ -95,7 +95,7 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
 ///
 /// Returns true if an update exists that has not yet been downloaded, or if
 /// the offered patch is already installed but isn't the next-boot patch (so
-/// `shorebird_update_with_result` would make it next boot without
+/// `shorebird_update_with_result` would make it next boot, usually without
 /// downloading it).
 #[no_mangle]
 pub extern "C" fn shorebird_check_for_downloadable_update(c_channel: *const c_char) -> bool {

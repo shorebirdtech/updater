@@ -1001,9 +1001,9 @@ fn download_and_install_patch(
 ///
 /// Installed bytes that don't hash to the offer or can't be read (corrupted
 /// or missing on disk, or a patch number re-uploaded with different
-/// contents) are replaced by a
-/// fresh download, unless they are the running patch, whose file is in
-/// use; then this returns an error and changes nothing.
+/// contents) are replaced by a fresh download, unless they are the running
+/// patch, whose file is in use; then this returns an error and changes
+/// nothing.
 ///
 /// Bad patches never get here: `decide_start` skips them. No
 /// `PatchDownload` event is sent when nothing is downloaded.

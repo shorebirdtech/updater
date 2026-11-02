@@ -1256,6 +1256,37 @@ mod test {
         assert_eq!(shorebird_current_boot_patch_number(), 2);
     }
 
+    /// A reselect that lands while another patch is booting for the first
+    /// time (the launch auto-update thread runs during boot) leaves the
+    /// booting patch in place.
+    #[serial]
+    #[test]
+    fn reselect_during_first_boot_keeps_the_booting_patch() {
+        let tmp_dir = TempDir::new().unwrap();
+        boot_patch_2_from_stable(&tmp_dir);
+        update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
+
+        // Restart: patch 1 starts booting, and auto-update (stable)
+        // reselects patch 2 before the launch succeeds.
+        testing_reset_config();
+        init_two_track_app(&tmp_dir);
+        set_two_track_hooks();
+        shorebird_report_launch_start();
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 2);
+        assert!(crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 1).exists());
+
+        shorebird_report_launch_success();
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+
+        // Next launch boots patch 2, which then removes patch 1.
+        restart_two_track_app(&tmp_dir);
+        assert_eq!(shorebird_current_boot_patch_number(), 2);
+        assert!(!crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 1).exists());
+        assert_eq!(DOWNLOADS.load(Ordering::SeqCst), 2);
+    }
+
     /// A patch that failed to boot stays refused when it is offered again.
     #[serial]
     #[test]
