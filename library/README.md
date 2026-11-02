@@ -231,7 +231,7 @@ offer is not retried for the rest of the release. A differently signed offer
 of the same patch number is still considered. The modes differ only in
 whether the installed patch is verified again on every boot.
 
-#### Strict Mode (default)
+#### Strict Mode
 
 ```yaml
 patch_verification: strict
@@ -248,13 +248,11 @@ an attacker has compromised the system (rooted) they could already modify the
 APK/IPA internals directly. The on-boot protection here is for cases where
 developers are concerned that their app might be compromised and they wish to
 ensure that such a compromise could not theoretically persist itself via editing
-an installed patch file. Such a case is impractical, but we default to the
-strongest-possible security stance regardless.
+an installed patch file. Such a case is impractical, which is why Strict mode
+is opt-in.
 
-Strict mode is currently default for Shorebird, however some of our large
-customers requested that we add an install_only mode, since their applications
-were so large (many hundreds of mb) that the hash-verification during boot
-was showing up on profiles from older devices.
+Re-hashing the patch costs boot time on every launch, growing with patch size:
+about 29 ms for a 42.5 MB patch on an iPhone 14 Pro (measured 2026-10-24).
 
 **Install flow:**
 
@@ -271,7 +269,7 @@ was showing up on profiles from older devices.
 3. `check_signature()`: Verify the computed hash has a valid signature using the public key
 4. If verification fails, fall back to last known good patch or base release
 
-#### Install Only Mode
+#### Install Only Mode (default)
 
 ```yaml
 patch_verification: install_only

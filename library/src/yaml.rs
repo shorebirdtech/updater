@@ -1,13 +1,14 @@
 /// Controls when patch signature verification occurs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PatchVerificationMode {
-    /// Verify patch signature at boot time (default, most secure).
-    /// The patch is verified each time the app boots, ensuring
-    /// the patch file hasn't been tampered with since installation.
-    #[default]
+    /// Verify patch signature at install time and again at every boot.
+    /// Re-hashing the patch on each boot also catches a patch file changed
+    /// on disk after installation, at the cost of boot time.
     Strict,
-    /// Verify patch signature only at install time.
-    /// Faster boot times but less protection against post-install tampering.
+    /// Verify patch signature at install time only (default).
+    /// A forged or tampered offer is refused before it is downloaded, so
+    /// this covers a network attacker; it skips the per-boot re-hash.
+    #[default]
     InstallOnly,
 }
 
@@ -25,7 +26,7 @@ pub struct YamlConfig {
     pub auto_update: Option<bool>,
     /// Base64-encoded public key for verifying patch hash signatures.
     pub patch_public_key: Option<String>,
-    /// When to verify patch signatures. Defaults to "strict" (verify at boot time).
+    /// When to verify patch signatures. Defaults to "install_only" (verify at install time).
     pub patch_verification: Option<PatchVerificationMode>,
 }
 
@@ -129,18 +130,18 @@ app_id: test_app
 "#;
         let config = YamlConfig::from_yaml(yaml).unwrap();
         assert_eq!(config.patch_verification, None);
-        // When unwrapped with default, should be Strict
+        // When unwrapped with default, should be InstallOnly
         assert_eq!(
             config.patch_verification.unwrap_or_default(),
-            PatchVerificationMode::Strict
+            PatchVerificationMode::InstallOnly
         );
     }
 
     #[test]
-    fn default_verification_mode_is_strict() {
+    fn default_verification_mode_is_install_only() {
         assert_eq!(
             PatchVerificationMode::default(),
-            PatchVerificationMode::Strict
+            PatchVerificationMode::InstallOnly
         );
     }
 
