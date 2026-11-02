@@ -179,11 +179,21 @@ pub struct ReleasePointers {
     #[serde(default)]
     pub boot_process_token: Option<String>,
 
-    /// How many launches in a row of `currently_booting_patch` the OS ended
-    /// with a kill. A patch can get its own process killed (memory it
-    /// allocates at launch), so only [`MAX_BOOT_KILLS`] are forgiven.
+    /// Kills forgiven in a row while booting one patch. A patch can get its
+    /// own process killed (memory it allocates at launch), so only
+    /// [`MAX_BOOT_KILLS`] are forgiven. Names its patch, so kills of one
+    /// patch never count against another.
     #[serde(default)]
-    pub boot_kills: u32,
+    pub boot_kills: Option<BootKills>,
+}
+
+/// See [`ReleasePointers::boot_kills`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BootKills {
+    /// The patch whose launches the OS killed.
+    pub patch: usize,
+    /// How many of its launches in a row, since it last booted or failed.
+    pub count: u32,
 }
 
 /// Kills in a row forgiven while booting one patch before the next death
@@ -757,10 +767,21 @@ impl PatchLifecycle {
     /// Returns false, changing nothing, once [`MAX_BOOT_KILLS`] kills in a
     /// row have been forgiven; the caller then treats it as a crash.
     pub fn record_boot_killed(&mut self) -> Result<bool> {
-        if self.pointers.boot_kills >= MAX_BOOT_KILLS {
+        let n = self
+            .pointers
+            .currently_booting_patch
+            .context("record_boot_killed without currently_booting_patch")?;
+        let count = match &self.pointers.boot_kills {
+            Some(kills) if kills.patch == n => kills.count,
+            _ => 0,
+        };
+        if count >= MAX_BOOT_KILLS {
             return Ok(false);
         }
-        self.pointers.boot_kills += 1;
+        self.pointers.boot_kills = Some(BootKills {
+            patch: n,
+            count: count + 1,
+        });
         self.clear_breadcrumb();
         self.save_pointers()?;
         Ok(true)
@@ -796,7 +817,7 @@ impl PatchLifecycle {
             .context("record_boot_success without currently_booting_patch")?;
         self.pointers.last_booted_patch = Some(n);
         self.clear_breadcrumb();
-        self.pointers.boot_kills = 0;
+        self.pointers.boot_kills = None;
         self.save_pointers()?;
         self.release_boot_lock();
         self.cleanup_older_than(n);
@@ -825,7 +846,7 @@ impl PatchLifecycle {
         }
         self.mark_bad(n, BadReason::BootCrash)?;
         self.clear_breadcrumb();
-        self.pointers.boot_kills = 0;
+        self.pointers.boot_kills = None;
         self.save_pointers()?;
         self.release_boot_lock();
         self.recompute_next_boot()
@@ -1387,7 +1408,7 @@ mod tests {
                 currently_booting_patch: None,
                 boot_started_at: None,
                 boot_process_token: None,
-                boot_kills: 0,
+                boot_kills: None,
             };
             lifecycle.save_pointers().unwrap();
         }
@@ -2086,7 +2107,13 @@ mod tests {
             lifecycle.record_boot_start(1, Some("p")).unwrap();
             assert!(lifecycle.record_boot_killed().unwrap());
             let reloaded = reload_at(tmp.path());
-            assert_eq!(reloaded.pointers().boot_kills, kills);
+            assert_eq!(
+                reloaded.pointers().boot_kills,
+                Some(BootKills {
+                    patch: 1,
+                    count: kills
+                })
+            );
             assert_eq!(reloaded.pointers().currently_booting_patch, None);
             assert_eq!(reloaded.pointers().boot_process_token, None);
             assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
@@ -2101,8 +2128,42 @@ mod tests {
         lifecycle.record_boot_start(1, Some("p")).unwrap();
         assert!(!lifecycle.record_boot_killed().unwrap());
         let reloaded = reload_at(tmp.path());
-        assert_eq!(reloaded.pointers().boot_kills, MAX_BOOT_KILLS);
+        assert_eq!(
+            reloaded.pointers().boot_kills.as_ref().map(|k| k.count),
+            Some(MAX_BOOT_KILLS)
+        );
         assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+    }
+
+    #[test]
+    fn kills_of_one_patch_dont_count_against_another() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        for _ in 0..MAX_BOOT_KILLS {
+            lifecycle.record_boot_start(1, Some("p")).unwrap();
+            assert!(lifecycle.record_boot_killed().unwrap());
+        }
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+
+        for kills in 1..=MAX_BOOT_KILLS {
+            lifecycle.record_boot_start(2, Some("p")).unwrap();
+            assert!(lifecycle.record_boot_killed().unwrap());
+            assert_eq!(
+                reload_at(tmp.path()).pointers().boot_kills,
+                Some(BootKills {
+                    patch: 2,
+                    count: kills
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn record_boot_killed_errs_without_breadcrumb() {
+        let (_tmp, mut lifecycle) = fixture_booting_1();
+        assert!(lifecycle.record_boot_killed().is_err());
+        assert_eq!(lifecycle.pointers().boot_kills, None);
     }
 
     #[test]
@@ -2112,7 +2173,7 @@ mod tests {
         assert!(lifecycle.record_boot_killed().unwrap());
         lifecycle.record_boot_start(1, Some("p")).unwrap();
         lifecycle.record_boot_success().unwrap();
-        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, 0);
+        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, None);
     }
 
     #[test]
@@ -2122,7 +2183,7 @@ mod tests {
         assert!(lifecycle.record_boot_killed().unwrap());
         lifecycle.record_boot_start(1, Some("p")).unwrap();
         lifecycle.record_boot_failure(1).unwrap();
-        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, 0);
+        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, None);
     }
 
     /// A `pointers.json` written by an updater from before process tokens
@@ -2138,7 +2199,7 @@ mod tests {
         let reloaded = reload_at(tmp.path());
         assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
         assert_eq!(reloaded.pointers().boot_process_token, None);
-        assert_eq!(reloaded.pointers().boot_kills, 0);
+        assert_eq!(reloaded.pointers().boot_kills, None);
     }
 
     #[test]

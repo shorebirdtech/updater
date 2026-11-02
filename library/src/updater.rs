@@ -272,15 +272,18 @@ pub struct PreviousExit {
 
 impl PreviousExit {
     /// Whether the OS ended the process for a reason that says nothing
-    /// about the patch it was running: memory pressure, the user, or a
-    /// change to permissions, a dependency or the package. Every other
-    /// reason, including `OTHER` and `UNKNOWN`, counts as a crash, so a
-    /// death we can't place errs toward rolling the patch back.
+    /// about the patch it was running: memory pressure, the user's profile
+    /// stopping, or a change to permissions, a dependency or the package.
+    /// Every other reason, including `OTHER` and `UNKNOWN`, counts as a
+    /// crash, so a death we can't place errs toward rolling the patch back.
+    /// That includes `USER_REQUESTED` (force stop, and swipe-away on some
+    /// versions): leaving the foreground closes the launch window, so a
+    /// user who ends a launch still in its window is giving up on a hung
+    /// app.
     pub fn is_kill(&self) -> bool {
         // https://developer.android.com/reference/android/app/ApplicationExitInfo
         const REASON_LOW_MEMORY: i32 = 3;
         const REASON_PERMISSION_CHANGE: i32 = 8;
-        const REASON_USER_REQUESTED: i32 = 10;
         const REASON_USER_STOPPED: i32 = 11;
         const REASON_DEPENDENCY_DIED: i32 = 12;
         const REASON_PACKAGE_STATE_CHANGE: i32 = 15;
@@ -289,7 +292,6 @@ impl PreviousExit {
             self.reason,
             REASON_LOW_MEMORY
                 | REASON_PERMISSION_CHANGE
-                | REASON_USER_REQUESTED
                 | REASON_USER_STOPPED
                 | REASON_DEPENDENCY_DIED
                 | REASON_PACKAGE_STATE_CHANGE
@@ -4180,9 +4182,9 @@ mod state_recovery_tests {
         let kills: Vec<i32> = (0..=16)
             .filter(|reason| exit("p", *reason).unwrap().is_kill())
             .collect();
-        // LOW_MEMORY, PERMISSION_CHANGE, USER_REQUESTED, USER_STOPPED,
-        // DEPENDENCY_DIED, PACKAGE_STATE_CHANGE, PACKAGE_UPDATED.
-        assert_eq!(kills, vec![3, 8, 10, 11, 12, 15, 16]);
+        // LOW_MEMORY, PERMISSION_CHANGE, USER_STOPPED, DEPENDENCY_DIED,
+        // PACKAGE_STATE_CHANGE, PACKAGE_UPDATED.
+        assert_eq!(kills, vec![3, 8, 11, 12, 15, 16]);
     }
 
     /// An engine built and never run: the process ends after paused, and

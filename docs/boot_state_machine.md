@@ -49,6 +49,7 @@ release.
        │
        ├─► Check currently_booting_patch
        │   └─► If set: previous boot crashed → mark patch Bad, fall back
+       │       (Android 11+: unless the OS says it was killed → boot it again)
        │
        ▼
     Engine validates and gets next_boot_patch path
@@ -130,13 +131,26 @@ On Android 11+ the engine gives each process a token, both to the OS
 the OS's record of how the previous one ended (`ApplicationExitInfo`) and
 passes its token and reason to `init()` as `previous_exit`. If the breadcrumb
 is armed, its token matches the record's, and the reason is a kill (low
-memory, the user, a permission, dependency or package change; see
-`PreviousExit::is_kill`), the breadcrumb is cleared and the patch boots
-again, with no event. Only `MAX_BOOT_KILLS` kills in a row are forgiven,
-since a patch can get its own process killed (memory it allocates at
-launch); the next death counts as a crash. Any other reason, a missing record, a token mismatch,
-or any other platform marks the patch `Bad` as above. Nothing about the
-reason leaves the device.
+memory, the user's profile stopping, a permission, dependency or package
+change; see `PreviousExit::is_kill`), the breadcrumb is cleared and the
+patch boots again, with no event. Only `MAX_BOOT_KILLS` kills in a row of
+one patch are forgiven (`boot_kills` names the patch), since a patch can
+get its own process killed (memory it allocates at launch); the next death
+counts as a crash. Success and failure reset the count. Any other reason
+(a force stop of a launch still in its window is a user giving up on a hung
+app), a missing record, a token mismatch, or any other platform marks the
+patch `Bad` as above. Nothing about the reason leaves the device.
+
+What `init()` does with an armed breadcrumb for patch N:
+
+| Breadcrumb token | OS record (`previous_exit`) | Reason | Kills of N in a row | Result |
+|---|---|---|---|---|
+| none (older engine or updater) | any | any | any | N `Bad`, event |
+| T | none (Android < 11, other platforms, no summary) | | any | N `Bad`, event |
+| T | another token | any | any | N `Bad`, event |
+| T | T | not a kill (crash, ANR, `USER_REQUESTED`, `SIGNALED`, `OTHER`, ...) | any | N `Bad`, event |
+| T | T | a kill | < `MAX_BOOT_KILLS` | N boots again, count + 1, no event |
+| T | T | a kill | `MAX_BOOT_KILLS` | N `Bad`, event |
 
 ### Patch Load Failure
 
