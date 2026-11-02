@@ -8,6 +8,8 @@ pub enum PatchVerificationMode {
     /// Verify patch signature at install time only (default).
     /// A forged or tampered offer is refused before it is downloaded, so
     /// this covers a network attacker; it skips the per-boot re-hash.
+    /// Default only because install-time verification (#396) exists: never
+    /// backport this default to an updater without it.
     #[default]
     InstallOnly,
 }
