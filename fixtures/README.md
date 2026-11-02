@@ -196,11 +196,14 @@ update thread is still running, say):
   step's last HTTP exchange must have `"hold": true` in its response, and no
   other may: the server takes that request but holds its response. The step
   ends once the held request has arrived (the call is then mid-flight, at a
-  known point) and fails if the call returns first. It cannot have `expect`.
-  One background call at a time.
+  known point) and fails if the call returns first. The held request must be
+  one the call sends itself, not one from a background thread (an event
+  flush): `await` fails if the call returned before the release. It cannot
+  have `expect`. One background call at a time.
 - Later steps run while it waits. Each must return within 10 s; a call that
   waits for the background one fails the case.
-- `{"call": "await"}` queues its own `http` (what the background call sends
+- `{"call": "await"}` (with only `http`, `write_files` and expectations)
+  queues its own `http` (what the background call sends
   after the held request), releases the held response, waits for the
   background call to return, and compares its result with `expect`.
 
@@ -244,8 +247,9 @@ always the full body length (a case may not set it). Extra `headers` are
 added.
 The connection is always closed after the response. `close_after_bytes` sends
 the headers for the full body but only the first N body bytes, then closes (an
-interrupted download). `drop_connection` closes without sending anything. `hold` answers only once
-an `await` step releases it (see [Overlapping calls](#overlapping-calls)).
+interrupted download). `drop_connection` closes without sending anything.
+`hold` answers only once an `await` step releases it (see
+[Overlapping calls](#overlapping-calls)).
 
 ### File specs (what to write)
 
@@ -367,7 +371,6 @@ edits the case:
 
 - `state_load/state_json_missing_field_resets`: a `state.json` that fails to
   parse for any reason resets, including its `client_id`.
-
 - `boot/second_launch_start_in_process_boots_new_patch`: a second
   `report_launch_start` in one process, after an install, records the new
   patch as booting though the first engine still runs the old one. The

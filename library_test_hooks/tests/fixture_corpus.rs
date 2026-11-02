@@ -188,6 +188,9 @@ struct ServerState {
     /// many of those a `release` has let through.
     holds_seen: usize,
     holds_released: usize,
+    /// Set once the runner gives up on a background call: every hold, even
+    /// one that arrives later, is answered at once.
+    release_all: bool,
 }
 
 struct FakeServer {
@@ -366,11 +369,15 @@ impl FakeServer {
                                     match match_request(&exchange.request, &request) {
                                         Ok(()) if exchange.response["hold"] == true => {
                                             // Answer only once a later step
-                                            // releases it (or the case ends).
+                                            // releases it, or the runner has
+                                            // given up on holding.
                                             let ticket = guard.holds_seen;
                                             guard.holds_seen += 1;
+                                            if guard.release_all {
+                                                guard.holds_released = guard.holds_seen;
+                                            }
                                             state.1.notify_all();
-                                            while !guard.closed && guard.holds_released <= ticket {
+                                            while guard.holds_released <= ticket {
                                                 guard = state.1.wait(guard).unwrap();
                                             }
                                             Some(exchange.response)
@@ -413,7 +420,7 @@ impl FakeServer {
     /// recorded instead of refused.
     fn close(&self) {
         self.state.0.lock().unwrap().closed = true;
-        self.state.1.notify_all();
+        self.release_all_holds();
     }
 
     fn holds_seen(&self) -> usize {
@@ -442,6 +449,16 @@ impl FakeServer {
     /// Lets every held request that has arrived get its response.
     fn release_holds(&self) {
         let mut guard = self.state.0.lock().unwrap();
+        guard.holds_released = guard.holds_seen;
+        self.state.1.notify_all();
+    }
+
+    /// Like `release_holds`, and a held request that arrives later is
+    /// answered at once: for giving up on a background call that may not
+    /// have reached its hold yet.
+    fn release_all_holds(&self) {
+        let mut guard = self.state.0.lock().unwrap();
+        guard.release_all = true;
         guard.holds_released = guard.holds_seen;
         self.state.1.notify_all();
     }
@@ -870,6 +887,21 @@ fn validate_case(case: &Value) -> Vec<String> {
             p,
         );
         let call = step["call"].as_str().unwrap_or_default();
+        if call == "await" {
+            check_keys(
+                step,
+                &[
+                    "call",
+                    "write_files",
+                    "http",
+                    "expect",
+                    "expect_files",
+                    "expect_tree",
+                ],
+                &at,
+                p,
+            );
+        }
         let has_result = CALLS_WITH_RESULT.contains(&call);
         let background = step.get("background").is_some();
         let holds: Vec<usize> = step["http"]
@@ -1028,6 +1060,18 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
         }
         let result = if step["call"] == "await" {
             match background.take() {
+                // The held request must be one the call itself sends: if it
+                // came from another thread (an event flush), the call has
+                // already returned and the case tested no overlap.
+                Some(handle) if handle.is_finished() => {
+                    server.release_all_holds();
+                    let _ = handle.join();
+                    Err(
+                        "the background call returned before its held response was released: \
+                         the held request must be one the call itself sends"
+                            .to_string(),
+                    )
+                }
                 Some(handle) => {
                     server.release_holds();
                     handle
@@ -1047,7 +1091,7 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
                     background = Some(handle);
                     Ok(None)
                 } else {
-                    server.release_holds();
+                    server.release_all_holds();
                     let returned = handle.join();
                     Err(format!(
                         "the background call never reached its held request (it returned {returned:?})"
@@ -1065,7 +1109,7 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
             }
             let timed_out = !handle.is_finished();
             if timed_out {
-                server.release_holds();
+                server.release_all_holds();
             }
             match handle.join() {
                 Ok(Ok(result)) if !timed_out => Ok(result),
@@ -1111,7 +1155,7 @@ fn run_case(name: &str, mut case: Value) -> Result<(), Vec<String>> {
         }
     }
     if let Some(handle) = background.take() {
-        server.release_holds();
+        server.release_all_holds();
         let _ = handle.join();
         if errors.is_empty() {
             errors.push("a background call was never awaited".to_string());
