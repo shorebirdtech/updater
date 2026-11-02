@@ -93,7 +93,10 @@ pub extern "C" fn shorebird_next_boot_patch_number() -> usize {
 ///   2. The channel specified in shorebird.yaml
 ///   3. The default "stable" channel
 ///
-/// Returns true if an update exists that has not yet been downloaded.
+/// Returns true if an update exists that has not yet been downloaded, or if
+/// the offered patch is already installed but isn't the next-boot patch (so
+/// `shorebird_update_with_result` would make it next boot without
+/// downloading it).
 #[no_mangle]
 pub extern "C" fn shorebird_check_for_downloadable_update(c_channel: *const c_char) -> bool {
     log_on_error(

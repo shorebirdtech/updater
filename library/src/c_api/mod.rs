@@ -1289,10 +1289,10 @@ mod test {
     }
 
     /// An installed patch whose bytes no longer hash to the offered hash is
-    /// not made next boot, and is left on disk as it was.
+    /// downloaded again rather than made next boot as it is.
     #[serial]
     #[test]
-    fn installed_patch_that_does_not_match_offer_is_not_reselected() {
+    fn installed_patch_that_does_not_match_offer_is_downloaded_again() {
         let tmp_dir = TempDir::new().unwrap();
         boot_patch_2_from_stable(&tmp_dir);
         update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
@@ -1300,14 +1300,41 @@ mod test {
         assert_eq!(shorebird_current_boot_patch_number(), 1);
 
         let patch_2 = crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2);
+        let genuine = std::fs::read(&patch_2).unwrap();
+        let mut tampered = genuine.clone();
+        tampered[0] ^= 0xff;
+        std::fs::write(&patch_2, &tampered).unwrap();
+
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 2);
+        assert_eq!(std::fs::read(&patch_2).unwrap(), genuine);
+        assert_eq!(DOWNLOADS.load(Ordering::SeqCst), 3);
+        assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
+    }
+
+    /// The running patch's file is in use, so when its bytes no longer hash
+    /// to the offered hash it is left in place: update fails and changes
+    /// nothing. Check still reports an update, since it doesn't hash the
+    /// installed bytes.
+    #[serial]
+    #[test]
+    fn running_patch_that_does_not_match_offer_is_left_in_place() {
+        let tmp_dir = TempDir::new().unwrap();
+        boot_patch_2_from_stable(&tmp_dir);
+        update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+
+        let patch_2 = crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2);
         let mut bytes = std::fs::read(&patch_2).unwrap();
         bytes[0] ^= 0xff;
         std::fs::write(&patch_2, &bytes).unwrap();
 
         run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_ERROR);
+        assert_eq!(shorebird_current_boot_patch_number(), 2);
         assert_eq!(shorebird_next_boot_patch_number(), 1);
         assert_eq!(std::fs::read(&patch_2).unwrap(), bytes);
         assert_eq!(DOWNLOADS.load(Ordering::SeqCst), 2);
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
     }
 
     /// Pins today's behavior for two updates on different tracks before a
