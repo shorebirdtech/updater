@@ -140,10 +140,19 @@ and the ordering; the Rust library does not guard these calls itself.
 - **`report_launch_start()`**: `ResolveIsolateData()` in
   `runtime/dart_snapshot.cc`, when the engine resolves the isolate snapshot
   it is about to load.
-- **`report_launch_success()`** / **`report_launch_failure()`**: the
-  `Shell::Shell()` constructor in `shell/common/shell.cc`, depending on whether
-  the Dart VM was created. `report_launch_failure()` is also called from
-  `TryLoadFromPatch()` on a patch load failure.
+- **`report_launch_paused()`**: the `Shell::Shell()` constructor in
+  `shell/common/shell.cc` when the Dart VM was created;
+  `report_launch_failure()` there when it wasn't.
+- **`report_launch_resumed()`**: `Engine::Run()` in `shell/common/engine.cc`,
+  for the first engine to launch its root isolate, which owns the launch
+  window. `report_launch_failure()` there if that root isolate fails to
+  launch.
+- **`report_launch_success()`**: the shim's `CloseLaunchWindow()`, from a
+  delayed task 5 s after the owner's root isolate launched, from any engine's
+  `paused` or `detached` lifecycle message, from iOS entering the background,
+  or from the owner engine's destructor.
+- `report_launch_failure()` is also called from `TryLoadFromPatch()` and
+  `LoadPatchOrBase()` on a patch load failure.
 - **`start_update_thread()`**: from the shim's `ReportLaunchSuccess()`, after
   the success report, when `init()` succeeded and auto-update is enabled.
 

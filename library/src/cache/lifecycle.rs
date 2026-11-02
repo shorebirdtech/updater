@@ -1726,6 +1726,72 @@ mod tests {
         assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
     }
 
+    /// A process that dies while writing pointers.json dies before the
+    /// rename, leaving a partial `pointers.json.tmp` and the previous
+    /// pointers in place. Dying while writing the success leaves the patch
+    /// armed (blamed next launch); dying while writing the arm leaves it
+    /// unarmed. Either way the next process reads a whole file, and its
+    /// next write replaces the leftover temp file.
+    #[test]
+    fn death_mid_pointers_write_leaves_the_previous_pointers() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        let tmp_file = tmp.path().join(format!("{POINTERS_FILE}.tmp"));
+
+        // Death while writing the arm: on disk, still unarmed.
+        std::fs::write(&tmp_file, r#"{"next_boot_patch":1,"currently_booting"#).unwrap();
+        let mut reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, None);
+        assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
+
+        // The next process arms normally over the leftover temp file.
+        reloaded.record_boot_resume(1).unwrap();
+        assert!(!tmp_file.exists());
+
+        // Death while writing the success: on disk, still armed.
+        std::fs::write(&tmp_file, r#"{"next_boot_patch":1,"last_booted_pa"#).unwrap();
+        let mut reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert_eq!(reloaded.detect_boot_crash_on_init().unwrap(), Some(1));
+        assert!(matches!(
+            reloaded.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::BootCrash,
+                ..
+            })
+        ));
+    }
+
+    /// Known gap, unchanged by the launch window: two processes of one app
+    /// (Android `android:process`) share pointers.json with no lock. A
+    /// second process that starts and pauses while the first is in its
+    /// window disarms the first, so the first dying there blames nothing.
+    /// It errs toward keeping the patch, never toward marking it Bad.
+    #[test]
+    fn second_process_pause_disarms_the_first() {
+        let (tmp, mut first) = fixture();
+        install_state(&first, 1, 100);
+        first.pointers.next_boot_patch = Some(1);
+        first.save_pointers().unwrap();
+        first.record_boot_start(1).unwrap();
+        first.record_boot_pause().unwrap();
+        first.record_boot_resume(1).unwrap();
+
+        let mut second = reload_at(tmp.path());
+        second.record_boot_start(1).unwrap();
+        second.record_boot_pause().unwrap();
+
+        // The first process dies in its window.
+        let mut next = reload_at(tmp.path());
+        assert_eq!(next.detect_boot_crash_on_init().unwrap(), None);
+        assert!(matches!(
+            next.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+    }
+
     #[test]
     fn record_boot_resume_errs_unless_installed() {
         let (_tmp, mut lifecycle) = fixture();
