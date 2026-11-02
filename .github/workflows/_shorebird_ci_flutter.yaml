@@ -29,22 +29,28 @@ on:
         required: false
         default: ""
         type: string
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+permissions:
+  contents: read
 
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
       - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ inputs.flutter_version || '' }}
           channel: ${{ inputs.flutter_version && '' || 'stable' }}
       - name: Setup Bloc Tools
         if: inputs.has_bloc_lint
-        uses: felangel/setup-bloc-tools@v0
+        uses: felangel/setup-bloc-tools@7be2b47e63c845e5a92032c6ff2243f42cda65f3 # v0.1.1
       - name: Install Dependencies
         working-directory: ${{ inputs.package_path }}
         run: |
@@ -64,9 +70,10 @@ jobs:
         working-directory: ${{ inputs.package_path }}
         run: flutter test --coverage
       - if: inputs.has_unit_tests
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           flags: ${{ inputs.package_name }}
+          token: ${{ secrets.CODECOV_TOKEN }}
           working-directory: ${{ inputs.package_path }}
       - name: Integration Tests
         if: inputs.has_integration_tests

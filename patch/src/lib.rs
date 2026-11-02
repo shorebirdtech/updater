@@ -1,26 +1,20 @@
 use bidiff::DiffParams;
 use std::io::{BufWriter, Seek, Write};
 
-use comde::com::Compressor;
-use comde::zstd::ZstdCompressor;
+/// zstd level for patches (the maximum; patches are made once and
+/// downloaded by every device).
+const ZSTD_LEVEL: i32 = 21;
 
 pub fn make_patch<WS>(older: Vec<u8>, newer: Vec<u8>, patch: &mut WS)
 where
     WS: Write + Seek,
 {
-    let (mut patch_r, mut patch_w) = pipe::pipe();
     let diff_params = DiffParams::new(1, None).unwrap();
-    std::thread::spawn(move || {
-        bidiff::simple_diff_with_params(&older[..], &newer[..], &mut patch_w, &diff_params)
-            .unwrap();
-    });
-
-    let compressor = ZstdCompressor::new();
-
     let mut compatch_w = BufWriter::new(patch);
-    compressor
-        .compress(&mut compatch_w, &mut patch_r)
-        .expect("compress patch");
+    let mut encoder = zstd::Encoder::new(&mut compatch_w, ZSTD_LEVEL).expect("start compressor");
+    bidiff::simple_diff_with_params(&older[..], &newer[..], &mut encoder, &diff_params)
+        .expect("diff");
+    encoder.finish().expect("compress patch");
     compatch_w.flush().expect("flush patch");
 }
 

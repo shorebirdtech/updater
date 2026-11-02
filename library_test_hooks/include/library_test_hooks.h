@@ -28,7 +28,7 @@ SHOREBIRD_EXPORT void shorebird_test_reset(void);
 
 /**
  * Test-only convenience wrapper around `shorebird_init` that builds
- * `AppParameters` and stub `FileCallbacks` internally. Dart tests
+ * `AppParameters` and `FileCallbacks` serving `libapp_path` internally. Dart tests
  * pass plain C strings instead of needing bindings for those
  * engine-API structs.
  */

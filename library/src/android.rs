@@ -100,7 +100,7 @@ struct ZipLocation {
 /// Given a zip file, check if it contains the library we want.
 fn check_for_lib_path(zip_path: &Path, lib_path: &str) -> anyhow::Result<ZipLocation> {
     let apk = zip::ZipArchive::new(fs::File::open(zip_path)?)?;
-    if apk.file_names().any(|name| name == lib_path) {
+    if apk.index_for_name(lib_path).is_some() {
         return Ok(ZipLocation {
             archive: apk,
             internal_path: lib_path.to_owned(),

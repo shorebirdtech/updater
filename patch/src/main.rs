@@ -5,10 +5,6 @@ use std::time::Instant;
 // https://github.com/divvun/bidiff/blob/main/crates/bic/src/main.rs
 // and then hacked down to just service our needs.
 
-// comde is just a wrapper around various compression/decompression libraries.
-// and we could just depend on the zstd crate directly if we end up using
-// zstd long term.
-
 fn main() {
     let mut args = std::env::args();
     if args.len() < 4 {

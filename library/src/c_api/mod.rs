@@ -1048,6 +1048,150 @@ mod test {
         assert_eq!(shorebird_next_boot_patch_number(), 1);
     }
 
+    /// Answers patch checks per channel as the patch-check server does
+    /// today (it answers each channel's latest patch and doesn't read the
+    /// device's `currentPatchNumber`; this test assumes that). "stable" holds
+    /// patch 2, "beta" patch 1, and "empty" nothing. Patch 2's download
+    /// is `HELLO_PATCH_2_PATCH`, patch 1's `HELLO_TESTS_PATCH`.
+    fn set_two_track_hooks() {
+        testing_set_network_hooks(
+            |_url, request| {
+                let patch = match request.channel.as_str() {
+                    "stable" => Some((2, HELLO_PATCH_2_PATCH.hash)),
+                    "beta" => Some((1, HELLO_TESTS_PATCH.hash)),
+                    _ => None,
+                };
+                Ok(PatchCheckResponse {
+                    patch_available: patch.is_some(),
+                    patch: patch.map(|(number, hash)| crate::Patch {
+                        number,
+                        hash: hash.to_owned(),
+                        download_url: number.to_string(),
+                        hash_signature: None,
+                    }),
+                    rolled_back_patch_numbers: Some(vec![]),
+                })
+            },
+            |url, dest: &Path, _resume_from: u64| match url {
+                "2" => HELLO_PATCH_2_PATCH.write_to(dest),
+                _ => HELLO_TESTS_PATCH.write_to(dest),
+            },
+            |_url, _event| Ok(()),
+        );
+    }
+
+    fn init_two_track_app(tmp_dir: &TempDir) {
+        let fake_libapp_path = tmp_dir.path().join("lib/arch/ignored.so");
+        let c_params = parameters(tmp_dir, fake_libapp_path.to_str().unwrap());
+        // No channel in shorebird.yaml, so a null channel (the launch
+        // auto-update thread) checks "stable".
+        let c_yaml = c_string("app_id: foo");
+        assert!(shorebird_init(&c_params, FileCallbacks::new(), c_yaml));
+        free_c_string(c_yaml);
+        free_parameters(c_params);
+    }
+
+    fn check_on(channel: &str) -> bool {
+        let c_channel = c_string(channel);
+        let result = shorebird_check_for_downloadable_update(c_channel);
+        free_c_string(c_channel);
+        result
+    }
+
+    fn update_on_expecting(channel: &str, expected: i32) {
+        let c_channel = c_string(channel);
+        run_update_expecting(c_channel, expected);
+        free_c_string(c_channel);
+    }
+
+    /// Pins today's track-switch behavior. Switching to a track whose
+    /// latest patch is lower than the running one installs it as next
+    /// boot (a downgrade). Once it boots, the higher patch stays on disk
+    /// (boot cleanup only removes older numbers), so going back to the
+    /// track with the higher patch finds it already installed: check
+    /// says nothing to download, update says no update, and the device
+    /// stays on the lower patch. An empty track changes nothing.
+    #[serial]
+    #[test]
+    fn track_switch_to_lower_patch_strands_higher_patch() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+        write_fake_apk(
+            tmp_dir.path().join("base.apk").to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
+        init_two_track_app(&tmp_dir);
+        set_two_track_hooks();
+
+        // Launch auto-update (stable) installs patch 2. The launch is
+        // simulated in this process, so patch 2 counts as booted.
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+        assert_eq!(shorebird_current_boot_patch_number(), 2);
+
+        // The app moves to beta, whose latest is the lower patch 1.
+        assert!(check_on("beta"));
+        update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_current_boot_patch_number(), 2);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+        // Patch 2 is still installed (it is the last booted patch), so
+        // stable has nothing to download, but current != next.
+        assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
+
+        // Restart: patch 1 boots.
+        testing_reset_config();
+        init_two_track_app(&tmp_dir);
+        set_two_track_hooks();
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+        // Boot cleanup removed only lower numbers, so patch 2 is still here.
+        assert!(crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2).exists());
+
+        // Back on stable: patch 2 is still Installed, so it is skipped.
+        assert!(!shorebird_check_for_downloadable_update(std::ptr::null()));
+        run_update_expecting(std::ptr::null(), SHOREBIRD_NO_UPDATE);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+
+        // A track with no patches leaves the device where it is.
+        assert!(!check_on("empty"));
+        update_on_expecting("empty", SHOREBIRD_NO_UPDATE);
+        assert_eq!(shorebird_current_boot_patch_number(), 1);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+    }
+
+    /// Pins today's behavior for two updates on different tracks before a
+    /// restart: the later install becomes next boot whatever its number,
+    /// and the earlier, never-booted one is deleted, so its track offers
+    /// it for download again.
+    #[serial]
+    #[test]
+    fn sequential_updates_on_two_tracks_last_install_wins() {
+        testing_reset_config();
+        let tmp_dir = TempDir::new().unwrap();
+        write_fake_apk(
+            tmp_dir.path().join("base.apk").to_str().unwrap(),
+            HELLO_TESTS_PATCH.base.as_bytes(),
+        );
+        init_two_track_app(&tmp_dir);
+        set_two_track_hooks();
+        shorebird_report_launch_start();
+        shorebird_report_launch_success();
+
+        update_on_expecting("stable", SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 2);
+        assert!(crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2).exists());
+        update_on_expecting("beta", SHOREBIRD_UPDATE_INSTALLED);
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+        assert_eq!(shorebird_current_boot_patch_number(), 0);
+
+        // Patch 2 was deleted when patch 1 replaced it as next boot, so
+        // stable offers it again.
+        assert!(!crate::cache::lifecycle::installed_artifact_path(tmp_dir.path(), 2).exists());
+        assert!(check_on("stable"));
+    }
+
     #[serial]
     #[test]
     fn forgot_init() {
