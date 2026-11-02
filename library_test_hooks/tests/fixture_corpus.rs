@@ -47,7 +47,10 @@ fn fixtures_root() -> PathBuf {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
