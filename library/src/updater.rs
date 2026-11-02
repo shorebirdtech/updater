@@ -4161,6 +4161,57 @@ mod state_recovery_tests {
         })
     }
 
+    /// Crash recovery never reads the wall clock: `boot_started_at` is only
+    /// a diagnostic. A clock that jumps back or forward between arming and
+    /// the next launch still blames a death in the window, and a launch
+    /// whose clock jumps inside the window still succeeds. (The window
+    /// itself is timed in the engine on the monotonic clock.)
+    #[serial]
+    #[test]
+    fn clock_jumps_do_not_change_the_launch_outcome() -> Result<()> {
+        use mock_instant::global::MockClock;
+        use std::time::Duration;
+
+        for (armed_at, judged_at) in [(2_000_000_000, 1), (1, 2_000_000_000)] {
+            let tmp_dir = TempDir::new().unwrap();
+            init_for_testing(&tmp_dir, None);
+            install_fake_patch(1)?;
+            MockClock::set_system_time(Duration::from_secs(armed_at));
+            report_launch_start()?;
+            crate::report_launch_paused()?;
+            crate::report_launch_resumed()?;
+
+            MockClock::set_system_time(Duration::from_secs(judged_at));
+            init_for_testing(&tmp_dir, None);
+            with_mut_state(|state| {
+                assert!(
+                    state.is_known_bad_patch(1),
+                    "armed {armed_at}, judged {judged_at}"
+                );
+                Ok(())
+            })?;
+
+            let tmp_dir = TempDir::new().unwrap();
+            init_for_testing(&tmp_dir, None);
+            install_fake_patch(1)?;
+            MockClock::set_system_time(Duration::from_secs(armed_at));
+            report_launch_start()?;
+            crate::report_launch_paused()?;
+            crate::report_launch_resumed()?;
+            MockClock::set_system_time(Duration::from_secs(judged_at));
+            report_launch_success()?;
+            crate::updater::testing_wait_for_event_flushes();
+            with_mut_state(|state| {
+                assert_eq!(
+                    state.last_successfully_booted_patch().map(|p| p.number),
+                    Some(1)
+                );
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
     /// Paused and resumed before init report an error rather than panic.
     #[serial]
     #[test]
