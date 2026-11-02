@@ -75,6 +75,7 @@ words:
   - pubspec
   - repr
   - reqwest
+  - reselects
   - retryability
   - rlib
   - roundtrips
@@ -96,6 +97,7 @@ words:
   - swiftpm
   - symbolication
   - tombstoned
+  - tombstoning
   - ureq
   - unbootable
   - unbooted
