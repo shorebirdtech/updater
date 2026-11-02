@@ -4528,6 +4528,79 @@ mod state_recovery_tests {
         })
     }
 
+    /// Between paused and resumed nothing is armed, so a failure reported
+    /// there errs and blames no patch. The engine reports a failed root
+    /// isolate launch only after resumed.
+    #[serial]
+    #[test]
+    fn failure_while_paused_errs_and_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+
+        assert!(crate::report_launch_failure().is_err());
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })
+    }
+
+    /// A root isolate that fails to launch after resumed marks the patch
+    /// Bad and falls back to the release.
+    #[serial]
+    #[test]
+    fn failure_after_resumed_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        crate::report_launch_failure()?;
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert!(state.currently_booting_patch().is_none());
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// A death after resumed, before success, marks the patch Bad on the
+    /// next init, as a death before success always has.
+    #[serial]
+    #[test]
+    fn death_after_resumed_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// Paused and resumed before init report an error rather than panic.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_before_init_err() {
+        crate::updater::testing_reset_config();
+        assert!(crate::report_launch_paused().is_err());
+        assert!(crate::report_launch_resumed().is_err());
+    }
+
     /// The full sequence promotes the patch and reports one install.
     #[serial]
     #[test]
