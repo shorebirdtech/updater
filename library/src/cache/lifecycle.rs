@@ -784,6 +784,7 @@ impl PatchLifecycle {
         });
         self.clear_breadcrumb();
         self.save_pointers()?;
+        self.release_boot_lock();
         Ok(true)
     }
 
