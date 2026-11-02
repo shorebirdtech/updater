@@ -74,6 +74,8 @@ jobs:
               - Cargo.toml
               - library/**
               - library_test_hooks/**
+              # tests/fixture_corpus.rs replays the fixture corpus.
+              - fixtures/**
 
   build_rust_crates:
     needs: changes

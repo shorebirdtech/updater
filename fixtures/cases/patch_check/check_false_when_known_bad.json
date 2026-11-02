@@ -1,0 +1,58 @@
+{
+  "description": "check_for_downloadable_update is false for a tombstoned patch.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Bad",
+        "reason": "BootCrash",
+        "hash": null,
+        "signature": null,
+        "size": null
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "check_for_downloadable_update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin"
+              }
+            }
+          }
+        }
+      ],
+      "expect": false
+    }
+  ]
+}

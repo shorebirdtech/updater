@@ -1,0 +1,56 @@
+{
+  "description": "next_boot_patch naming a patch with no files is reported as-is until the engine validates it; validation tombstones it and falls back to the base release.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 3,
+        "last_booted_patch": null,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 3
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_files": {
+        "storage/patches/3/state.json": {
+          "json": {
+            "kind": "Bad",
+            "reason": "ValidationFailed",
+            "hash": null,
+            "signature": null,
+            "size": null
+          }
+        },
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": null,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    }
+  ]
+}

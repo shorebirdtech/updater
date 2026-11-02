@@ -1,0 +1,4 @@
+# Fixtures are compared byte for byte (patch inputs, hashes, signatures):
+# never convert line endings on checkout.
+* -text
+*.bin binary

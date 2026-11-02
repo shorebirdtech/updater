@@ -1,0 +1,26 @@
+{
+  "description": "The legacy patches_state.json is only removed on a release change; within a release it is left alone.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/patches_state.json": {
+      "text": "{}"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true,
+      "expect_files": {
+        "storage/patches_state.json": {
+          "text": "{}"
+        }
+      }
+    }
+  ]
+}
