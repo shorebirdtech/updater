@@ -64,11 +64,13 @@ pub fn testing_reset_config() {
     // queue.
     crate::updater::testing_wait_for_event_flushes();
     with_config_mut(|config| {
+        if let Some(config) = config.as_ref() {
+            crate::cache::lifecycle::testing_release_boot_locks_under(&config.storage_dir);
+        }
         *config = None;
     });
     set_running_patch_number(None);
     crate::updater::testing_reset_unreadable_state();
-    crate::cache::lifecycle::testing_release_boot_lock();
 }
 
 pub fn check_initialized_and_call<F, R>(

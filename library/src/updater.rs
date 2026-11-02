@@ -4613,7 +4613,7 @@ mod state_recovery_tests {
         let lock_path = with_mut_state(|state| Ok(state.lifecycle().boot_lock_path()))?;
 
         // Hand the lock to a stand-in for the first process, which stays up.
-        crate::cache::lifecycle::testing_release_boot_lock();
+        crate::cache::lifecycle::testing_release_boot_locks_under(tmp_dir.path());
         let first_alive = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)

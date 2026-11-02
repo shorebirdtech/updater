@@ -43,6 +43,7 @@
 //! reads that, not anything in this module.
 
 use std::{
+    collections::BTreeMap,
     fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
     sync::Mutex,
@@ -64,7 +65,8 @@ const BOOT_LOCK_FILE: &str = "boot.lock";
 /// when that process dies, so another process of the same app (a second
 /// desktop instance, an Android `android:process`) that finds it held knows
 /// the breadcrumb belongs to a boot still running, not one that crashed.
-static BOOT_LOCK: Mutex<Option<File>> = Mutex::new(None);
+/// Keyed by `state_root`: the lock belongs to that release's state.
+static BOOT_LOCKS: Mutex<BTreeMap<PathBuf, File>> = Mutex::new(BTreeMap::new());
 
 /// Whether this process may own the breadcrumb.
 #[derive(Debug, PartialEq)]
@@ -390,10 +392,14 @@ impl PatchLifecycle {
     }
 }
 
-/// Drops this process's boot lock, as the OS does when a process dies.
+/// Drops this process's boot locks on state under `dir`, as the OS does
+/// when a process dies.
 #[cfg(any(test, feature = "test-hooks"))]
-pub fn testing_release_boot_lock() {
-    PatchLifecycle::release_boot_lock();
+pub fn testing_release_boot_locks_under(dir: &Path) {
+    BOOT_LOCKS
+        .lock()
+        .expect("boot lock poisoned")
+        .retain(|root, _| !root.starts_with(dir));
 }
 
 /// Path the caller streams compressed download bytes to. Lives at
@@ -622,8 +628,8 @@ impl PatchLifecycle {
     /// Takes the boot lock for this process, unless another live process
     /// holds it.
     fn take_boot_lock(&self) -> BootOwner {
-        let mut held = BOOT_LOCK.lock().expect("boot lock poisoned");
-        if held.is_some() {
+        let mut held = BOOT_LOCKS.lock().expect("boot lock poisoned");
+        if held.contains_key(&self.state_root) {
             return BootOwner::This;
         }
         let file = match self.open_boot_lock() {
@@ -635,7 +641,7 @@ impl PatchLifecycle {
         };
         match file.try_lock() {
             Ok(()) => {
-                *held = Some(file);
+                held.insert(self.state_root.clone(), file);
                 BootOwner::This
             }
             Err(TryLockError::WouldBlock) => BootOwner::OtherProcess,
@@ -649,7 +655,11 @@ impl PatchLifecycle {
     /// Whether another live process holds the boot lock, so the breadcrumb
     /// on disk is its boot in progress. Doesn't take the lock.
     pub fn other_process_booting(&self) -> bool {
-        if BOOT_LOCK.lock().expect("boot lock poisoned").is_some() {
+        if BOOT_LOCKS
+            .lock()
+            .expect("boot lock poisoned")
+            .contains_key(&self.state_root)
+        {
             return false;
         }
         let Ok(file) = self.open_boot_lock() else {
@@ -673,8 +683,11 @@ impl PatchLifecycle {
         self.state_root.join(BOOT_LOCK_FILE)
     }
 
-    fn release_boot_lock() {
-        BOOT_LOCK.lock().expect("boot lock poisoned").take();
+    fn release_boot_lock(&self) {
+        BOOT_LOCKS
+            .lock()
+            .expect("boot lock poisoned")
+            .remove(&self.state_root);
     }
 
     fn set_breadcrumb(&mut self, n: usize) -> Result<()> {
@@ -702,7 +715,7 @@ impl PatchLifecycle {
         }
         self.clear_breadcrumb();
         self.save_pointers()?;
-        Self::release_boot_lock();
+        self.release_boot_lock();
         Ok(())
     }
 
@@ -729,7 +742,7 @@ impl PatchLifecycle {
         }
         self.clear_breadcrumb();
         self.save_pointers()?;
-        Self::release_boot_lock();
+        self.release_boot_lock();
         Ok(())
     }
 
@@ -751,7 +764,7 @@ impl PatchLifecycle {
         self.pointers.last_booted_patch = Some(n);
         self.clear_breadcrumb();
         self.save_pointers()?;
-        Self::release_boot_lock();
+        self.release_boot_lock();
         self.cleanup_older_than(n);
         self.recompute_next_boot()
     }
@@ -779,7 +792,7 @@ impl PatchLifecycle {
         self.mark_bad(n, BadReason::BootCrash)?;
         self.clear_breadcrumb();
         self.save_pointers()?;
-        Self::release_boot_lock();
+        self.release_boot_lock();
         self.recompute_next_boot()
     }
 
