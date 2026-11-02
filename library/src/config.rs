@@ -68,6 +68,7 @@ pub fn testing_reset_config() {
     });
     set_running_patch_number(None);
     crate::updater::testing_reset_unreadable_state();
+    crate::cache::lifecycle::testing_release_boot_lock();
 }
 
 pub fn check_initialized_and_call<F, R>(

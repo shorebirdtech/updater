@@ -42,7 +42,11 @@
 //! before any lifecycle transitions happen. `shorebird_current_boot_patch_number`
 //! reads that, not anything in this module.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs::{File, OpenOptions, TryLockError},
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -53,6 +57,24 @@ use crate::yaml::PatchVerificationMode;
 const PATCHES_DIR: &str = "patches";
 const PATCH_STATE_FILE: &str = "state.json";
 const POINTERS_FILE: &str = "pointers.json";
+const BOOT_LOCK_FILE: &str = "boot.lock";
+
+/// An exclusive advisory lock on `{state_root}/boot.lock`, held by the
+/// process that armed the breadcrumb until it clears it. The OS releases it
+/// when that process dies, so another process of the same app (a second
+/// desktop instance, an Android `android:process`) that finds it held knows
+/// the breadcrumb belongs to a boot still running, not one that crashed.
+static BOOT_LOCK: Mutex<Option<File>> = Mutex::new(None);
+
+/// Whether this process may own the breadcrumb.
+#[derive(Debug, PartialEq)]
+enum BootOwner {
+    /// This process holds the lock, or the lock can't be used here (as
+    /// before the lock existed).
+    This,
+    /// Another live process holds it.
+    OtherProcess,
+}
 
 /// Per-patch lifecycle state. Persisted at `{root}/patches/{N}/state.json`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -368,6 +390,12 @@ impl PatchLifecycle {
     }
 }
 
+/// Drops this process's boot lock, as the OS does when a process dies.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn testing_release_boot_lock() {
+    PatchLifecycle::release_boot_lock();
+}
+
 /// Path the caller streams compressed download bytes to. Lives at
 /// `{download_root}/{N}` (flat under the OS-managed cache dir). Free
 /// function so callers in `update_internal` can compute it without
@@ -591,7 +619,69 @@ impl PatchLifecycle {
         self.set_breadcrumb(n)
     }
 
+    /// Takes the boot lock for this process, unless another live process
+    /// holds it.
+    fn take_boot_lock(&self) -> BootOwner {
+        let mut held = BOOT_LOCK.lock().expect("boot lock poisoned");
+        if held.is_some() {
+            return BootOwner::This;
+        }
+        let file = match self.open_boot_lock() {
+            Ok(file) => file,
+            Err(e) => {
+                shorebird_error!("Failed to open boot lock: {:?}", e);
+                return BootOwner::This;
+            }
+        };
+        match file.try_lock() {
+            Ok(()) => {
+                *held = Some(file);
+                BootOwner::This
+            }
+            Err(TryLockError::WouldBlock) => BootOwner::OtherProcess,
+            Err(TryLockError::Error(e)) => {
+                shorebird_error!("Failed to take boot lock: {:?}", e);
+                BootOwner::This
+            }
+        }
+    }
+
+    /// Whether another live process holds the boot lock, so the breadcrumb
+    /// on disk is its boot in progress. Doesn't take the lock.
+    pub fn other_process_booting(&self) -> bool {
+        if BOOT_LOCK.lock().expect("boot lock poisoned").is_some() {
+            return false;
+        }
+        let Ok(file) = self.open_boot_lock() else {
+            return false;
+        };
+        // A lock taken here is dropped, and so released, on return.
+        matches!(file.try_lock(), Err(TryLockError::WouldBlock))
+    }
+
+    fn open_boot_lock(&self) -> std::io::Result<File> {
+        std::fs::create_dir_all(&self.state_root)?;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.state_root.join(BOOT_LOCK_FILE))
+    }
+
+    #[cfg(test)]
+    pub fn boot_lock_path(&self) -> PathBuf {
+        self.state_root.join(BOOT_LOCK_FILE)
+    }
+
+    fn release_boot_lock() {
+        BOOT_LOCK.lock().expect("boot lock poisoned").take();
+    }
+
     fn set_breadcrumb(&mut self, n: usize) -> Result<()> {
+        if self.take_boot_lock() == BootOwner::OtherProcess {
+            shorebird_info!("Another process is booting; not arming patch {}", n);
+            return Ok(());
+        }
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
         self.save_pointers()
@@ -607,11 +697,13 @@ impl PatchLifecycle {
     /// didn't crash running the patch. [`record_boot_resume`] arms it again
     /// when the root isolate launches. No-op without a breadcrumb.
     pub fn record_boot_pause(&mut self) -> Result<()> {
-        if self.pointers.currently_booting_patch.is_none() {
+        if self.pointers.currently_booting_patch.is_none() || self.other_process_booting() {
             return Ok(());
         }
         self.clear_breadcrumb();
-        self.save_pointers()
+        self.save_pointers()?;
+        Self::release_boot_lock();
+        Ok(())
     }
 
     /// Arms the breadcrumb again for patch `n`, the patch this process
@@ -636,7 +728,9 @@ impl PatchLifecycle {
             return Ok(());
         }
         self.clear_breadcrumb();
-        self.save_pointers()
+        self.save_pointers()?;
+        Self::release_boot_lock();
+        Ok(())
     }
 
     /// Records a successful boot. Promotes `currently_booting_patch` to
@@ -647,6 +741,9 @@ impl PatchLifecycle {
     /// rolled back during the launch window left it at the last good patch
     /// from before this boot, which this boot has just replaced.
     pub fn record_boot_success(&mut self) -> Result<()> {
+        if self.other_process_booting() {
+            bail!("record_boot_success while another process is booting");
+        }
         let n = self
             .pointers
             .currently_booting_patch
@@ -654,6 +751,7 @@ impl PatchLifecycle {
         self.pointers.last_booted_patch = Some(n);
         self.clear_breadcrumb();
         self.save_pointers()?;
+        Self::release_boot_lock();
         self.cleanup_older_than(n);
         self.recompute_next_boot()
     }
@@ -675,9 +773,13 @@ impl PatchLifecycle {
     /// an `Installed` patch with no breadcrumb — the next boot retries
     /// it silently.
     pub fn record_boot_failure(&mut self, n: usize) -> Result<()> {
+        if self.other_process_booting() {
+            bail!("record_boot_failure({n}) while another process is booting");
+        }
         self.mark_bad(n, BadReason::BootCrash)?;
         self.clear_breadcrumb();
         self.save_pointers()?;
+        Self::release_boot_lock();
         self.recompute_next_boot()
     }
 
@@ -690,6 +792,9 @@ impl PatchLifecycle {
         let Some(n) = self.pointers.currently_booting_patch else {
             return Ok(None);
         };
+        if self.other_process_booting() {
+            return Ok(None);
+        }
         self.record_boot_failure(n)?;
         Ok(Some(n))
     }
@@ -1764,32 +1869,96 @@ mod tests {
         ));
     }
 
-    /// Known gap, unchanged by the launch window: two processes of one app
-    /// (Android `android:process`) share pointers.json with no lock. A
-    /// second process that starts and pauses while the first is in its
-    /// window disarms the first, so the first dying there blames nothing.
-    /// It errs toward keeping the patch, never toward marking it Bad.
+    /// Takes the boot lock as another live process of the app would (a
+    /// second desktop instance, an Android `android:process`). Dropping the
+    /// file is that process dying.
+    fn lock_as_another_process(root: &Path) -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(root.join(BOOT_LOCK_FILE))
+            .unwrap();
+        file.lock().unwrap();
+        file
+    }
+
+    /// Another process of the app starting while the first is in its launch
+    /// window doesn't judge the first's breadcrumb a crash, and its own
+    /// start, pause, success and failure leave the first's boot alone.
     #[test]
-    fn second_process_pause_disarms_the_first() {
+    fn another_live_process_keeps_its_boot() {
         let (tmp, mut first) = fixture();
         install_state(&first, 1, 100);
         first.pointers.next_boot_patch = Some(1);
+        first.pointers.currently_booting_patch = Some(1);
         first.save_pointers().unwrap();
-        first.record_boot_start(1).unwrap();
-        first.record_boot_pause().unwrap();
-        first.record_boot_resume(1).unwrap();
+        let first_alive = lock_as_another_process(tmp.path());
 
         let mut second = reload_at(tmp.path());
+        assert_eq!(second.detect_boot_crash_on_init().unwrap(), None);
         second.record_boot_start(1).unwrap();
         second.record_boot_pause().unwrap();
+        second.record_boot_resume(1).unwrap();
+        assert!(second.record_boot_success().is_err());
+        assert!(second.record_boot_failure(1).is_err());
 
-        // The first process dies in its window.
-        let mut next = reload_at(tmp.path());
-        assert_eq!(next.detect_boot_crash_on_init().unwrap(), None);
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert_eq!(reloaded.pointers().last_booted_patch, None);
         assert!(matches!(
-            next.read_state(1),
+            reloaded.read_state(1),
             Some(PatchState::Installed { .. })
         ));
+
+        // The first process dies in its window: the next init blames it.
+        drop(first_alive);
+        let mut next = reload_at(tmp.path());
+        assert_eq!(next.detect_boot_crash_on_init().unwrap(), Some(1));
+        assert!(matches!(
+            next.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::BootCrash,
+                ..
+            })
+        ));
+    }
+
+    /// The process that arms holds the lock until it clears the
+    /// breadcrumb, so another process sees its boot as live exactly while
+    /// it's armed.
+    #[test]
+    fn boot_lock_is_held_while_armed() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        let lock_free = || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(tmp.path().join(BOOT_LOCK_FILE))
+                .unwrap();
+            file.try_lock().is_ok()
+        };
+
+        lifecycle.record_boot_start(1).unwrap();
+        assert!(!lock_free());
+        lifecycle.record_boot_pause().unwrap();
+        assert!(lock_free());
+        lifecycle.record_boot_resume(1).unwrap();
+        assert!(!lock_free());
+        lifecycle.record_boot_success().unwrap();
+        assert!(lock_free());
+
+        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.forget_booting(1).unwrap();
+        assert!(lock_free());
+
+        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_failure(1).unwrap();
+        assert!(lock_free());
     }
 
     #[test]
