@@ -362,6 +362,11 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
             config.patch_public_key.as_deref(),
             config.patch_verification,
         );
+        // A breadcrumb another live process holds is its boot in progress,
+        // not a crash.
+        if state.lifecycle().other_process_booting() {
+            return Ok(());
+        }
         if let Some(patch) = state.currently_booting_patch() {
             let boot_time_info = state
                 .boot_started_at()
@@ -4157,6 +4162,46 @@ mod state_recovery_tests {
         with_mut_state(|state| {
             assert!(state.is_known_bad_patch(1));
             assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// A second process of the app (a second desktop instance, an Android
+    /// `android:process`) starting while the first is in its launch window
+    /// finds the first's breadcrumb, but the first still holds the boot
+    /// lock: init doesn't blame the patch. Once the first dies, init does.
+    #[serial]
+    #[test]
+    fn init_while_another_process_is_booting_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        let lock_path = with_mut_state(|state| Ok(state.lifecycle().boot_lock_path()))?;
+
+        // Hand the lock to a stand-in for the first process, which stays up.
+        crate::cache::lifecycle::testing_release_boot_lock();
+        let first_alive = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        first_alive.lock()?;
+
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })?;
+
+        drop(first_alive);
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
             Ok(())
         })
     }

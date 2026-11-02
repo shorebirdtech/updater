@@ -67,6 +67,7 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
+    crate::cache::lifecycle::testing_release_boot_lock();
 }
 
 pub fn check_initialized_and_call<F, R>(
