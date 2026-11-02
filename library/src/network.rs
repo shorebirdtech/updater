@@ -381,8 +381,8 @@ impl std::fmt::Display for NetworkError {
                 status,
                 error: Some(error),
             } => write!(f, "{} (status {status}): {}", error.code, error.message),
-            // Nothing of ours answers 429; it comes from infrastructure in
-            // front of the server shedding load.
+            // No endpoint the updater calls answers 429; it comes from
+            // infrastructure in front of the server shedding load.
             NetworkError::Server {
                 status: 429,
                 error: None,
@@ -1196,6 +1196,31 @@ mod tests {
                     status: 503,
                     error: None
                 }),
+                "{name}"
+            );
+            assert_eq!(std::fs::read(&dest).unwrap(), b"hello ", "{name}");
+        }
+    }
+
+    #[test]
+    fn download_json_error_body_is_not_written_to_the_file() {
+        for (name, send) in TRANSPORTS {
+            let mut server = mockito::Server::new();
+            server
+                .mock("GET", "/patch")
+                .with_status(404)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"code":"not_found","message":"No such patch."}"#)
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("patch");
+            std::fs::write(&dest, "hello ").unwrap();
+            let err =
+                super::download_to_path_with(send, &format!("{}/patch", server.url()), &dest, 6)
+                    .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "not_found (status 404): No such patch.",
                 "{name}"
             );
             assert_eq!(std::fs::read(&dest).unwrap(), b"hello ", "{name}");
