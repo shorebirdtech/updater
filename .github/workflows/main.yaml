@@ -1,10 +1,10 @@
-# cspell:words dorny codecov
+# cspell:words dorny
 name: ci
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Cancel superseded PR runs: a newer push's result covers the older one.
-  # Runs on main always finish so every commit gets its coverage upload.
+  # Runs on main always finish so every commit gets a full result.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -97,7 +97,6 @@ jobs:
       - name: 🦀 Build ${{ matrix.crate }}
         uses: ./.github/actions/rust_crate
         with:
-          codecov_token: ${{ secrets.CODECOV_TOKEN }}
           working_directory: ${{ matrix.crate }}
 
   # The host builds above never compile code behind cfg(target_os =
@@ -186,7 +185,6 @@ jobs:
       - name: 🐦 Build ${{ matrix.package }}
         uses: ./.github/actions/flutter_package
         with:
-          codecov_token: ${{ secrets.CODECOV_TOKEN }}
           coverage_excludes: "**/*.g.dart"
           working_directory: ${{ matrix.package }}
 
