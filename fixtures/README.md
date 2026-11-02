@@ -12,7 +12,7 @@ killed part way.
   Shorebird app, and a mistake in it can strand users on a bad patch. The
   corpus is the safety net: if a change alters any behavior it records, a case
   fails, and the PR has to say so.
-- **A port has an exact target.** Any reimplementation of the updater (the
+- **A port has an exact target.** Any rewrite of the updater (the
   planned C++ one, for example) must pass the same files. "Same behavior as
   the Rust updater" then means something checkable rather than a judgment
   call.
