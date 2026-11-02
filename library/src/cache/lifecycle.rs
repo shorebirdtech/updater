@@ -1923,7 +1923,7 @@ mod tests {
         assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
 
         // The next process arms normally over the leftover temp file.
-        reloaded.record_boot_resume(1).unwrap();
+        reloaded.record_boot_resume(1, None).unwrap();
         assert!(!tmp_file.exists());
 
         // Death while writing the success: on disk, still armed.
@@ -1968,9 +1968,9 @@ mod tests {
 
         let mut second = reload_at(tmp.path());
         assert_eq!(second.detect_boot_crash_on_init().unwrap(), None);
-        second.record_boot_start(1).unwrap();
+        second.record_boot_start(1, None).unwrap();
         second.record_boot_pause().unwrap();
-        second.record_boot_resume(1).unwrap();
+        second.record_boot_resume(1, None).unwrap();
         assert!(second.record_boot_success().is_err());
         assert!(second.record_boot_failure(1).is_err());
 
@@ -2014,20 +2014,20 @@ mod tests {
             file.try_lock().is_ok()
         };
 
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         assert!(!lock_free());
         lifecycle.record_boot_pause().unwrap();
         assert!(lock_free());
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
         assert!(!lock_free());
         lifecycle.record_boot_success().unwrap();
         assert!(lock_free());
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
         lifecycle.forget_booting(1).unwrap();
         assert!(lock_free());
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
         lifecycle.record_boot_failure(1).unwrap();
         assert!(lock_free());
     }
