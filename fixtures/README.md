@@ -1,13 +1,48 @@
 # Updater fixture corpus
 
-Language-neutral description of how the updater behaves, as plain files. The
-Rust updater passes all of it (`library_test_hooks/tests/fixture_corpus.rs`,
-run by `cargo test` in `library_test_hooks/`); any other implementation of the
-updater's C API is expected to pass the same files through its own runner.
+A set of JSON files that pin down how the updater behaves, case by case:
+what it does with each on-disk state it can find at launch, what it sends to
+the server and how it handles each answer, how it downloads, resumes and
+installs a patch, and how it recovers when a launch crashes or the process is
+killed part way.
 
-Everything is observed through the public C API (`updater_engine.h`,
-`updater_dart.h`), the files the updater leaves on disk, and the HTTP requests
-it makes. Nothing here depends on how the updater is built inside.
+## Why it exists
+
+- **Changing the updater safely today.** The updater runs inside every
+  Shorebird app, and a mistake in it can strand users on a bad patch. The
+  corpus is the safety net: if a change alters any behavior it records, a case
+  fails, and the PR has to say so.
+- **A port has an exact target.** Any reimplementation of the updater (the
+  planned C++ one, for example) must pass the same files. "Same behavior as
+  the Rust updater" then means something checkable rather than a judgment
+  call.
+
+## Why JSON through the C API, not Rust unit tests
+
+- **One spec for any implementation.** The cases are data, not Rust code, so
+  a C++ (or any other) updater runs the same files through its own small
+  runner. Nothing has to be translated, and nothing can drift between two
+  copies of the tests.
+- **It tests what the engine calls.** Every case drives the updater only
+  through the public C API (`updater_engine.h`, `updater_dart.h`), the files
+  it leaves on disk, and the HTTP requests it makes: the same surface the
+  Flutter engine and `shorebird_code_push` use. Internal refactors don't touch
+  the cases; changes to what callers see do.
+
+## Running it
+
+The Rust runner is `library_test_hooks/tests/fixture_corpus.rs`:
+
+```sh
+cd library_test_hooks
+cargo test --test fixture_corpus                              # every case
+FIXTURE_FILTER=boot/ cargo test --test fixture_corpus         # cases whose path contains boot/
+```
+
+It also runs as part of `cargo test` and in CI on macOS, Linux and Windows. A
+failure names the case and step and shows expected against actual.
+
+## Layout
 
 ```
 fixtures/
@@ -24,9 +59,29 @@ Groups: `state_load` (reading and migrating on-disk state at init),
 `signing` (`patch_public_key` and `patch_verification`, from check through
 the next boot).
 
-Run one subset: `FIXTURE_FILTER=boot/ cargo test --test fixture_corpus`.
+## Adding a case
 
-## Running a case
+1. Copy the nearest case in the same group to
+   `cases/<group>/<what_it_pins_down>.json`.
+2. Write `description` as the behavior in one or two sentences, then edit
+   `files` (the state before the process starts), `steps` (the calls, with
+   the HTTP exchanges each should make) and the expectations, using the format
+   below.
+3. Run it alone with `FIXTURE_FILTER=<group>/<name>`. Check it fails when the
+   behavior it describes is broken (change the expectation, or the code,
+   briefly), so it isn't passing vacuously.
+
+Every bug fixed in the updater's state handling gets a case.
+
+## Changing a case when behavior changes on purpose
+
+A case that fails after a deliberate change is doing its job. In the same PR:
+update the case's expectations (and `description`, if the behavior it
+describes changed), and say in the PR description which cases changed and
+why. Don't loosen a matcher to `<any>` to make a case pass: that removes the
+check instead of updating it.
+
+## How a runner executes a case
 
 Each case runs in a fresh empty temp directory, the **case root**, with this
 layout:
@@ -270,11 +325,7 @@ printf '%s' "$HASH" | openssl dgst -sha256 -sign keys/fixture_private_key.pem | 
 Cases that need a signature from another key use one made the same way with
 a throwaway key (`openssl genrsa 2048`) that was then discarded.
 
-## Changing the corpus
-
-These files are the contract the C++ port is held to, so a change here is a
-behavior change: say so in the PR. Add a case for every bug fixed in the
-updater's state handling.
+## Known oddities
 
 Some of what the corpus pins down is current behavior rather than a choice
 anyone would defend. A port must match it; changing it is its own PR that
