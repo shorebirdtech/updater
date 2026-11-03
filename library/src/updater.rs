@@ -291,20 +291,10 @@ struct UnreadableState {
 
 static UNREADABLE_STATE: Mutex<Option<UnreadableState>> = Mutex::new(None);
 
-/// Whether a recheck thread is running, so an app that loses access on every
-/// lock (`NSFileProtectionComplete`) never has more than one.
-static UNREADABLE_RECHECK_RUNNING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// How long the recheck thread first waits, and the longest it waits, between
-/// tries at reading the state again.
-const UNREADABLE_RECHECK_FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
-const UNREADABLE_RECHECK_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(600);
-
-/// Loads the updater state. A read failure is held (see [`UnreadableState`])
-/// and, the first time in a process, starts [`recheck_unreadable_state`] on
-/// its own thread; the first load that succeeds afterwards queues a
-/// `state_unreadable` failure event for it.
+/// Loads the updater state. A read failure is held (see [`UnreadableState`]);
+/// the first load that succeeds afterwards queues a `state_unreadable`
+/// failure event for it. The engine calls [`protected_data_available`] when
+/// iOS unlocks the files, which makes that load.
 fn load_state(config: &UpdateConfig) -> anyhow::Result<UpdaterState> {
     let result = UpdaterState::load_or_new_on_error(
         &config.storage_dir,
@@ -323,7 +313,6 @@ fn load_state(config: &UpdateConfig) -> anyhow::Result<UpdaterState> {
                     message: event_error_message(&err, config),
                     category: classify_failure(&err),
                 });
-                spawn_unreadable_state_recheck();
             }
             Err(err)
         }
@@ -368,47 +357,25 @@ fn unreadable_state_event(
     event
 }
 
-/// Starts a thread that tries the state again, waiting longer each time (30
-/// seconds doubling to 10 minutes), until it reads, then sends the report.
-/// The engine reads the state only at launch, and an app that leaves
-/// updating to the engine makes no later call, so without this a process
-/// launched before first unlock never reports, even when it lives on past
-/// the unlock. Unit tests call [`recheck_unreadable_state`] themselves.
-fn spawn_unreadable_state_recheck() {
-    use std::sync::atomic::Ordering;
-    // Off in every test build (unit tests, the fixture corpus, the Dart
-    // integration tests), so a sleeping thread can't reach into a later test.
-    if cfg!(any(test, feature = "test-hooks")) {
+/// The engine calls this when the app's protected files become readable
+/// (iOS `UIApplicationProtectedDataDidBecomeAvailable`, and on entering the
+/// foreground, which needs an unlocked device). If a read failed earlier in
+/// this process, loads the state, which queues the report, and sends the
+/// queue on its own thread. Otherwise does nothing, so it is cheap to call on
+/// every foreground. The engine reads the state only at launch, and an app
+/// that leaves updating to the engine makes no later call, so without this a
+/// process launched before first unlock never reports.
+pub fn protected_data_available() {
+    let pending = UNREADABLE_STATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some();
+    if !pending {
         return;
     }
-    if UNREADABLE_RECHECK_RUNNING.swap(true, Ordering::SeqCst) {
-        return;
+    if with_state(|_| Ok(())).is_ok() {
+        spawn_event_flush();
     }
-    let spawned = std::thread::Builder::new().spawn(|| {
-        let mut delay = UNREADABLE_RECHECK_FIRST_DELAY;
-        loop {
-            std::thread::sleep(delay);
-            if recheck_unreadable_state() {
-                break;
-            }
-            delay = (delay * 2).min(UNREADABLE_RECHECK_MAX_DELAY);
-        }
-        UNREADABLE_RECHECK_RUNNING.store(false, Ordering::SeqCst);
-    });
-    if let Err(err) = spawned {
-        UNREADABLE_RECHECK_RUNNING.store(false, Ordering::SeqCst);
-        shorebird_error!("Failed to start unreadable state recheck: {:?}", err);
-    }
-}
-
-/// Tries the state once. Returns true once it reads: the report is queued
-/// (by this load or an earlier one) and the queue is sent.
-fn recheck_unreadable_state() -> bool {
-    if with_state(|_| Ok(())).is_err() {
-        return false;
-    }
-    flush_queued_events();
-    true
 }
 
 /// Notes that this launch runs the base release because the state couldn't
@@ -5419,10 +5386,12 @@ mod unreadable_state_tests {
         assert!(crate::next_boot_patch().is_err());
         assert!(crate::report_launch_start().is_err());
         assert!(held_unreadable_state().unwrap().booted_base);
-        assert!(!recheck_unreadable_state(), "still unreadable");
+        // Still locked: the report stays held.
+        protected_data_available();
+        assert!(held_unreadable_state().is_some());
 
         make_state_readable(&tmp_dir, saved);
-        assert!(recheck_unreadable_state());
+        protected_data_available();
         assert_eq!(held_unreadable_state(), None);
 
         with_state(|state| {
