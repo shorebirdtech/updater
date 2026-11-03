@@ -186,6 +186,23 @@ typedef struct AppParameters {
    * artifacts and data that can be deleted when a new release is detected.
    */
   const char *code_cache_dir;
+  /**
+   * This process's token, or NULL. The updater writes it into the boot
+   * breadcrumb. On Android 11+ the engine also gives it to
+   * `ActivityManager.setProcessStateSummary`, so the OS's record of how
+   * the process ended carries it.
+   */
+  const char *process_token;
+  /**
+   * The token on the OS's record of how the previous process ended, or
+   * NULL when there is no record (every platform but Android 11+).
+   */
+  const char *previous_exit_process_token;
+  /**
+   * `ApplicationExitInfo.getReason()` from that record. Ignored when
+   * `previous_exit_process_token` is NULL.
+   */
+  int previous_exit_reason;
 } AppParameters;
 
 typedef struct FileCallbacks {

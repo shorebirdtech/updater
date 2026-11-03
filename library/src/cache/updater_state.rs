@@ -280,8 +280,15 @@ impl UpdaterState {
     }
 
     /// Records that we are attempting to boot the patch with `patch_number`.
-    pub fn record_boot_start_for_patch(&mut self, patch_number: usize) -> Result<()> {
-        self.lifecycle.record_boot_start(patch_number)
+    /// `process_token` is the engine's token for this process, if any; see
+    /// `ReleasePointers::boot_process_token`.
+    pub fn record_boot_start_for_patch(
+        &mut self,
+        patch_number: usize,
+        process_token: Option<&str>,
+    ) -> Result<()> {
+        self.lifecycle
+            .record_boot_start(patch_number, process_token)
     }
 
     /// Records that patch `patch_number` failed to boot. Marks it
@@ -578,7 +585,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         install_fake_patch_into(&mut state, 1).unwrap();
-        state.record_boot_start_for_patch(1).unwrap();
+        state.record_boot_start_for_patch(1, None).unwrap();
         assert_eq!(state.currently_booting_patch().map(|p| p.number), Some(1));
         state.record_boot_success().unwrap();
         assert!(state.currently_booting_patch().is_none());
@@ -597,7 +604,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut state = load(&tmp, "1.0.0+1");
         install_fake_patch_into(&mut state, 1).unwrap();
-        state.record_boot_start_for_patch(1).unwrap();
+        state.record_boot_start_for_patch(1, None).unwrap();
         state.record_boot_failure_for_patch(1).unwrap();
         assert!(state.is_known_bad_patch(1));
         assert!(state.next_boot_patch().is_none());

@@ -165,13 +165,40 @@ pub struct ReleasePointers {
 
     /// Boot-in-progress breadcrumb. Set at `record_boot_start` and again at
     /// `record_boot_resume`; cleared at `record_boot_pause`,
-    /// `record_boot_success` and `record_boot_failure`.
+    /// `record_boot_success`, `record_boot_failure` and `record_boot_killed`.
     /// If still set on next init, the process died while booting the patch.
     pub currently_booting_patch: Option<usize>,
 
     /// Unix timestamp (seconds) when `currently_booting_patch` was set.
     pub boot_started_at: Option<u64>,
+
+    /// The engine's token for the process that set the breadcrumb, if it
+    /// gave one. On Android 11+ the same token is on the OS's record of how
+    /// that process ended, which is how the next init tells a kill from a
+    /// crash (see `updater::handle_prior_boot_failure_if_necessary`).
+    #[serde(default)]
+    pub boot_process_token: Option<String>,
+
+    /// Kills forgiven in a row while booting one patch. A patch can get its
+    /// own process killed (memory it allocates at launch), so only
+    /// [`MAX_BOOT_KILLS`] are forgiven. Names its patch, so kills of one
+    /// patch never count against another.
+    #[serde(default)]
+    pub boot_kills: Option<BootKills>,
 }
+
+/// See [`ReleasePointers::boot_kills`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BootKills {
+    /// The patch whose launches the OS killed.
+    pub patch: usize,
+    /// How many of its launches in a row, since it last booted or failed.
+    pub count: u32,
+}
+
+/// Kills in a row forgiven while booting one patch before the next death
+/// counts as a crash.
+pub const MAX_BOOT_KILLS: u32 = 2;
 
 /// Per-release patch lifecycle and storage. Owns
 /// `{state_root}/patches/`, `{state_root}/pointers.json`, and
@@ -610,7 +637,7 @@ impl PatchLifecycle {
     /// the engine reporting that it's booting some patch other than the
     /// one we said to boot. Carries forward the same defensive check the
     /// prior `PatchManager::record_boot_start_for_patch` had.
-    pub fn record_boot_start(&mut self, n: usize) -> Result<()> {
+    pub fn record_boot_start(&mut self, n: usize, process_token: Option<&str>) -> Result<()> {
         match self.read_state(n) {
             Some(PatchState::Installed { .. }) => {}
             other => {
@@ -622,7 +649,7 @@ impl PatchLifecycle {
             Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
             None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
         }
-        self.set_breadcrumb(n)
+        self.set_breadcrumb(n, process_token)
     }
 
     /// Takes the boot lock for this process, unless another live process
@@ -690,19 +717,21 @@ impl PatchLifecycle {
             .remove(&self.state_root);
     }
 
-    fn set_breadcrumb(&mut self, n: usize) -> Result<()> {
+    fn set_breadcrumb(&mut self, n: usize, process_token: Option<&str>) -> Result<()> {
         if self.take_boot_lock() == BootOwner::OtherProcess {
             shorebird_info!("Another process is booting; not arming patch {}", n);
             return Ok(());
         }
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
+        self.pointers.boot_process_token = process_token.map(str::to_owned);
         self.save_pointers()
     }
 
     fn clear_breadcrumb(&mut self) {
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
+        self.pointers.boot_process_token = None;
     }
 
     /// Clears the breadcrumb without promoting the patch: the engine has
@@ -723,14 +752,40 @@ impl PatchLifecycle {
     /// loaded, when the engine launches the root isolate. Unlike
     /// [`record_boot_start`] it doesn't require `n` to still be
     /// `next_boot_patch`: what matters is the patch that is running.
-    pub fn record_boot_resume(&mut self, n: usize) -> Result<()> {
+    pub fn record_boot_resume(&mut self, n: usize, process_token: Option<&str>) -> Result<()> {
         match self.read_state(n) {
             Some(PatchState::Installed { .. }) => {}
             other => {
                 bail!("record_boot_resume({n}) expected Installed, got {other:?}");
             }
         }
-        self.set_breadcrumb(n)
+        self.set_breadcrumb(n, process_token)
+    }
+
+    /// Clears the breadcrumb left by a process that the OS says was killed
+    /// rather than crashed: the patch stays as it is and boots again.
+    /// Returns false, changing nothing, once [`MAX_BOOT_KILLS`] kills in a
+    /// row have been forgiven; the caller then treats it as a crash.
+    pub fn record_boot_killed(&mut self) -> Result<bool> {
+        let n = self
+            .pointers
+            .currently_booting_patch
+            .context("record_boot_killed without currently_booting_patch")?;
+        let count = match &self.pointers.boot_kills {
+            Some(kills) if kills.patch == n => kills.count,
+            _ => 0,
+        };
+        if count >= MAX_BOOT_KILLS {
+            return Ok(false);
+        }
+        self.pointers.boot_kills = Some(BootKills {
+            patch: n,
+            count: count + 1,
+        });
+        self.clear_breadcrumb();
+        self.save_pointers()?;
+        self.release_boot_lock();
+        Ok(true)
     }
 
     /// Clears the breadcrumb if it names `n`, which is being uninstalled
@@ -763,6 +818,7 @@ impl PatchLifecycle {
             .context("record_boot_success without currently_booting_patch")?;
         self.pointers.last_booted_patch = Some(n);
         self.clear_breadcrumb();
+        self.pointers.boot_kills = None;
         self.save_pointers()?;
         self.release_boot_lock();
         self.cleanup_older_than(n);
@@ -791,6 +847,7 @@ impl PatchLifecycle {
         }
         self.mark_bad(n, BadReason::BootCrash)?;
         self.clear_breadcrumb();
+        self.pointers.boot_kills = None;
         self.save_pointers()?;
         self.release_boot_lock();
         self.recompute_next_boot()
@@ -1351,6 +1408,8 @@ mod tests {
                 last_booted_patch: Some(2),
                 currently_booting_patch: None,
                 boot_started_at: None,
+                boot_process_token: None,
+                boot_kills: None,
             };
             lifecycle.save_pointers().unwrap();
         }
@@ -1749,13 +1808,13 @@ mod tests {
     #[test]
     fn record_boot_start_requires_installed() {
         let (_tmp, mut lifecycle) = fixture();
-        assert!(lifecycle.record_boot_start(1).is_err());
+        assert!(lifecycle.record_boot_start(1, None).is_err());
 
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
         assert!(lifecycle.pointers().boot_started_at.is_some());
     }
@@ -1767,7 +1826,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         // pointers.next_boot_patch is unset; engine claiming to boot
         // patch 1 is a sanity violation.
-        assert!(lifecycle.record_boot_start(1).is_err());
+        assert!(lifecycle.record_boot_start(1, None).is_err());
     }
 
     #[test]
@@ -1779,7 +1838,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(2);
         lifecycle.save_pointers().unwrap();
         // Engine claims to boot 1 but our pointer says 2.
-        assert!(lifecycle.record_boot_start(1).is_err());
+        assert!(lifecycle.record_boot_start(1, None).is_err());
     }
 
     #[test]
@@ -1788,7 +1847,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
 
         lifecycle.record_boot_pause().unwrap();
 
@@ -1818,10 +1877,10 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         lifecycle.record_boot_pause().unwrap();
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
 
         let reloaded = reload_at(tmp.path());
         assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
@@ -1838,7 +1897,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(2);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
 
         assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
         assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
@@ -1865,7 +1924,7 @@ mod tests {
         assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
 
         // The next process arms normally over the leftover temp file.
-        reloaded.record_boot_resume(1).unwrap();
+        reloaded.record_boot_resume(1, None).unwrap();
         assert!(!tmp_file.exists());
 
         // Death while writing the success: on disk, still armed.
@@ -1910,9 +1969,9 @@ mod tests {
 
         let mut second = reload_at(tmp.path());
         assert_eq!(second.detect_boot_crash_on_init().unwrap(), None);
-        second.record_boot_start(1).unwrap();
+        second.record_boot_start(1, None).unwrap();
         second.record_boot_pause().unwrap();
-        second.record_boot_resume(1).unwrap();
+        second.record_boot_resume(1, None).unwrap();
         assert!(second.record_boot_success().is_err());
         assert!(second.record_boot_failure(1).is_err());
 
@@ -1956,20 +2015,20 @@ mod tests {
             file.try_lock().is_ok()
         };
 
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         assert!(!lock_free());
         lifecycle.record_boot_pause().unwrap();
         assert!(lock_free());
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
         assert!(!lock_free());
         lifecycle.record_boot_success().unwrap();
         assert!(lock_free());
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
         lifecycle.forget_booting(1).unwrap();
         assert!(lock_free());
 
-        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_resume(1, None).unwrap();
         lifecycle.record_boot_failure(1).unwrap();
         assert!(lock_free());
     }
@@ -1978,11 +2037,11 @@ mod tests {
     fn record_boot_resume_errs_unless_installed() {
         let (_tmp, mut lifecycle) = fixture();
         // Unknown patch.
-        assert!(lifecycle.record_boot_resume(1).is_err());
+        assert!(lifecycle.record_boot_resume(1, None).is_err());
         // Bad patch: never armed again.
         install_state(&lifecycle, 2, 100);
         lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
-        assert!(lifecycle.record_boot_resume(2).is_err());
+        assert!(lifecycle.record_boot_resume(2, None).is_err());
         assert_eq!(lifecycle.pointers().currently_booting_patch, None);
     }
 
@@ -1992,7 +2051,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
 
         lifecycle.forget_booting(2).unwrap();
         assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
@@ -2008,6 +2067,142 @@ mod tests {
         ));
     }
 
+    /// `fixture()` with patch 1 installed and next to boot.
+    fn fixture_booting_1() -> (TempDir, PatchLifecycle) {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        (tmp, lifecycle)
+    }
+
+    #[test]
+    fn breadcrumb_holds_the_process_token_until_cleared() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        lifecycle.record_boot_start(1, Some("p1")).unwrap();
+        assert_eq!(
+            reload_at(tmp.path())
+                .pointers()
+                .boot_process_token
+                .as_deref(),
+            Some("p1")
+        );
+
+        lifecycle.record_boot_pause().unwrap();
+        assert_eq!(reload_at(tmp.path()).pointers().boot_process_token, None);
+
+        lifecycle.record_boot_resume(1, Some("p1")).unwrap();
+        assert_eq!(
+            reload_at(tmp.path())
+                .pointers()
+                .boot_process_token
+                .as_deref(),
+            Some("p1")
+        );
+    }
+
+    #[test]
+    fn record_boot_killed_keeps_the_patch_up_to_the_cap() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        for kills in 1..=MAX_BOOT_KILLS {
+            lifecycle.record_boot_start(1, Some("p")).unwrap();
+            assert!(lifecycle.record_boot_killed().unwrap());
+            let reloaded = reload_at(tmp.path());
+            assert_eq!(
+                reloaded.pointers().boot_kills,
+                Some(BootKills {
+                    patch: 1,
+                    count: kills
+                })
+            );
+            assert_eq!(reloaded.pointers().currently_booting_patch, None);
+            assert_eq!(reloaded.pointers().boot_process_token, None);
+            assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
+            assert!(matches!(
+                reloaded.read_state(1),
+                Some(PatchState::Installed { .. })
+            ));
+        }
+
+        // Past the cap it refuses and changes nothing; the caller then
+        // treats the death as a crash.
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        assert!(!lifecycle.record_boot_killed().unwrap());
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(
+            reloaded.pointers().boot_kills.as_ref().map(|k| k.count),
+            Some(MAX_BOOT_KILLS)
+        );
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+    }
+
+    #[test]
+    fn kills_of_one_patch_dont_count_against_another() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        for _ in 0..MAX_BOOT_KILLS {
+            lifecycle.record_boot_start(1, Some("p")).unwrap();
+            assert!(lifecycle.record_boot_killed().unwrap());
+        }
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+
+        for kills in 1..=MAX_BOOT_KILLS {
+            lifecycle.record_boot_start(2, Some("p")).unwrap();
+            assert!(lifecycle.record_boot_killed().unwrap());
+            assert_eq!(
+                reload_at(tmp.path()).pointers().boot_kills,
+                Some(BootKills {
+                    patch: 2,
+                    count: kills
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn record_boot_killed_errs_without_breadcrumb() {
+        let (_tmp, mut lifecycle) = fixture_booting_1();
+        assert!(lifecycle.record_boot_killed().is_err());
+        assert_eq!(lifecycle.pointers().boot_kills, None);
+    }
+
+    #[test]
+    fn record_boot_success_resets_kills() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        assert!(lifecycle.record_boot_killed().unwrap());
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        lifecycle.record_boot_success().unwrap();
+        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, None);
+    }
+
+    #[test]
+    fn record_boot_failure_resets_kills() {
+        let (tmp, mut lifecycle) = fixture_booting_1();
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        assert!(lifecycle.record_boot_killed().unwrap());
+        lifecycle.record_boot_start(1, Some("p")).unwrap();
+        lifecycle.record_boot_failure(1).unwrap();
+        assert_eq!(reload_at(tmp.path()).pointers().boot_kills, None);
+    }
+
+    /// A `pointers.json` written by an updater from before process tokens
+    /// loads, and its breadcrumb (no token) can't be matched to a kill.
+    #[test]
+    fn pointers_without_token_or_kills_load() {
+        let (tmp, lifecycle) = fixture_booting_1();
+        std::fs::write(
+            lifecycle.pointers_path(),
+            r#"{"next_boot_patch":1,"last_booted_patch":null,"currently_booting_patch":1,"boot_started_at":5}"#,
+        )
+        .unwrap();
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert_eq!(reloaded.pointers().boot_process_token, None);
+        assert_eq!(reloaded.pointers().boot_kills, None);
+    }
+
     #[test]
     fn promote_to_next_boot_keeps_the_booting_patch() {
         // Patch 1 is booting for the first time (never booted, so not
@@ -2016,7 +2211,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         install_state(&lifecycle, 2, 200);
 
         lifecycle.promote_to_next_boot(2).unwrap();
@@ -2054,7 +2249,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         lifecycle.pointers.next_boot_patch = None;
         lifecycle.save_pointers().unwrap();
 
@@ -2070,7 +2265,7 @@ mod tests {
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         install_state(&lifecycle, 2, 200);
         lifecycle.promote_to_next_boot(2).unwrap();
 
@@ -2098,7 +2293,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(3);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_start(3).unwrap();
+        lifecycle.record_boot_start(3, None).unwrap();
         lifecycle.record_boot_success().unwrap();
 
         assert_eq!(lifecycle.pointers().last_booted_patch, Some(3));
@@ -2124,7 +2319,7 @@ mod tests {
         // Patch 2 went bad some time ago.
         lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
 
-        lifecycle.record_boot_start(3).unwrap();
+        lifecycle.record_boot_start(3, None).unwrap();
         lifecycle.record_boot_success().unwrap();
 
         assert!(!lifecycle.patch_dir(1).exists(), "1 forgotten");
@@ -2174,7 +2369,7 @@ mod tests {
             .unwrap();
         std::fs::write(lifecycle.download_artifact_path(7), b"in flight").unwrap();
 
-        lifecycle.record_boot_start(5).unwrap();
+        lifecycle.record_boot_start(5, None).unwrap();
         lifecycle.record_boot_success().unwrap();
 
         assert!(
@@ -2211,7 +2406,7 @@ mod tests {
         install_state(&lifecycle, 3, 300);
         lifecycle.pointers.next_boot_patch = Some(3);
         lifecycle.save_pointers().unwrap();
-        lifecycle.record_boot_start(3).unwrap();
+        lifecycle.record_boot_start(3, None).unwrap();
         lifecycle.record_boot_success().unwrap();
 
         assert!(!lifecycle.patches_root().join("junk_dir").exists());
@@ -2273,7 +2468,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(2);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_start(2).unwrap();
+        lifecycle.record_boot_start(2, None).unwrap();
         lifecycle.record_boot_failure(2).unwrap();
         assert!(matches!(
             lifecycle.read_state(2),
@@ -2300,7 +2495,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(2);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_start(2).unwrap();
+        lifecycle.record_boot_start(2, None).unwrap();
         lifecycle.record_boot_failure(2).unwrap();
 
         // Both candidates are Bad; no fallback target → boot base.
@@ -2357,7 +2552,7 @@ mod tests {
             install_state(&lifecycle, 1, 100);
             lifecycle.pointers.next_boot_patch = Some(1);
             lifecycle.save_pointers().unwrap();
-            lifecycle.record_boot_start(1).unwrap();
+            lifecycle.record_boot_start(1, None).unwrap();
             // Drop without record_boot_success/failure.
         }
         // Second "process": init detects the breadcrumb and marks Bad.
@@ -2624,7 +2819,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_start(1, None).unwrap();
         lifecycle.record_boot_failure(1).unwrap();
 
         assert!(matches!(
@@ -2660,7 +2855,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(3);
         lifecycle.save_pointers().unwrap();
 
-        lifecycle.record_boot_start(3).unwrap();
+        lifecycle.record_boot_start(3, None).unwrap();
         lifecycle.record_boot_failure(3).unwrap();
 
         // Patch 2 is not promoted (its state is gone); next_boot ends
@@ -2693,7 +2888,7 @@ mod tests {
         std::fs::write(lifecycle.installed_artifact_path(1), b"short").unwrap();
 
         // Patch 2 fails to boot.
-        lifecycle.record_boot_start(2).unwrap();
+        lifecycle.record_boot_start(2, None).unwrap();
         lifecycle.record_boot_failure(2).unwrap();
         // Recompute promoted 1 (state still says Installed), but...
         assert_eq!(lifecycle.pointers().next_boot_patch, Some(1));
