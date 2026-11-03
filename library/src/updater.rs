@@ -281,8 +281,6 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
 struct UnreadableState {
     /// When the first failed read happened, Unix seconds.
     first_failed_at: u64,
-    /// How many loads of the state failed before one succeeded.
-    failed_reads: u32,
     /// Whether the engine asked which patch to boot and got an error, so
     /// this process runs the base release.
     booted_base: bool,
@@ -292,6 +290,11 @@ struct UnreadableState {
 }
 
 static UNREADABLE_STATE: Mutex<Option<UnreadableState>> = Mutex::new(None);
+
+/// Whether a recheck thread is running, so an app that loses access on every
+/// lock (`NSFileProtectionComplete`) never has more than one.
+static UNREADABLE_RECHECK_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// How long the recheck thread first waits, and the longest it waits, between
 /// tries at reading the state again.
@@ -313,18 +316,14 @@ fn load_state(config: &UpdateConfig) -> anyhow::Result<UpdaterState> {
     let mut held = UNREADABLE_STATE.lock().unwrap_or_else(|e| e.into_inner());
     match result {
         Err(err) => {
-            match held.as_mut() {
-                Some(unreadable) => unreadable.failed_reads += 1,
-                None => {
-                    *held = Some(UnreadableState {
-                        first_failed_at: crate::time::unix_timestamp(),
-                        failed_reads: 1,
-                        booted_base: false,
-                        message: event_error_message(&err, config),
-                        category: classify_failure(&err),
-                    });
-                    spawn_unreadable_state_recheck();
-                }
+            if held.is_none() {
+                *held = Some(UnreadableState {
+                    first_failed_at: crate::time::unix_timestamp(),
+                    booted_base: false,
+                    message: event_error_message(&err, config),
+                    category: classify_failure(&err),
+                });
+                spawn_unreadable_state_recheck();
             }
             Err(err)
         }
@@ -352,10 +351,9 @@ fn unreadable_state_event(
 ) -> PatchEvent {
     let patch_number = state.next_boot_patch().map(|p| p.number);
     let message = format!(
-        "state_unreadable: booted_base={},patch_installed={},failed_reads={},first_failed_at={} ({})",
+        "state_unreadable: booted_base={},patch_installed={},first_failed_at={} ({})",
         unreadable.booted_base,
         patch_number.is_some(),
-        unreadable.failed_reads,
         unreadable.first_failed_at,
         unreadable.message,
     );
@@ -377,7 +375,13 @@ fn unreadable_state_event(
 /// launched before first unlock never reports, even when it lives on past
 /// the unlock. Unit tests call [`recheck_unreadable_state`] themselves.
 fn spawn_unreadable_state_recheck() {
-    if cfg!(test) {
+    use std::sync::atomic::Ordering;
+    // Off in every test build (unit tests, the fixture corpus, the Dart
+    // integration tests), so a sleeping thread can't reach into a later test.
+    if cfg!(any(test, feature = "test-hooks")) {
+        return;
+    }
+    if UNREADABLE_RECHECK_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
     let spawned = std::thread::Builder::new().spawn(|| {
@@ -385,27 +389,21 @@ fn spawn_unreadable_state_recheck() {
         loop {
             std::thread::sleep(delay);
             if recheck_unreadable_state() {
-                return;
+                break;
             }
             delay = (delay * 2).min(UNREADABLE_RECHECK_MAX_DELAY);
         }
+        UNREADABLE_RECHECK_RUNNING.store(false, Ordering::SeqCst);
     });
     if let Err(err) = spawned {
+        UNREADABLE_RECHECK_RUNNING.store(false, Ordering::SeqCst);
         shorebird_error!("Failed to start unreadable state recheck: {:?}", err);
     }
 }
 
-/// Tries the state once. Returns true when nothing is left to report: the
-/// state read (queuing the report, which is then sent) or another call
-/// already reported it.
+/// Tries the state once. Returns true once it reads: the report is queued
+/// (by this load or an earlier one) and the queue is sent.
 fn recheck_unreadable_state() -> bool {
-    let pending = UNREADABLE_STATE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .is_some();
-    if !pending {
-        return true;
-    }
     if with_state(|_| Ok(())).is_err() {
         return false;
     }
@@ -5420,9 +5418,7 @@ mod unreadable_state_tests {
         // The engine's launch sequence, before first unlock.
         assert!(crate::next_boot_patch().is_err());
         assert!(crate::report_launch_start().is_err());
-        let held = held_unreadable_state().unwrap();
-        assert!(held.booted_base);
-        assert_eq!(held.failed_reads, 2);
+        assert!(held_unreadable_state().unwrap().booted_base);
         assert!(!recheck_unreadable_state(), "still unreadable");
 
         make_state_readable(&tmp_dir, saved);
@@ -5437,9 +5433,7 @@ mod unreadable_state_tests {
             assert_eq!(event.patch_number, 1);
             let message = event.message.as_deref().unwrap();
             assert!(
-                message.starts_with(
-                    "state_unreadable: booted_base=true,patch_installed=true,failed_reads=3,"
-                ),
+                message.starts_with("state_unreadable: booted_base=true,patch_installed=true,"),
                 "{message}"
             );
             assert!(message.contains("state.json"), "{message}");
@@ -5472,9 +5466,11 @@ mod unreadable_state_tests {
             let events = state.copy_events(10);
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].patch_number, 0);
-            assert!(events[0].message.as_deref().unwrap().starts_with(
-                "state_unreadable: booted_base=false,patch_installed=false,failed_reads=1,"
-            ));
+            assert!(events[0]
+                .message
+                .as_deref()
+                .unwrap()
+                .starts_with("state_unreadable: booted_base=false,patch_installed=false,"));
             Ok(())
         })?;
         Ok(())
@@ -5491,7 +5487,6 @@ mod unreadable_state_tests {
                 .context("Failed to read file 'state.json'");
             let unreadable = UnreadableState {
                 first_failed_at: 7,
-                failed_reads: 1,
                 booted_base: true,
                 message: event_error_message(&err, config),
                 category: classify_failure(&err),
@@ -5502,7 +5497,7 @@ mod unreadable_state_tests {
             let message = event.message.unwrap();
             assert!(
                 message.starts_with(
-                    "state_unreadable: booted_base=true,patch_installed=false,failed_reads=1,first_failed_at=7 ("
+                    "state_unreadable: booted_base=true,patch_installed=false,first_failed_at=7 ("
                 ),
                 "{message}"
             );
