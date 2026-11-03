@@ -1525,8 +1525,14 @@ pub fn validate_next_boot_patch() -> anyhow::Result<()> {
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_mut_state(|state| Ok(state.next_boot_patch())).inspect_err(|_| {
-        note_unreadable_state_booted_base();
+    // Marked under the config lock, so protected_data_available can't send
+    // the report between the failed load and the mark.
+    with_config(|config| match load_state(config) {
+        Ok(mut state) => Ok(state.next_boot_patch()),
+        Err(err) => {
+            note_unreadable_state_booted_base();
+            Err(err)
+        }
     })
 }
 
@@ -5442,6 +5448,34 @@ mod unreadable_state_tests {
                 .starts_with("state_unreadable: booted_base=false,patch_installed=false,"));
             Ok(())
         })?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[serial]
+    #[test]
+    fn unreadable_state_file_permission_is_reported_as_permission_denied() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        let path = tmp_dir.path().join("state.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))?;
+        if std::fs::read(&path).is_ok() {
+            // Running as root: permissions don't stop the read.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            return Ok(());
+        }
+        assert!(crate::next_boot_patch().is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        protected_data_available();
+        let events = with_state(|state| Ok(state.copy_events(10)))?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].patch_number, 1);
+        assert_eq!(
+            events[0].failure_category.as_deref(),
+            Some("permission_denied")
+        );
         Ok(())
     }
 
