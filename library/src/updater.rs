@@ -5451,9 +5451,12 @@ mod unreadable_state_tests {
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
         with_config(|config| {
-            // EPERM, what iOS returns for a protected file before first unlock.
-            let err = anyhow::Error::new(std::io::Error::from_raw_os_error(1))
-                .context("Failed to read file 'state.json'");
+            // What iOS returns (EPERM) for a protected file before first
+            // unlock. By kind, since raw error 1 means something else on
+            // Windows.
+            let err =
+                anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    .context("Failed to read file 'state.json'");
             let unreadable = UnreadableState {
                 first_failed_at: 7,
                 booted_base: true,
@@ -5470,7 +5473,7 @@ mod unreadable_state_tests {
                 ),
                 "{message}"
             );
-            assert!(message.contains("os error 1"), "{message}");
+            assert!(message.contains("state.json"), "{message}");
             Ok(())
         })
     }
