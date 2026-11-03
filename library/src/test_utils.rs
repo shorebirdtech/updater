@@ -14,7 +14,7 @@ pub fn install_fake_patch(patch_number: usize) -> anyhow::Result<()> {
             &config.release_version,
             config.patch_public_key.as_deref(),
             config.patch_verification,
-        );
+        )?;
         install_fake_patch_into(&mut state, patch_number)?;
         state.save()
     })
