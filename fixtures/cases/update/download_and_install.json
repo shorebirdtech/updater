@@ -117,7 +117,8 @@
         "storage/patches/1/dlc.vmcode",
         "storage/patches/1/state.json",
         "storage/pointers.json",
-        "storage/state.json"
+        "storage/state.json",
+        "storage/state.lock"
       ]
     },
     {

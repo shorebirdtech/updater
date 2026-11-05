@@ -31,7 +31,8 @@
       },
       "expect_tree": [
         "app/libapp.so",
-        "storage/state.json"
+        "storage/state.json",
+        "storage/state.lock"
       ]
     }
   ]
