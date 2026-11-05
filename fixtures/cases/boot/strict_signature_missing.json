@@ -1,6 +1,6 @@
 {
   "description": "Strict mode with a public key: an Installed patch without a signature fails validation.",
-  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\n",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\npatch_verification: strict\n",
   "files": {
     "storage/state.json": {
       "json": {

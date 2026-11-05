@@ -1,6 +1,6 @@
 {
   "description": "Strict mode: an artifact modified after install (same size) fails signature validation and is tombstoned.",
-  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\n",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\npatch_public_key: {{public_key}}\npatch_verification: strict\n",
   "files": {
     "storage/state.json": {
       "json": {

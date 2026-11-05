@@ -64,6 +64,7 @@ words:
   - hdpi
   - hexdigit
   - ifdef
+  - jailbroken
   - keypair
   - libapp
   - libc
