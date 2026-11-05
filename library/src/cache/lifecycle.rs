@@ -154,7 +154,7 @@ pub struct ReleasePointers {
     /// in-memory evidence that the patch once ran is gone. The two patch
     /// pointers cannot carry it: after a first success, every ordinary
     /// cold boot also has `currently_booting_patch == last_booted_patch`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub boot_is_repeat_cycle: bool,
 }
 
