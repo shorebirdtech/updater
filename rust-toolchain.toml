@@ -6,5 +6,5 @@
 [toolchain]
 channel = "1.99.1"
 profile = "minimal"
-# llvm-tools-preview is what `cargo llvm-cov` reads coverage with.
+# llvm-tools-preview is what local `cargo llvm-cov` runs read coverage with.
 components = ["rustfmt", "clippy", "llvm-tools-preview"]
