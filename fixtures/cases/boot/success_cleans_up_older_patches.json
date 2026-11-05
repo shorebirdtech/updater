@@ -127,7 +127,8 @@
         "storage/patches/3/state.json",
         "storage/patches/4/state.json",
         "storage/pointers.json",
-        "storage/state.json"
+        "storage/state.json",
+        "storage/state.lock"
       ]
     }
   ]

@@ -93,7 +93,8 @@
         "app/libapp.so",
         "cache/",
         "storage/not_ours.txt",
-        "storage/state.json"
+        "storage/state.json",
+        "storage/state.lock"
       ]
     }
   ]

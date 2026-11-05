@@ -151,7 +151,7 @@ otherwise.
   "http": [ <exchange>, ... ],
   "expect": <matcher>,
   "expect_files": { "<path>": <file expectation> },
-  "expect_tree": ["app/libapp.so", "storage/state.json"],
+  "expect_tree": ["app/libapp.so", "storage/state.json", "storage/state.lock"],
   "background": true
 }
 ```
