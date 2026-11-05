@@ -45,7 +45,7 @@ impl StateLock {
         Self::acquire_within(cache_dir, ACQUIRE_TIMEOUT)
     }
 
-    fn acquire_within(cache_dir: &Path, timeout: Duration) -> Self {
+    pub(crate) fn acquire_within(cache_dir: &Path, timeout: Duration) -> Self {
         match Self::try_acquire(cache_dir, timeout) {
             Ok(file) => Self { _file: Some(file) },
             Err(e) => {

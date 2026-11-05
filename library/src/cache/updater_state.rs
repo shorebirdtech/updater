@@ -723,8 +723,14 @@ mod tests {
         let tag = std::env::var(WRITER_TAG_ENV).unwrap();
         let dir = PathBuf::from(dir);
         for i in 0..WRITES_PER_PROCESS {
-            // What `with_mut_state` does: lock, load, mutate, save.
-            let _lock = crate::cache::StateLock::acquire(&dir);
+            // What `with_mut_state` does: lock, load, mutate, save. With no
+            // bound on the wait, so the result doesn't depend on timing: the
+            // two loops lock back to back, and a loaded machine can starve
+            // one past the production timeout, which then goes on unlocked
+            // by design (2 of 6 full-suite runs on an M-series Mac,
+            // 2026-11-04).
+            let _lock =
+                crate::cache::StateLock::acquire_within(&dir, std::time::Duration::from_secs(600));
             let mut state = UpdaterState::load_or_new_on_error(
                 &dir,
                 &dir.join("downloads"),
