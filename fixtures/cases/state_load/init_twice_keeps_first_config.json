@@ -1,0 +1,32 @@
+{
+  "description": "A second init in the same process fails and does not replace the first config (release_version stays 1.0.0+1).",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "init",
+      "release_version": "9.9.9",
+      "expect": false,
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": []
+          }
+        }
+      }
+    }
+  ]
+}

@@ -14,7 +14,7 @@ use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{Context, Result};
 
 use crate::cache::lifecycle::{self, BadReason, DownloadAction, SkipReason};
-use crate::cache::{PatchInfo, UpdaterState};
+use crate::cache::{PatchInfo, StateLock, UpdaterState};
 use crate::config::{set_config, with_config, UpdateConfig};
 use crate::events::{EventType, PatchEvent};
 use crate::logging::init_logging;
@@ -211,7 +211,8 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
     if let Some(net) = err.downcast_ref::<crate::network::NetworkError>() {
         return match net {
             crate::network::NetworkError::Server { .. } => FailureCategory::Server,
-            crate::network::NetworkError::Transport => FailureCategory::Network,
+            crate::network::NetworkError::Transport
+            | crate::network::NetworkError::UnexpectedResponse => FailureCategory::Network,
         };
     }
     // 1. Unambiguous OS error kinds, wherever in the chain they occurred.
@@ -271,18 +272,140 @@ fn libapp_path_from_settings(original_libapp_paths: &[String]) -> Result<PathBuf
     first.map(PathBuf::from)
 }
 
+/// A failure to read the updater's state, held in memory until the state
+/// reads again, because the report can't be queued while it doesn't. On iOS
+/// this is a launch before the device's first unlock (a background fetch,
+/// a push, a location event): the state file is protected until then, so the
+/// launch runs the base release whatever patch is installed.
+#[derive(Debug, Clone, PartialEq)]
+struct UnreadableState {
+    /// When the first failed read happened, Unix seconds.
+    first_failed_at: u64,
+    /// Whether the engine asked which patch to boot and got an error, so
+    /// this process runs the base release.
+    booted_base: bool,
+    /// The first failure, formatted for an event message.
+    message: String,
+    category: FailureCategory,
+}
+
+static UNREADABLE_STATE: Mutex<Option<UnreadableState>> = Mutex::new(None);
+
+/// Loads the updater state. A read failure is held (see [`UnreadableState`]);
+/// the first load that succeeds afterwards queues a `state_unreadable`
+/// failure event for it. The engine calls [`protected_data_available`] when
+/// iOS unlocks the files, which makes that load.
+///
+/// The state is loaded under [`StateLock`], which the caller holds until it's
+/// done with the state, so a load, mutate and save is exclusive across
+/// processes as `with_config` makes it within one.
+pub(crate) fn load_state(config: &UpdateConfig) -> anyhow::Result<(StateLock, UpdaterState)> {
+    let lock = StateLock::acquire(&config.storage_dir);
+    let result = UpdaterState::load_or_new_on_error(
+        &config.storage_dir,
+        &config.download_dir,
+        &config.release_version,
+        config.patch_public_key.as_deref(),
+        config.patch_verification,
+    );
+    let mut held = UNREADABLE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    match result {
+        Err(err) => {
+            if held.is_none() {
+                *held = Some(UnreadableState {
+                    first_failed_at: crate::time::unix_timestamp(),
+                    booted_base: false,
+                    message: event_error_message(&err, config),
+                    category: classify_failure(&err),
+                });
+            }
+            Err(err)
+        }
+        Ok(mut state) => {
+            if let Some(unreadable) = held.take() {
+                let event = unreadable_state_event(&mut state, config, &unreadable);
+                shorebird_error!(
+                    "Updater state was unreadable; reporting it now: {}",
+                    event.message.as_deref().unwrap_or_default()
+                );
+                queue_or_send_event(&mut state, config, event);
+            }
+            Ok((lock, state))
+        }
+    }
+}
+
+/// The `PatchUpdateFailure` event for `unreadable`, made from the first
+/// state that reads after it. Its patch number is the patch that state would
+/// boot (0 for none), so a report with a patch is a launch that lost it.
+fn unreadable_state_event(
+    state: &mut UpdaterState,
+    config: &UpdateConfig,
+    unreadable: &UnreadableState,
+) -> PatchEvent {
+    let patch_number = state.next_boot_patch().map(|p| p.number);
+    let message = format!(
+        "state_unreadable: booted_base={},patch_installed={},first_failed_at={} ({})",
+        unreadable.booted_base,
+        patch_number.is_some(),
+        unreadable.first_failed_at,
+        unreadable.message,
+    );
+    let mut event = PatchEvent::new(
+        config,
+        EventType::PatchUpdateFailure,
+        patch_number.unwrap_or(0),
+        state.client_id(),
+        Some(&message),
+    );
+    event.failure_category = Some(unreadable.category.code().to_string());
+    event
+}
+
+/// The engine calls this when the app's protected files become readable
+/// (iOS `UIApplicationProtectedDataDidBecomeAvailable`, and on entering the
+/// foreground, which needs an unlocked device). If a read failed earlier in
+/// this process, loads the state, which queues the report, and sends the
+/// queue on its own thread. Otherwise does nothing, so it is cheap to call on
+/// every foreground. The engine reads the state only at launch, and an app
+/// that leaves updating to the engine makes no later call, so without this a
+/// process launched before first unlock never reports.
+pub fn protected_data_available() {
+    let pending = UNREADABLE_STATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some();
+    if !pending {
+        return;
+    }
+    if with_state(|_| Ok(())).is_ok() {
+        spawn_event_flush();
+    }
+}
+
+/// Notes that this launch runs the base release because the state couldn't
+/// be read to find the patch to boot.
+fn note_unreadable_state_booted_base() {
+    if let Some(unreadable) = UNREADABLE_STATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+    {
+        unreadable.booted_base = true;
+    }
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn testing_reset_unreadable_state() {
+    *UNREADABLE_STATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 pub fn with_state<F, R>(f: F) -> anyhow::Result<R>
 where
     F: FnOnce(&UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, state) = load_state(config)?;
         f(&state)
     })
 }
@@ -292,13 +415,7 @@ where
     F: FnOnce(&mut UpdaterState) -> anyhow::Result<R>,
 {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config)?;
         f(&mut state)
     })
 }
@@ -355,13 +472,7 @@ fn require_signature_verifier(config: &YamlConfig, has_verifier: bool) -> Result
 /// failure to boot for that patch and queue an event to report the failure.
 pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config)?;
         if let Some(patch) = state.currently_booting_patch() {
             // A breadcrumb left by a repeat launch cycle is not evidence
             // against the patch: the same process had already booted it to
@@ -723,7 +834,8 @@ fn is_refused_event(err: &anyhow::Error) -> bool {
         matches!(
             cause.downcast_ref::<crate::network::NetworkError>(),
             Some(crate::network::NetworkError::Server {
-                status: 400 | 413 | 422
+                status: 400 | 413 | 422,
+                ..
             })
         )
     })
@@ -778,7 +890,7 @@ fn queue_or_send_event(state: &mut UpdaterState, config: &UpdateConfig, event: P
 
 /// Waits for every flush [`spawn_event_flush`] started.
 #[cfg(any(test, feature = "test-hooks"))]
-pub(crate) fn testing_wait_for_event_flushes() {
+pub fn testing_wait_for_event_flushes() {
     let threads: Vec<_> = EVENT_FLUSH_THREADS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -814,10 +926,50 @@ fn update_failure_event(
     event
 }
 
-/// Formats an error for an event's message: paths under the updater's own
-/// directories are made relative to them, then the result is truncated.
+/// Formats an error for an event's message: root cause first (see
+/// [`root_cause_first`]), paths under the updater's own directories made
+/// relative to them, then truncated.
 fn event_error_message(err: &anyhow::Error, config: &UpdateConfig) -> String {
-    truncate_error_message(&relativize_paths(&format!("{:#}", err), config))
+    truncate_error_message(&relativize_paths(&root_cause_first(err), config))
+}
+
+/// Formats an error chain with its cause first, then the contexts around it
+/// from the outermost in, so `a: b: cause` reads `cause; a: b`.
+///
+/// `{:#}` puts the cause last, where truncation cuts it: an inflate failure's
+/// context carries ~180 bytes of byte counters plus the output path, so the
+/// base or patch read error that explains it never reached the server.
+///
+/// The cause is the innermost error that isn't an [`UpdateError`] tag:
+/// `Err(UpdateError::CorruptPatch).context(detail)` leads with `detail`, as
+/// the tag is already sent as the event's `failure_category`. A context that
+/// ends by repeating the cause (as `with_file_context` does) drops the repeat.
+/// A single-error chain is unchanged.
+fn root_cause_first(err: &anyhow::Error) -> String {
+    let errors: Vec<&(dyn std::error::Error + 'static)> = err.chain().collect();
+    let Some(cause_index) = errors
+        .iter()
+        .rposition(|e| e.downcast_ref::<UpdateError>().is_none())
+    else {
+        return format!("{:#}", err);
+    };
+    let cause = errors[cause_index].to_string();
+    let rest: Vec<String> = errors
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != cause_index)
+        .map(|(_, e)| {
+            let text = e.to_string();
+            match text.strip_suffix(&format!(": {cause}")) {
+                Some(stripped) => stripped.to_string(),
+                None => text,
+            }
+        })
+        .collect();
+    if rest.is_empty() {
+        return cause;
+    }
+    format!("{cause}; {}", rest.join(": "))
 }
 
 /// Replaces the absolute directories the updater works in with placeholders,
@@ -1366,13 +1518,7 @@ where
 /// nothing else would report why.
 pub fn validate_next_boot_patch() -> anyhow::Result<()> {
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config)?;
         let Some(patch_number) = state.next_boot_patch().map(|p| p.number) else {
             return Ok(());
         };
@@ -1400,7 +1546,15 @@ pub fn validate_next_boot_patch() -> anyhow::Result<()> {
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
 pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
-    with_mut_state(|state| Ok(state.next_boot_patch()))
+    // Marked under the config lock, so protected_data_available can't send
+    // the report between the failed load and the mark.
+    with_config(|config| match load_state(config) {
+        Ok((_lock, mut state)) => Ok(state.next_boot_patch()),
+        Err(err) => {
+            note_unreadable_state_booted_base();
+            Err(err)
+        }
+    })
 }
 
 /// The patch this process is using, set at `report_launch_start` and
@@ -1451,13 +1605,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
 
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config)?;
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
             UpdateError::InvalidState("currently_booting_patch is None".to_string()),
@@ -1507,13 +1655,7 @@ pub fn report_restart_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed hot restart.");
 
     with_config(|config| {
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config)?;
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
             UpdateError::InvalidState("currently_booting_patch is None".to_string()),
@@ -1532,13 +1674,7 @@ pub fn report_launch_success() -> anyhow::Result<()> {
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
-        let mut state = UpdaterState::load_or_new_on_error(
-            &config.storage_dir,
-            &config.download_dir,
-            &config.release_version,
-            config.patch_public_key.as_deref(),
-            config.patch_verification,
-        );
+        let (_lock, mut state) = load_state(config)?;
 
         // None means we didn't boot from a patch, so there's nothing to record.
         if let Some(booting_patch) = state.currently_booting_patch() {
@@ -1751,7 +1887,7 @@ mod tests {
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
             assert_eq!(state.next_boot_patch().unwrap().number, 1);
             Ok(())
         })?;
@@ -2080,7 +2216,7 @@ patch_verification: bogus_mode
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
             assert_eq!(
                 state.last_successfully_booted_patch().unwrap().number,
                 patch_number
@@ -2112,7 +2248,7 @@ patch_verification: bogus_mode
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
             // It's now bad.
             assert!(state.next_boot_patch().is_none());
             // And no longer what this process is running.
@@ -2348,7 +2484,7 @@ patch_verification: bogus_mode
                 &config.release_version,
                 config.patch_public_key.as_deref(),
                 config.patch_verification,
-            );
+            )?;
 
             state.record_boot_failure_for_patch(1)?;
 
@@ -3007,6 +3143,69 @@ patch_verification: bogus_mode
         *OFFERED_SIGNATURE.lock().unwrap() = Some(HELLO_TESTS_SIGNATURE.to_string());
         assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
         assert_installed_and_bootable()
+    }
+
+    #[test]
+    fn root_cause_first_leaves_a_single_error_alone() {
+        let err = anyhow::anyhow!("hash mismatch");
+        assert_eq!(super::root_cause_first(&err), "hash mismatch");
+    }
+
+    #[test]
+    fn root_cause_first_leads_with_the_root_cause() {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "failed to fill whole buffer",
+        );
+        let err = anyhow::Error::new(io)
+            .context("Failed to write to file 'out'")
+            .context("Patch application failed. patch_file=10b");
+        assert_eq!(
+            super::root_cause_first(&err),
+            "failed to fill whole buffer; Patch application failed. \
+             patch_file=10b: Failed to write to file 'out'"
+        );
+    }
+
+    #[test]
+    fn root_cause_first_drops_a_repeated_cause() {
+        let io = std::io::Error::other("failed to fill whole buffer");
+        let err = anyhow::Error::new(io)
+            .context("Failed to write to file 'out': failed to fill whole buffer")
+            .context("Patch application failed.");
+        assert_eq!(
+            super::root_cause_first(&err),
+            "failed to fill whole buffer; Patch application failed.: \
+             Failed to write to file 'out'"
+        );
+    }
+
+    #[test]
+    fn root_cause_first_leads_with_the_detail_under_a_tag() {
+        let err = anyhow::Error::new(super::UpdateError::CorruptPatch)
+            .context("Update rejected: hash mismatch.")
+            .context("This app reports version 1.0.0, but the binary is different from the version 1.0.0");
+        assert_eq!(
+            super::root_cause_first(&err),
+            "Update rejected: hash mismatch.; This app reports version 1.0.0, \
+             but the binary is different from the version 1.0.0: \
+             Downloaded patch was invalid"
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn event_error_message_keeps_root_cause_past_truncation() {
+        let config = config_with_dirs("/storage", "/code_cache", "/app/libapp.so");
+        let io = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "failed to fill whole buffer",
+        );
+        let err = anyhow::Error::new(io)
+            .context(format!("Patch application failed. {}", "x".repeat(400)));
+        let msg = super::event_error_message(&err, &config);
+        assert!(msg.len() <= 256, "{msg}");
+        assert!(msg.starts_with("failed to fill whole buffer; "), "{msg}");
     }
 
     #[test]
@@ -5238,8 +5437,20 @@ mod failure_classification_tests {
             FailureCategory::Network
         );
         assert_eq!(
-            classify_failure(&anyhow::Error::new(NetworkError::Server { status: 503 })),
+            classify_failure(&anyhow::Error::new(NetworkError::Server {
+                status: 503,
+                error: None
+            })),
             FailureCategory::Server
+        );
+    }
+
+    #[test]
+    fn unexpected_response_is_network() {
+        // A captive portal's 200 page never reached our server.
+        assert_eq!(
+            classify_failure(&anyhow::Error::new(NetworkError::UnexpectedResponse)),
+            FailureCategory::Network
         );
     }
 
@@ -5257,7 +5468,7 @@ mod failure_classification_tests {
             FailureCategory::Server
         );
         assert_eq!(
-            classify_failure(&anyhow::Error::new(UpdateError::CorruptPatch)),
+            classify_failure(&anyhow::Error::new(super::UpdateError::CorruptPatch)),
             FailureCategory::CorruptPatch
         );
     }
@@ -5291,8 +5502,11 @@ mod failure_classification_tests {
     fn context_wrapping_preserves_classification() {
         // Extra `.context()` layers (as added at real origins) must not defeat
         // downcast-based classification.
-        let err = anyhow::Error::new(NetworkError::Server { status: 500 })
-            .context("while checking for a patch");
+        let err = anyhow::Error::new(NetworkError::Server {
+            status: 500,
+            error: None,
+        })
+        .context("while checking for a patch");
         assert_eq!(classify_failure(&err), FailureCategory::Server);
     }
 
@@ -5609,5 +5823,172 @@ mod hot_restart_tests {
         })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod unreadable_state_tests {
+    use super::tests::init_for_testing;
+    use super::*;
+    use crate::test_utils::install_fake_patch;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    /// Makes state.json unreadable the way a protected file is before first
+    /// unlock: it exists, but reading it fails. Returns its saved contents.
+    fn make_state_unreadable(tmp_dir: &TempDir) -> Vec<u8> {
+        let path = tmp_dir.path().join("state.json");
+        let saved = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        saved
+    }
+
+    fn make_state_readable(tmp_dir: &TempDir, saved: Vec<u8>) {
+        let path = tmp_dir.path().join("state.json");
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, saved).unwrap();
+    }
+
+    fn held_unreadable_state() -> Option<UnreadableState> {
+        UNREADABLE_STATE.lock().unwrap().clone()
+    }
+
+    #[serial]
+    #[test]
+    fn unreadable_state_at_boot_is_reported_once_it_reads() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        crate::network::testing_set_network_hooks(
+            |_, _| panic!("unexpected patch check"),
+            crate::network::UNEXPECTED_DOWNLOAD,
+            // Offline, so the report stays queued for the test to read.
+            |_, _| anyhow::bail!("offline"),
+        );
+        install_fake_patch(1)?;
+        let saved = make_state_unreadable(&tmp_dir);
+
+        // The engine's launch sequence, before first unlock.
+        assert!(crate::next_boot_patch().is_err());
+        assert!(crate::report_launch_start().is_err());
+        assert!(held_unreadable_state().unwrap().booted_base);
+        // Still locked: the report stays held.
+        protected_data_available();
+        assert!(held_unreadable_state().is_some());
+
+        make_state_readable(&tmp_dir, saved);
+        protected_data_available();
+        assert_eq!(held_unreadable_state(), None);
+
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            let event = &events[0];
+            assert_eq!(event.identifier, EventType::PatchUpdateFailure);
+            assert_eq!(event.patch_number, 1);
+            let message = event.message.as_deref().unwrap();
+            assert!(
+                message.starts_with("state_unreadable: booted_base=true,patch_installed=true,"),
+                "{message}"
+            );
+            assert!(message.contains("state.json"), "{message}");
+            // A directory opens, so its read error comes from inside the
+            // JSON reader; the EPERM test below covers the category.
+            assert!(event.failure_category.is_some());
+            Ok(())
+        })?;
+        // Reported once.
+        with_state(|state| {
+            assert_eq!(state.copy_events(10).len(), 1);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn unreadable_state_without_a_patch_reports_patch_zero() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        let saved = make_state_unreadable(&tmp_dir);
+
+        // A Dart-side call, not the engine asking what to boot.
+        assert!(crate::running_patch().is_err());
+        assert!(!held_unreadable_state().unwrap().booted_base);
+
+        make_state_readable(&tmp_dir, saved);
+        with_state(|state| {
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].patch_number, 0);
+            assert!(events[0]
+                .message
+                .as_deref()
+                .unwrap()
+                .starts_with("state_unreadable: booted_base=false,patch_installed=false,"));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[serial]
+    #[test]
+    fn unreadable_state_file_permission_is_reported_as_permission_denied() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        let path = tmp_dir.path().join("state.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))?;
+        if std::fs::read(&path).is_ok() {
+            // Running as root: permissions don't stop the read.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            return Ok(());
+        }
+        assert!(crate::next_boot_patch().is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        protected_data_available();
+        let events = with_state(|state| Ok(state.copy_events(10)))?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].patch_number, 1);
+        assert_eq!(
+            events[0].failure_category.as_deref(),
+            Some("permission_denied")
+        );
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn unreadable_permission_denied_is_categorized() -> anyhow::Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        with_config(|config| {
+            // What iOS returns (EPERM) for a protected file before first
+            // unlock. By kind, since raw error 1 means something else on
+            // Windows.
+            let err =
+                anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    .context("Failed to read file 'state.json'");
+            let unreadable = UnreadableState {
+                first_failed_at: 7,
+                booted_base: true,
+                message: event_error_message(&err, config),
+                category: classify_failure(&err),
+            };
+            let (_lock, mut state) = load_state(config)?;
+            let event = unreadable_state_event(&mut state, config, &unreadable);
+            assert_eq!(event.failure_category.as_deref(), Some("permission_denied"));
+            let message = event.message.unwrap();
+            assert!(
+                message.starts_with(
+                    "state_unreadable: booted_base=true,patch_installed=false,first_failed_at=7 ("
+                ),
+                "{message}"
+            );
+            assert!(message.contains("state.json"), "{message}");
+            Ok(())
+        })
     }
 }

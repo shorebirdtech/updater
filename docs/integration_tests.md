@@ -344,6 +344,6 @@ that pays back the investment.
 ## Out of scope for this doc
 
 - Test data hygiene if patch fixtures end up checked in.
-- Coverage reporting (CI uses `cargo llvm-cov` for Rust today; Dart-side
+- Coverage reporting (run `cargo llvm-cov` locally for Rust; Dart-side
   coverage from this suite is a bonus, not the goal).
 - Performance benchmarking. This is a correctness suite.

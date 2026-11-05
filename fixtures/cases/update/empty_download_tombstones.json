@@ -1,0 +1,81 @@
+{
+  "description": "A zero-byte download: error, tombstone InvalidPatchBytes.",
+  "base": {
+    "file": "bipatch/text_edit/base.bin"
+  },
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": true,
+              "patch": {
+                "number": 1,
+                "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+                "download_url": "{{server}}/patches/1.bin"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/patches/1.bin",
+            "headers": {
+              "range": null
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "text": ""
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": -1,
+        "message": "<any>"
+      },
+      "expect_files": {
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Bad",
+            "reason": "InvalidPatchBytes",
+            "hash": "3dcb171d162d03aa5a957400955a5720d767dda94deaae87b90dafed594e7285",
+            "signature": null,
+            "size": 0
+          }
+        }
+      }
+    }
+  ]
+}

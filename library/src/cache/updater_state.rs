@@ -90,13 +90,21 @@ fn generate_client_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn is_file_not_found(error: &anyhow::Error) -> bool {
-    for cause in error.chain() {
+/// True if `error` is a failure to read the file rather than to parse what
+/// was read: a permission error, an I/O error, anything but not-found. iOS
+/// refuses reads of protected files while a device that hasn't been unlocked
+/// since boot launches the app in the background. The file is fine and will
+/// read again later, so it must not be treated as corrupt.
+fn is_read_failure(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
         if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
-            return io_error.kind() == std::io::ErrorKind::NotFound;
+            return io_error.kind() != std::io::ErrorKind::NotFound;
         }
-    }
-    false
+        if let Some(json_error) = cause.downcast_ref::<serde_json::Error>() {
+            return json_error.classify() == serde_json::error::Category::Io;
+        }
+        false
+    })
 }
 
 impl UpdaterState {
@@ -207,13 +215,20 @@ impl UpdaterState {
         state
     }
 
+    /// Loads the state in `cache_dir`, or starts a new one (wiping any
+    /// per-release files) when the release version changed, there is no
+    /// state file, or it doesn't parse.
+    ///
+    /// Returns an error, touching nothing on disk, when the state file is
+    /// there but can't be read (see [`is_read_failure`]). Starting over then
+    /// would delete installed patches that are only unreadable for now.
     pub fn load_or_new_on_error(
         cache_dir: &Path,
         download_dir: &Path,
         release_version: &str,
         patch_public_key: Option<&str>,
         verification_mode: PatchVerificationMode,
-    ) -> Self {
+    ) -> Result<Self> {
         match Self::load(cache_dir, download_dir, patch_public_key, verification_mode) {
             Ok(loaded) => {
                 if loaded.serialized_state.release_version != release_version {
@@ -222,7 +237,7 @@ impl UpdaterState {
                         loaded.serialized_state.release_version,
                         release_version
                     );
-                    return Self::create_new_and_save(
+                    return Ok(Self::create_new_and_save(
                         cache_dir,
                         download_dir,
                         release_version,
@@ -230,15 +245,20 @@ impl UpdaterState {
                         verification_mode,
                         loaded.client_id(),
                         loaded.serialized_state.queued_events,
-                    );
+                    ));
                 }
-                loaded
+                Ok(loaded)
+            }
+            Err(e) if is_read_failure(&e) => {
+                shorebird_error!(
+                    "Can't read state file, leaving installed patches in place: {:#}",
+                    e
+                );
+                Err(e)
             }
             Err(e) => {
-                if !is_file_not_found(&e) {
-                    shorebird_info!("No existing state file found: {:#}, creating new state.", e);
-                }
-                Self::create_new_and_save(
+                shorebird_info!("No usable state file ({:#}), creating new state.", e);
+                Ok(Self::create_new_and_save(
                     cache_dir,
                     download_dir,
                     release_version,
@@ -246,7 +266,7 @@ impl UpdaterState {
                     verification_mode,
                     generate_client_id(),
                     Vec::new(),
-                )
+                ))
             }
         }
     }
@@ -446,6 +466,7 @@ mod tests {
             None,
             PatchVerificationMode::default(),
         )
+        .unwrap()
     }
 
     #[test]
@@ -581,6 +602,56 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_state_file_keeps_installed_patches() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load(&tmp, "1.0.0+1");
+        install_fake_patch_into(&mut state, 1).unwrap();
+        state.save().unwrap();
+        let artifact = state.lifecycle.installed_artifact_path(1);
+
+        // A directory where the file should be: it exists but every read of
+        // it fails, as a protected file does before first unlock.
+        let state_path = tmp.path().join(STATE_FILE_NAME);
+        let saved = std::fs::read(&state_path).unwrap();
+        std::fs::remove_file(&state_path).unwrap();
+        std::fs::create_dir(&state_path).unwrap();
+
+        let result = UpdaterState::load_or_new_on_error(
+            tmp.path(),
+            &tmp.path().join("downloads"),
+            "1.0.0+1",
+            None,
+            PatchVerificationMode::default(),
+        );
+        assert!(result.is_err());
+        assert!(artifact.exists(), "installed patch should survive");
+
+        // Once the file reads again, the patch is still the one to boot.
+        std::fs::remove_dir(&state_path).unwrap();
+        std::fs::write(&state_path, saved).unwrap();
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert_eq!(reloaded.client_id(), state.client_id());
+        assert_eq!(reloaded.next_boot_patch().map(|p| p.number), Some(1));
+    }
+
+    #[test]
+    fn read_failure_is_not_a_missing_or_corrupt_file() {
+        use crate::file_errors::{FileOperation, IoResultExt};
+        use std::io::{Error, ErrorKind};
+        let path = Path::new("state.json");
+        let denied: std::io::Result<()> = Err(Error::new(ErrorKind::PermissionDenied, "denied"));
+        let denied = denied.with_file_context(FileOperation::ReadFile, path);
+        assert!(is_read_failure(&denied.unwrap_err()));
+
+        let missing: std::io::Result<()> = Err(Error::new(ErrorKind::NotFound, "missing"));
+        let missing = missing.with_file_context(FileOperation::ReadFile, path);
+        assert!(!is_read_failure(&missing.unwrap_err()));
+
+        let corrupt = serde_json::from_str::<SerializedState>("garbage").unwrap_err();
+        assert!(!is_read_failure(&anyhow::Error::new(corrupt)));
+    }
+
+    #[test]
     fn installing_replaces_unbooted_predecessor() {
         // Ports
         // `patch_manager.rs::next_boot_patch_tests::adding_patch_deletes_unbooted_patch_not_last_booted`.
@@ -660,5 +731,84 @@ mod tests {
             .mark_bad(1, BadReason::InstallHashMismatch)
             .unwrap();
         assert!(state.is_known_bad_patch(1));
+    }
+
+    const WRITER_DIR_ENV: &str = "SHOREBIRD_TEST_STATE_WRITER_DIR";
+    const WRITER_TAG_ENV: &str = "SHOREBIRD_TEST_STATE_WRITER_TAG";
+    const WRITES_PER_PROCESS: usize = 20;
+
+    /// The body of each process `concurrent_processes_lose_no_events`
+    /// spawns. Run on its own, it returns at once.
+    #[test]
+    fn state_writer_process() {
+        let Ok(dir) = std::env::var(WRITER_DIR_ENV) else {
+            return;
+        };
+        let tag = std::env::var(WRITER_TAG_ENV).unwrap();
+        let dir = PathBuf::from(dir);
+        for i in 0..WRITES_PER_PROCESS {
+            // What `with_mut_state` does: lock, load, mutate, save. With no
+            // bound on the wait, so the result doesn't depend on timing: the
+            // two loops lock back to back, and a loaded machine can starve
+            // one past the production timeout, which then goes on unlocked
+            // by design (2 of 6 full-suite runs on an M-series Mac,
+            // 2026-11-04).
+            let _lock =
+                crate::cache::StateLock::acquire_within(&dir, std::time::Duration::from_secs(600));
+            let mut state = UpdaterState::load_or_new_on_error(
+                &dir,
+                &dir.join("downloads"),
+                "1.0.0+1",
+                None,
+                PatchVerificationMode::default(),
+            )
+            .unwrap();
+            let mut queued = event(i);
+            queued.event_id = Some(format!("{tag}-{i}"));
+            state.queue_event(queued).unwrap();
+        }
+    }
+
+    #[test]
+    fn concurrent_processes_lose_no_events() {
+        // Two processes (as with an Android `android:process` service)
+        // queueing events into one cache dir: each read-modify-write must
+        // see the other's, and the file must stay parseable throughout.
+        const { assert!(2 * WRITES_PER_PROCESS <= MAX_QUEUED_EVENTS) };
+        let tmp = TempDir::new().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let writers: Vec<_> = ["a", "b"]
+            .iter()
+            .map(|tag| {
+                std::process::Command::new(&exe)
+                    .args([
+                        "--exact",
+                        "cache::updater_state::tests::state_writer_process",
+                        "--test-threads=1",
+                    ])
+                    .env(WRITER_DIR_ENV, tmp.path())
+                    .env(WRITER_TAG_ENV, tag)
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for mut writer in writers {
+            assert!(writer.wait().unwrap().success());
+        }
+
+        let state = load(&tmp, "1.0.0+1");
+        let mut ids: Vec<String> = state
+            .copy_events(MAX_QUEUED_EVENTS)
+            .into_iter()
+            .map(|e| e.event_id.unwrap())
+            .collect();
+        ids.sort();
+        let mut expected: Vec<String> = ["a", "b"]
+            .iter()
+            .flat_map(|tag| (0..WRITES_PER_PROCESS).map(move |i| format!("{tag}-{i}")))
+            .collect();
+        expected.sort();
+        assert_eq!(ids, expected);
     }
 }

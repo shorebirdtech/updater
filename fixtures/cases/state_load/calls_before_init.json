@@ -1,0 +1,37 @@
+{
+  "description": "Before init every call fails safe: no patch, no update, nothing on disk.",
+  "steps": [
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": null
+    },
+    {
+      "call": "check_for_downloadable_update",
+      "expect": false
+    },
+    {
+      "call": "update",
+      "expect": {
+        "status": -1,
+        "message": "<any>"
+      }
+    },
+    {
+      "call": "report_launch_start"
+    },
+    {
+      "call": "report_launch_success",
+      "expect_tree": [
+        "app/libapp.so"
+      ]
+    }
+  ]
+}

@@ -145,6 +145,7 @@ pub fn testing_reset_config() {
     set_successfully_booted_patch_number(None);
     clear_restart_failed_patches();
     crate::restart::set_restart_handler(None);
+    crate::updater::testing_reset_unreadable_state();
 }
 
 pub fn check_initialized_and_call<F, R>(

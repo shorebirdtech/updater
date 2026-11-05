@@ -1,6 +1,5 @@
 # Updater library
 
-[![codecov](https://codecov.io/gh/shorebirdtech/updater/branch/main/graph/badge.svg)](https://codecov.io/gh/shorebirdtech/updater)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE-MIT)
 [![License: Apache](https://img.shields.io/badge/license-Apache-orange.svg)](./LICENSE-APACHE)
 

@@ -2,9 +2,6 @@ name: Rust Crate Workflow
 description: Build and test your Rust crate
 
 inputs:
-  codecov_token:
-    required: true
-    description: The codecov token used to upload coverage reports.
   working_directory:
     required: false
     default: "."
@@ -13,11 +10,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
-      with:
-        tool: cargo-llvm-cov
-
     - name: Check Formatting
       working-directory: ${{ inputs.working_directory }}
       shell: bash
@@ -32,23 +24,4 @@ runs:
     - name: Test
       working-directory: ${{ inputs.working_directory }}
       shell: bash
-      run: cargo llvm-cov --lcov --output-path lcov.info
-    
-    # Per https://stackoverflow.com/questions/73402042/github-action-expressions-split-string
-    - name: Split package name
-      env:
-        PACKAGE_PATH: ${{ inputs.working_directory}}
-      id: split
-      shell: bash
-      run: echo "package_name=${PACKAGE_PATH##*/}" >> $GITHUB_OUTPUT
-
-    - name: Upload Coverage
-      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-      with:
-        # We use Codecov's carryforward flags to allow our PR testing to only
-        # run affected packages, but also allow our coverage information from
-        # past runs to "carry forward" on a "per flag" basis.  We tag coverage
-        # information with "flags" explaining what directory the coverage is from.
-        # https://docs.codecov.com/docs/carryforward-flags
-        flags: ${{ steps.split.outputs.package_name }}
-        token: ${{ inputs.codecov_token }}
+      run: cargo test

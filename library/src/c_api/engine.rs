@@ -360,6 +360,17 @@ pub extern "C" fn shorebird_report_restart_failure() {
     );
 }
 
+/// Tell the updater the app's protected files are readable: iOS posted
+/// `UIApplicationProtectedDataDidBecomeAvailable`, or the app entered the
+/// foreground. If the updater couldn't read its state earlier in this process
+/// (a launch before the device's first unlock), it reports that now. Cheap
+/// when there is nothing to report; safe to call on any thread, any number of
+/// times.
+#[no_mangle]
+pub extern "C" fn shorebird_protected_data_available() {
+    updater::protected_data_available();
+}
+
 /// Report that the app launched successfully. The Shell constructor calls
 /// this once per process when the VM has finished booting; it pairs with
 /// `shorebird_report_launch_start` to mark a patch as having booted cleanly.
