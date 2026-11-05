@@ -55,6 +55,7 @@ words:
   - flate
   - endtemplate
   - ENOSPC
+  - EPERM
   - EROFS
   - eseidel
   - felangel
