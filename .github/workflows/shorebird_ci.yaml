@@ -2,22 +2,36 @@
 # Run `shorebird_ci verify` to check for dep graph drift.
 name: Shorebird CI
 
-# paths-filter lists a PR's changed files through the API on pull_request.
-permissions:
-  contents: read
-  pull-requests: read
+# A new push to a PR cancels that PR's run still going on the older head.
+# Other events (push to main, merge_group) group by run id, so they never
+# cancel or queue behind each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 on:
   pull_request:
     branches:
       - main
+  # Checks run on the queue's own temp branch, not the PR. Without this
+  # trigger the required contexts never report there and the queue
+  # ejects every PR at the timeout.
+  merge_group:
+    types: [checks_requested]
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # dorny/paths-filter lists a pull request's changed files through the API.
+      pull-requests: read
     outputs:
       shorebird_code_push: ${{ steps.filter.outputs.shorebird_code_push }}
       shorebird_code_push_example: ${{ steps.filter.outputs.shorebird_code_push_example }}
@@ -27,12 +41,13 @@ jobs:
           # Full history so dorny/paths-filter can diff on push events.
           fetch-depth: 0
       - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
-      - run: dart pub global activate shorebird_ci 0.2.7
+      - run: dart pub global activate shorebird_ci 0.3.0
       - name: Verify CI coverage
         run: shorebird_ci verify
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
+          base: ${{ github.event.merge_group.base_ref || '' }}
           filters: |
             shorebird_code_push:
               - shorebird_code_push/**
@@ -80,7 +95,7 @@ jobs:
 
   required:
     name: required
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     needs:
       - changes
       - shorebird_code_push
