@@ -4,6 +4,10 @@ import 'package:shorebird_code_push/src/shorebird_updater_io.dart'
 /// The reason a call to [ShorebirdUpdater.update] failed.
 enum UpdateFailureReason {
   /// No update is available.
+  ///
+  /// [ShorebirdUpdater.update] no longer reports this reason: it completes
+  /// normally when no update is available. This value remains for
+  /// compatibility.
   noUpdate,
 
   /// The update failed because the patch could not be downloaded.
@@ -108,16 +112,14 @@ abstract class ShorebirdUpdater {
 
   /// Whether the running app contains the Shorebird engine.
   ///
-  /// This is false when the app was *NOT* built using `shorebird release` or
-  /// `shorebird preview` and does *NOT* contain the Shorebird engine (e.g. it
-  /// was built with `flutter build` or `flutter run`), or on an unsupported
+  /// This is false when the app does *NOT* contain the Shorebird engine (e.g.
+  /// it was built with `flutter build` or `flutter run`), or on an unsupported
   /// platform (e.g. web).
   ///
-  /// This does not check the build mode. Shorebird only supports release mode,
-  /// but a debug build that contains the Shorebird engine still reports true
-  /// even though its updater is not configured. In such a build,
-  /// [readCurrentPatch] and [readNextPatch] return `null`, [checkForUpdate]
-  /// returns [UpdateStatus.upToDate], and [update] throws an
+  /// This does not check the build mode or whether the updater started. When
+  /// the engine did not start the updater, as in some non-release builds, this
+  /// is still true, but [readCurrentPatch] and [readNextPatch] return `null`,
+  /// [checkForUpdate] returns [UpdateStatus.upToDate], and [update] throws an
   /// [UpdateException].
   bool get isAvailable;
 
@@ -169,7 +171,7 @@ abstract class ShorebirdUpdater {
   /// ready to be used on the next app start.
   ///
   /// Note: The app must be restarted for the update to take effect.
-  /// Note: This method does nothing if the updater is not available.
+  /// Note: This method does nothing if [isAvailable] is false.
   ///
   /// **Warning:** This method makes a network call to download the update,
   /// which may take a long time to complete. If your app gates startup on
@@ -191,7 +193,8 @@ abstract class ShorebirdUpdater {
   /// ```
   ///
   /// See also:
-  /// * [isAvailable], which indicates whether the updater is available.
+  /// * [isAvailable], which indicates whether the app contains the Shorebird
+  ///   engine.
   /// * [checkForUpdate], which should be called to check if an update is
   ///   available before calling this method.
   Future<void> update({UpdateTrack? track});
