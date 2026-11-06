@@ -92,7 +92,9 @@ words:
   - rollforward
   - rollouts
   - RTLD
+  - rustc
   - rustflags
+  - rustfmt
   - rustls
   - rustup
   - serde
