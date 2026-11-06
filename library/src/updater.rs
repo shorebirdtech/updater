@@ -469,7 +469,9 @@ fn require_signature_verifier(config: &YamlConfig, has_verifier: bool) -> Result
 }
 
 /// If, at initialization time, we detect that we were in the process of booting a patch, report a
-/// failure to boot for that patch and queue an event to report the failure.
+/// failure to boot for that patch and queue an event to report the failure. If we detect that the
+/// prior process crashed during a hot restart, disable hot restart for the rest of this release
+/// and queue a restart-crashed event without condemning the patch.
 pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
     with_config(|config| {
         let (_lock, mut state) = load_state(config)?;
@@ -495,6 +497,22 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 config,
                 EventType::PatchInstallFailure,
                 patch.number,
+                state.client_id(),
+                Some(&message),
+            ))?;
+        }
+
+        if let Some(patch_number) = state.record_restart_crash()? {
+            shorebird_info!(
+                "crash_recovery: patch {} crashed during a hot restart; disabling hot restart \
+                 for this release and leaving patch state intact.",
+                patch_number
+            );
+            let message = format!("restart_crash: patch {patch_number} crashed during hot restart");
+            state.queue_event(PatchEvent::new(
+                config,
+                EventType::PatchRestartCrash,
+                patch_number,
                 state.client_id(),
                 Some(&message),
             ))?;
@@ -1629,6 +1647,49 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     })
 }
 
+/// Report that a hot restart is starting to relaunch into the current
+/// next-boot patch (or the base release if none).
+///
+/// Updates the in-memory `running_patch` and writes the restart crash marker
+/// (`pointers.currently_restarting_patch`) without touching
+/// `currently_booting_patch` or `last_booted_patch`. Only a cold boot judges a
+/// patch.
+pub fn report_restart_start() -> anyhow::Result<()> {
+    shorebird_info!("Reporting hot restart start.");
+
+    with_mut_state(|state| {
+        let next_boot_patch = state.next_boot_patch();
+        let patch_number = next_boot_patch.as_ref().map(|p| p.number);
+        state.set_running_patch(patch_number);
+        state.record_restart_start(patch_number.unwrap_or(0))
+    })
+}
+
+/// Report that the in-flight hot restart survived its launch window.
+///
+/// Clears the restart crash marker (`currently_restarting_patch`) without
+/// promoting the patch to `last_booted_patch`, deleting older patches, or
+/// queueing `PatchInstallSuccess`.
+pub fn report_restart_success() -> anyhow::Result<()> {
+    shorebird_info!("Reporting successful hot restart.");
+
+    let has_events = with_mut_state(|state| {
+        state.record_restart_success()?;
+        Ok(!state.copy_events(1).is_empty())
+    })?;
+
+    if has_events {
+        spawn_event_flush();
+    }
+    Ok(())
+}
+
+/// True when a hot restart failed or crashed earlier in this release, so
+/// further hot restart requests in this release should be refused.
+pub fn is_restart_disabled() -> bool {
+    with_state(|state| Ok(state.restart_failed())).unwrap_or(false)
+}
+
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
@@ -1660,6 +1721,47 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
         );
         // Queue the failure event for later sending since right after this
         // function returns the Flutter engine is likely to abort().
+        state.queue_event(event)
+    })
+}
+
+/// Report that a hot restart could not bring up the patch it was
+/// relaunching into.
+///
+/// Unlike [`report_launch_failure`], this does not condemn the patch. A hot
+/// restart runs inside an already-dirty process, so a failure is not clean
+/// evidence against the patch; `mark_bad` would delete the artifacts and
+/// tombstone the patch for the whole release, preventing a cold boot from
+/// trying it cleanly.
+///
+/// Instead, this clears `currently_restarting_patch`, disables hot restart for
+/// the rest of this release (`restart_failed = true`), excludes the patch from
+/// the boot target for the rest of this process (so the engine's recovery
+/// relaunch lands on `last_booted_patch` or the base release), and queues a
+/// `PatchRestartFailure` event.
+pub fn report_restart_failure() -> anyhow::Result<()> {
+    shorebird_info!("Reporting failed hot restart.");
+
+    with_config(|config| {
+        let (_lock, mut state) = load_state(config)?;
+
+        let patch_number = state.record_restart_failure().map_err(|_| {
+            anyhow::Error::from(UpdateError::InvalidState(
+                "currently_restarting_patch is None".to_string(),
+            ))
+        })?;
+        // The engine relaunches onto whatever we name next, which is no
+        // longer this patch.
+        state.set_running_patch(None);
+        let client_id = state.client_id();
+        let message = format!("restart_failure: patch {patch_number} failed to hot restart");
+        let event = PatchEvent::new(
+            config,
+            EventType::PatchRestartFailure,
+            patch_number,
+            client_id,
+            Some(&message),
+        );
         state.queue_event(event)
     })
 }
@@ -5574,6 +5676,413 @@ mod failure_classification_tests {
         ));
         assert!(require_signature_verifier(&signed, true).is_ok());
         assert!(require_signature_verifier(&unsigned, false).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod hot_restart_tests {
+    use anyhow::Result;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use crate::{
+        events::EventType,
+        network::{
+            testing_set_network_hooks, PatchCheckResponse, UNEXPECTED_DOWNLOAD, UNEXPECTED_REPORT,
+        },
+        report_launch_start, report_launch_success, report_restart_failure, report_restart_start,
+        report_restart_success, running_patch,
+        test_utils::install_fake_patch,
+        updater::tests::init_for_testing,
+        with_mut_state,
+    };
+
+    fn set_noop_network_hooks() {
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            |_url, _event| Ok(()),
+        );
+    }
+
+    extern "C" fn accepting_restart_handler() -> bool {
+        true
+    }
+
+    /// Only a cold boot judges a patch. Hot-restarting into patch 2 after
+    /// cold-booting patch 1 updates the in-memory `running_patch` to 2, but
+    /// does not promote `last_booted_patch`, does not clean up patch 1's
+    /// artifact on disk, and does not send `PatchInstallSuccess` for patch 2.
+    /// If the next cold boot into patch 2 crashes, cold-boot recovery falls
+    /// back to patch 1, which is still on disk.
+    #[serial]
+    #[test]
+    fn hot_restart_adopts_new_patch_without_promoting_last_booted_or_reporting_install(
+    ) -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        // Cold boot onto patch 1 and confirm it as good.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+
+        // Disallow any event report during the hot restart into patch 2:
+        // hot restart must not report PatchInstallSuccess.
+        testing_set_network_hooks(
+            |_url, _request| {
+                Ok(PatchCheckResponse {
+                    patch_available: false,
+                    patch: None,
+                    rolled_back_patch_numbers: None,
+                })
+            },
+            UNEXPECTED_DOWNLOAD,
+            UNEXPECTED_REPORT,
+        );
+
+        install_fake_patch(2)?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+
+        // Hot restart into patch 2.
+        report_restart_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(2));
+        with_mut_state(|state| {
+            assert_eq!(state.currently_restarting_patch_number(), Some(2));
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+
+        report_restart_success()?;
+
+        with_mut_state(|state| {
+            assert!(state.currently_restarting_patch_number().is_none());
+            assert!(state.currently_booting_patch().is_none());
+            // Patch 2 has only hot-restarted, not cold-booted: last_booted_patch
+            // stays 1, and no PatchInstallSuccess event is queued.
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })?;
+        // Patch 1's files stay on disk because cleanup_older_than has not run
+        // for patch 2 yet.
+        assert!(tmp_dir.path().join("patches/1/dlc.vmcode").exists());
+        assert!(tmp_dir.path().join("patches/2/dlc.vmcode").exists());
+
+        // Next cold boot tries patch 2 and crashes before report_launch_success.
+        set_noop_network_hooks();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        report_launch_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(2));
+
+        // Subsequent cold boot marks patch 2 bad and falls back to patch 1,
+        // which is still on disk.
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(2));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+        assert!(tmp_dir.path().join("patches/1/dlc.vmcode").exists());
+
+        Ok(())
+    }
+
+    /// If a hot restart fails to load or relaunch, the updater clears the
+    /// restart marker, queues `PatchRestartFailure`, disables hot restart for
+    /// the rest of this release, and excludes the patch for the rest of this
+    /// process so the recovery relaunch lands on `last_booted_patch` without
+    /// marking the patch bad on disk.
+    #[serial]
+    #[test]
+    fn failed_hot_restart_rolls_back_to_last_good_patch_and_disables_restart() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        // Cold boot onto patch 1 and confirm it as good.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+
+        // Patch 2 arrives. Hot restart into it fails.
+        install_fake_patch(2)?;
+        report_restart_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(2));
+        report_restart_failure()?;
+
+        with_mut_state(|state| {
+            // The restart failed, not a cold boot: no tombstone, artifacts kept,
+            // PatchRestartFailure queued, and restart_failed set for the release.
+            assert!(!state.is_known_bad_patch(2));
+            assert!(state.currently_restarting_patch_number().is_none());
+            assert!(state.restart_failed());
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].identifier, EventType::PatchRestartFailure);
+            assert_eq!(events[0].patch_number, 2);
+            // This process boots the last good patch from here on.
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+        assert!(tmp_dir.path().join("patches/2/dlc.vmcode").exists());
+
+        // Hot restart is now disabled for the rest of this release, even when
+        // an accepting engine handler is registered.
+        crate::restart::set_restart_handler(Some(accepting_restart_handler));
+        assert!(!crate::restart::request_restart());
+
+        // The engine's recovery relaunch lands back on patch 1.
+        report_restart_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(1));
+        report_restart_success()?;
+
+        Ok(())
+    }
+
+    /// If the process crashes while a hot restart is in flight
+    /// (`currently_restarting_patch` is still set on next `init`), `init`
+    /// clears the marker, disables hot restart for the rest of the release,
+    /// and queues `PatchRestartCrash` without marking the patch bad.
+    #[serial]
+    #[test]
+    fn crashed_hot_restart_is_detected_on_next_init_without_marking_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        install_fake_patch(2)?;
+        report_restart_start()?;
+        with_mut_state(|state| {
+            assert_eq!(state.currently_restarting_patch_number(), Some(2));
+            Ok(())
+        })?;
+
+        // Process crashes during the hot restart (neither report_restart_success
+        // nor report_restart_failure runs). Next cold boot initializes.
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        with_mut_state(|state| {
+            assert!(state.currently_restarting_patch_number().is_none());
+            assert!(state.restart_failed());
+            assert!(!state.is_known_bad_patch(2));
+            // The cold boot still tries patch 2 under normal cold-boot crash
+            // protection.
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            let events = state.copy_events(10);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].identifier, EventType::PatchRestartCrash);
+            assert_eq!(events[0].patch_number, 2);
+            Ok(())
+        })?;
+
+        crate::restart::set_restart_handler(Some(accepting_restart_handler));
+        assert!(!crate::restart::request_restart());
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn a_patch_that_failed_a_hot_restart_is_retried_on_the_next_cold_boot() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        install_fake_patch(2)?;
+        report_restart_start()?;
+        report_restart_failure()?;
+
+        // The patch exclusion is session-scoped, so a fresh process reads
+        // patch 2 back out of pointers.json and tries it on cold boot, while
+        // hot restart remains disabled for the rest of this release.
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            assert!(state.restart_failed());
+            Ok(())
+        })?;
+        crate::restart::set_restart_handler(Some(accepting_restart_handler));
+        assert!(!crate::restart::request_restart());
+        report_launch_start()?;
+        assert_eq!(running_patch()?.map(|p| p.number), Some(2));
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn a_failed_hot_restart_onto_the_running_patch_falls_back_to_the_base_release() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        // Patch 1 is both the running patch and the restart target, so the
+        // last-booted fallback is the patch that just failed. Relaunching
+        // onto it would fail the same way; the base release is the only
+        // target left.
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+        report_restart_start()?;
+        report_restart_failure()?;
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+        report_restart_start()?;
+        assert!(running_patch()?.is_none());
+        report_restart_success()?;
+
+        Ok(())
+    }
+
+    /// Validation has to judge the patch the engine is about to load. After
+    /// a failed restart that is the fallback, so validating `pointers`
+    /// instead would let a corrupt fallback boot unchecked and tombstone
+    /// the excluded patch for a fault that is not its own.
+    #[serial]
+    #[test]
+    fn validation_after_a_failed_restart_judges_the_fallback() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        install_fake_patch(2)?;
+        report_restart_start()?;
+        report_restart_failure()?;
+
+        // Patch 1 is what boots from here, and it is corrupt.
+        let artifact = tmp_dir.path().join("patches/1/dlc.vmcode");
+        let bytes = std::fs::read(&artifact)?;
+        std::fs::write(&artifact, &bytes[..bytes.len() - 1])?;
+
+        assert!(crate::validate_next_boot_patch().is_err());
+        with_mut_state(|state| {
+            // Patch 1 is condemned, and the validation event names 1, not 2
+            // (after the earlier PatchRestartFailure event for 2).
+            assert!(state.is_known_bad_patch(1));
+            assert!(!state.is_known_bad_patch(2));
+            let events = state.copy_events(10);
+            assert_eq!(
+                events.len(),
+                2,
+                "expected restart failure + boot validation events"
+            );
+            assert_eq!(events[0].identifier, EventType::PatchRestartFailure);
+            assert_eq!(events[0].patch_number, 2);
+            assert_eq!(events[1].identifier, EventType::PatchUpdateFailure);
+            assert_eq!(events[1].patch_number, 1);
+            // Patch 2 is still excluded for this process, so with 1 gone
+            // the target is the base release.
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    /// A recovery relaunch can fail too. Recording the fallback's failure
+    /// must not readmit the patch whose failure caused the fallback, or the
+    /// engine is handed a patch that already failed and the two targets
+    /// flip for the rest of the process.
+    #[serial]
+    #[test]
+    fn a_failed_relaunch_onto_the_fallback_does_not_readmit_the_failed_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        report_launch_success()?;
+
+        // Hot restart into patch 2 fails, so this process falls back to 1.
+        install_fake_patch(2)?;
+        report_restart_start()?;
+        report_restart_failure()?;
+        with_mut_state(|state| {
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        // The relaunch onto 1 fails as well. Both are now excluded, so the
+        // target is the base release, not patch 2 again.
+        report_restart_start()?;
+        report_restart_failure()?;
+        with_mut_state(|state| {
+            assert!(state.next_boot_patch().is_none());
+            assert!(!state.is_known_bad_patch(1));
+            assert!(!state.is_known_bad_patch(2));
+            Ok(())
+        })?;
+
+        report_restart_start()?;
+        assert!(running_patch()?.is_none());
+        report_restart_success()?;
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn report_restart_failure_without_a_restart_in_flight_is_an_error() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        assert!(report_restart_failure().is_err());
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn report_restart_success_without_a_restart_in_flight_is_an_error() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        set_noop_network_hooks();
+
+        install_fake_patch(1)?;
+        assert!(report_restart_success().is_err());
+
+        Ok(())
     }
 }
 

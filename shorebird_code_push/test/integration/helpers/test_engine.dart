@@ -103,6 +103,17 @@ class TestEngine {
   void simulateSuccessfulLaunch() =>
       _bindings.shorebird_test_simulate_successful_launch();
 
+  /// Installs a fake engine restart handler, as the Shorebird engine
+  /// does at startup. [accept] controls whether the handler reports the
+  /// restart as scheduled. [reset] removes it again.
+  void installRestartHandler({bool accept = true}) =>
+      _bindings.shorebird_test_install_restart_handler(accept);
+
+  /// The number of restart requests the fake handler has received since
+  /// [installRestartHandler] was last called.
+  int get restartRequestCount =>
+      _bindings.shorebird_test_restart_request_count();
+
   /// Builds a [ShorebirdUpdater] suitable for tests.
   ///
   /// FFI calls run in a sub-isolate via `Isolate.run` (the same dispatch
