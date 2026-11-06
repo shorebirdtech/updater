@@ -1453,12 +1453,7 @@ where
     };
 
     let patch_r = zstd::Decoder::with_buffer(compressed_patch_r)
-        .map_err(|e| {
-            let msg = e.to_string();
-            anyhow::Error::new(e)
-                .context(UpdateError::CorruptPatch)
-                .context(msg)
-        })
+        .context(UpdateError::CorruptPatch)
         .with_context(|| format!("Failed to start zstd decoder. {}", snapshot()))?;
     let patch_r_counted = CountingReader {
         inner: patch_r,
@@ -1476,12 +1471,7 @@ where
     // version) and seeks the base reader to learn its length, so this is the
     // first place a malformed patch or a bad base reader can surface.
     let mut fresh_r = bipatch::Reader::new(patch_r_counted, base_r_counted)
-        .map_err(|e| {
-            let msg = e.to_string();
-            anyhow::Error::new(e)
-                .context(UpdateError::CorruptPatch)
-                .context(msg)
-        })
+        .context(UpdateError::CorruptPatch)
         .with_context(|| format!("Failed to initialize bipatch reader. {}", snapshot()))?;
 
     // Write out the resulting patched file to the new location, counting
@@ -1539,20 +1529,21 @@ fn apply_patch_stream<R: Read, W: std::io::Write>(
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                let msg = if e.kind() == std::io::ErrorKind::UnexpectedEof
+                let err = if e.kind() == std::io::ErrorKind::UnexpectedEof
                     && base_hit_eof.load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    format!(
-                        "{e}: Patch read past the end of the base snapshot. This is most often \
-                         caused by using the same version number with a different app binary \
-                         than the release that was submitted to Shorebird."
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "{e}: Patch read past the end of the base snapshot. This is most often \
+                             caused by using the same version number with a different app binary \
+                             than the release that was submitted to Shorebird."
+                        ),
                     )
                 } else {
-                    e.to_string()
+                    e
                 };
-                return Err(anyhow::Error::new(e)
-                    .context(UpdateError::CorruptPatch)
-                    .context(msg));
+                return Err(anyhow::Error::new(err).context(UpdateError::CorruptPatch));
             }
         };
         output_w
@@ -2482,10 +2473,13 @@ patch_verification: bogus_mode
 
         let err = super::inflate(&patch_path, shorter_base, &output_path).unwrap_err();
         let err_chain = format!("{:#}", err);
+        let root_first = super::root_cause_first(&err);
 
         assert!(
-            err_chain.contains("Patch read past the end of the base snapshot"),
-            "Expected base-snapshot EOF explanation in error chain, got: {err_chain}"
+            root_first.starts_with(
+                "failed to fill whole buffer: Patch read past the end of the base snapshot."
+            ),
+            "Expected root_cause_first to lead with base-EOF explanation so 256b truncation preserves it, got: {root_first}"
         );
         assert!(
             !err_chain.contains("Failed to write to file"),

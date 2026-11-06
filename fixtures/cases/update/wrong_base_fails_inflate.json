@@ -90,7 +90,7 @@
                 "platform": "<platform>",
                 "release_version": "1.0.0+1",
                 "timestamp": "<number>",
-                "message": "<contains:Patch read past the end of the base snapshot>",
+                "message": "<prefix:update_failure: patch 1 failed (failed to fill whole buffer: Patch read past the end of the base snapshot.>",
                 "failure_category": "corrupt_patch"
               }
             ]
