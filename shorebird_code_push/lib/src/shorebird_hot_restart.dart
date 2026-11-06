@@ -13,39 +13,22 @@ import 'package:shorebird_code_push/src/shorebird_updater.dart';
 ///
 /// ```dart
 /// final hotRestart = ShorebirdHotRestart(updater: updater);
-/// _subscription = hotRestart.patchTransitions.listen((transition) {
+/// final status = await updater.checkForUpdate();
+/// if (status == UpdateStatus.restartRequired) {
 ///   // Your call. Prompt, wait for an idle screen, or ignore it and let the
 ///   // next launch pick the patch up.
-///   showRestartPrompt();
-/// });
+///   await hotRestart.dangerouslyHotRestart();
+/// }
 /// ```
 /// {@endtemplate}
 @experimental
+// Matches the factory-backed abstract class shape of ShorebirdUpdater so the
+// surface can grow without breaking callers or test mocks.
+// ignore: one_member_abstracts
 abstract class ShorebirdHotRestart {
   /// {@macro shorebird_hot_restart}
   factory ShorebirdHotRestart({required ShorebirdUpdater updater}) =>
       ShorebirdHotRestartImpl(updater: updater);
-
-  /// Emits a [PatchTransition] each time a patch is waiting on a restart, so
-  /// the app can decide for itself whether to offer one.
-  ///
-  /// An event fires whenever [ShorebirdUpdater.update] or
-  /// [ShorebirdUpdater.checkForUpdate] finds that the patch a restart would
-  /// boot differs from the one running. A withdrawal is the `next == null`
-  /// case of that, not a separate kind of event. The same pending transition
-  /// seen twice is emitted once.
-  ///
-  /// A new listener is told about a transition that is already waiting, so
-  /// subscribing after the [ShorebirdUpdater.update] that produced one still
-  /// reports it, as does one the updater's own background thread installed
-  /// before the listener existed.
-  ///
-  /// Nothing polls. Past that read on subscribe, events follow the calls the
-  /// app makes.
-  ///
-  /// Emits nothing if the updater is not available (see
-  /// [ShorebirdUpdater.isAvailable]).
-  Stream<PatchTransition> get patchTransitions;
 
   /// Restarts the app's Dart code so the most recently downloaded patch takes
   /// effect immediately, without the user relaunching the app.
@@ -82,8 +65,11 @@ abstract class ShorebirdHotRestart {
   /// * The updater is not available (see [ShorebirdUpdater.isAvailable]).
   /// * The app is running against a Shorebird engine that predates hot
   ///   restart support.
-  /// * The engine configuration is unsupported (e.g. multiple Flutter engines
-  ///   in one process, as with some add-to-app setups).
+  /// * More than one Flutter engine is alive in the process (for example in
+  ///   add-to-app setups, or while a plugin is running a headless background
+  ///   `FlutterEngine` such as `workmanager`, `firebase_messaging`, or
+  ///   `flutter_background_service`).
+  /// * A hot restart failed or crashed earlier in this release.
   /// * The app is running on a desktop platform (Windows, macOS, or Linux).
   ///   Hot restart is supported on Android and iOS only.
   ///
@@ -91,8 +77,9 @@ abstract class ShorebirdHotRestart {
   /// the next full app launch, so callers can fall back to prompting the user
   /// to restart the app.
   ///
-  /// Note: this restarts Dart code even if no new patch is waiting. Subscribe
-  /// to [patchTransitions] and call this from there if you only want to
+  /// Note: this restarts Dart code even if no new patch is waiting. Check
+  /// [ShorebirdUpdater.checkForUpdate] for [UpdateStatus.restartRequired] (or
+  /// call this after [ShorebirdUpdater.update] completes) if you only want to
   /// restart when a patch is pending.
   Future<bool> dangerouslyHotRestart();
 }

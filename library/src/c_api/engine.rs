@@ -341,16 +341,41 @@ pub extern "C" fn shorebird_report_launch_failure() {
     );
 }
 
+/// Tell the updater that a hot restart is starting to relaunch into the
+/// current next-boot patch (or the base release if none).
+///
+/// Updates the in-memory running patch and writes a restart crash marker
+/// without touching cold-boot patch state (`currently_booting_patch` or
+/// `last_booted_patch`). Pair with `shorebird_report_restart_success` after
+/// the relaunched isolate's launch window closes, or
+/// `shorebird_report_restart_failure` if loading or relaunching fails.
+#[no_mangle]
+pub extern "C" fn shorebird_report_restart_start() {
+    log_on_error(updater::report_restart_start, "reporting restart start", ());
+}
+
+/// Report that a hot restart survived its launch window. Clears the restart
+/// crash marker without promoting the patch to `last_booted_patch`, deleting
+/// older patches, or sending `PatchInstallSuccess`.
+#[no_mangle]
+pub extern "C" fn shorebird_report_restart_success() {
+    log_on_error(
+        updater::report_restart_success,
+        "reporting restart success",
+        (),
+    );
+}
+
 /// Report that a hot restart could not bring up the patch it was
 /// relaunching into: the isolate snapshot would not resolve, the patch
 /// would not load, or the relaunch itself failed.
 ///
 /// Use this rather than `shorebird_report_launch_failure` for a failure
-/// of the restart mechanism. It rolls the boot target back so the
-/// recovery relaunch lands on the last patch that booted, but leaves the
-/// patch installed and un-tombstoned, because a restart can fail for
-/// reasons the patch has no part in and a cold boot onto it is how we
-/// find out. The exclusion lasts for this process only.
+/// of the restart mechanism. It clears the restart crash marker, disables
+/// hot restart for the rest of this release, queues a `PatchRestartFailure`
+/// event, and excludes the patch from the boot target for the rest of this
+/// process so the recovery relaunch lands on `last_booted_patch` (or the
+/// base release) while leaving the patch installed for the next cold boot.
 #[no_mangle]
 pub extern "C" fn shorebird_report_restart_failure() {
     log_on_error(

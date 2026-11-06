@@ -1,4 +1,3 @@
-import 'package:meta/meta.dart';
 import 'package:shorebird_code_push/src/shorebird_updater_io.dart'
     if (dart.library.js_interop) './shorebird_updater_web.dart';
 
@@ -100,46 +99,6 @@ class Patch {
 
   /// The patch number.
   final int number;
-}
-
-/// {@template patch_transition}
-/// A change, waiting on a restart, in which patch the app's Dart code runs
-/// from.
-///
-/// Delivered by `ShorebirdHotRestart.patchTransitions`. Both patches are
-/// given rather than just the new one, because an app that wants to treat a
-/// withdrawal differently from a new patch cannot tell them apart otherwise.
-/// {@endtemplate}
-@immutable
-final class PatchTransition {
-  /// {@macro patch_transition}
-  const PatchTransition({required this.current, required this.next});
-
-  /// The patch the app's Dart code is running from now, or `null` if it is
-  /// running the base release.
-  final Patch? current;
-
-  /// The patch a restart would boot, or `null` if a restart would boot the
-  /// base release. `null` with a non-null [current] is a withdrawal: the
-  /// patch the app is running has been pulled.
-  final Patch? next;
-
-  /// Whether [next] differs from [current], so a restart would change which
-  /// code the app runs.
-  bool get isPending => current?.number != next?.number;
-
-  @override
-  bool operator ==(Object other) =>
-      other is PatchTransition &&
-      other.current?.number == current?.number &&
-      other.next?.number == next?.number;
-
-  @override
-  int get hashCode => Object.hash(current?.number, next?.number);
-
-  @override
-  String toString() =>
-      'PatchTransition(current: ${current?.number}, next: ${next?.number})';
 }
 
 /// The current status of the app in terms of whether its up-to-date.

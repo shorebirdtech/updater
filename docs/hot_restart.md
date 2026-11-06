@@ -4,16 +4,16 @@ Hot restart applies a downloaded patch without the user relaunching the app:
 the Flutter engine tears down the running Dart isolate and boots a fresh one
 from the next boot patch, inside the same OS process.
 
-Nothing in Shorebird starts one. The app subscribes to
-`ShorebirdHotRestart.patchTransitions`, learns that a patch is waiting, and
-calls `dangerouslyHotRestart()` if it judges the moment a safe one. Only the
-app knows what the user is in the middle of losing.
+Nothing in Shorebird starts one. The app checks `ShorebirdUpdater.checkForUpdate`
+(or completes `ShorebirdUpdater.update`), learns that a patch is waiting, and
+calls `ShorebirdHotRestart.dangerouslyHotRestart()` if it judges the moment a
+safe one. Only the app knows what the user is in the middle of losing.
 
 ## Who does what
 
 The updater cannot restart the Dart VM: only the engine can. The updater's
-role is to relay the request and to keep its boot bookkeeping correct across
-more than one launch cycle per process.
+role is to relay the request and to track the restart lifecycle separately from
+cold-boot patch evaluation.
 
 ```
 package:shorebird_code_push          updater (Rust)              Shorebird engine (C++)
@@ -21,13 +21,13 @@ package:shorebird_code_push          updater (Rust)              Shorebird engin
 ShorebirdHotRestart.dangerouslyHotRestart()
   └─ shorebird_restart_app() ──────► restart::request_restart()
                                        └─ registered handler ──► restart host
+                                                                   ├─ report_restart_start
                                                                    ├─ resolves next boot patch
-                                                                   ├─ begins new launch cycle
-                                                                   │   (report_launch_start)
                                                                    ├─ relaunches root isolate
                                                                    │   from the patch snapshot
-                                                                   └─ report_launch_success /
-                                                                      report_launch_failure
+                                                                   └─ report_restart_success
+                                                                      (after launch window) /
+                                                                      report_restart_failure
 ```
 
 - `shorebird_set_restart_handler` (engine C surface, `c_api/engine.rs`):
@@ -35,48 +35,44 @@ ShorebirdHotRestart.dangerouslyHotRestart()
   it accepted and scheduled a restart.
 - `shorebird_restart_app` (Dart C surface, `c_api/dart.rs`): called by
   `package:shorebird_code_push`. Returns `false` when no handler is
-  registered: old engines, debug builds, or unsupported configurations.
+  registered (old engines, debug builds, or unsupported configurations) or
+  when a prior hot restart failed or crashed earlier in this release.
 - `library/src/restart.rs`: the relay between the two.
 
-## The second launch cycle
+## Only a cold boot judges a patch
 
-A hot restart is, from the updater's perspective, simply a second
-`report_launch_start` → `report_launch_success`/`report_launch_failure`
-cycle in the same process:
+A hot restart runs inside a process that already has native plugin state,
+static initializers, and threads from the prior isolate. A crash or failure
+during a hot restart is not clean evidence against the patch, and a survival is
+not clean evidence that the patch can cold-boot. Hot restart therefore uses its
+own reporting surface (`shorebird_report_restart_start`,
+`shorebird_report_restart_success`, `shorebird_report_restart_failure`) and
+never touches `currently_booting_patch`, `last_booted_patch`, `mark_bad`,
+`PatchInstallSuccess`, or `PatchInstallFailure`:
 
-- `report_launch_start` re-reads `next_boot_patch`, updates the in-memory
-  `running_patch`, and records `currently_booting_patch` on disk. It also
-  flags the breadcrumb as a repeat cycle when this live process already
-  reported a successful launch of that same patch. That evidence is a
-  session-scoped global set in `report_launch_success`, not the on-disk
-  `last_booted_patch`, which survives a reboot and so cannot say whether
-  the running process ever got the patch up. If the process then dies,
-  the next launch's crash recovery
-  (`handle_prior_boot_failure_if_necessary`) drops a repeat-cycle
-  breadcrumb and leaves the patch installed, rather than marking it bad.
-  A patch that has run is not condemned by a death nothing attributes to
-  it. A first boot in a fresh process carries no flag and is still rolled
-  back on a crash, so cold-boot protection is unchanged.
-- A spared breadcrumb queues no event. `PatchInstallFailure` would be a
-  false statement about a patch that booted, and there is no event type
-  for a launch cycle that died without implicating its patch. That is a
-  gap in field visibility, and closing it needs a server-side contract
-  change rather than a change here.
-- `report_launch_failure` marks the patch bad and falls back, so the
-  engine's recovery relaunch boots something known-good.
-- `report_launch_success` records the patch as last booted and reports the
-  install event.
-
-The once-per-process guarding of these calls lives in the *engine*
-(`shell/common/shorebird/updater.cc`), not in Rust. The engine's restart
-host resets those guards when it intentionally starts a new launch cycle.
-See `hot_restart_tests` in `library/src/updater.rs` for the contract.
+- `report_restart_start` reads `next_boot_patch`, updates the in-memory
+  `running_patch`, and writes `currently_restarting_patch` to `pointers.json`.
+- `report_restart_success` (called by the engine after the relaunched isolate's
+  launch window closes) clears `currently_restarting_patch`. It does not
+  promote `last_booted_patch` or run `cleanup_older_than`, so the prior
+  cold-booted patch stays on disk as the rollback target until the new patch
+  survives a cold boot.
+- `report_restart_failure` clears `currently_restarting_patch`, sets
+  `restart_failed = true` in `pointers.json` (so `dangerouslyHotRestart()`
+  returns `false` for the rest of this release), excludes the patch in memory
+  for the rest of the current process so the engine's recovery relaunch falls
+  back to `last_booted_patch` (or the base release), and queues a
+  `PatchRestartFailure` (`__patch_restart_failure__`) event.
+- If the process crashes while `currently_restarting_patch` is set, the next
+  cold boot's `init` clears the marker, sets `restart_failed = true` for the
+  rest of the release, and queues a `PatchRestartCrash`
+  (`__patch_restart_crash__`) event without marking the patch bad. The cold
+  boot then tries the patch under normal cold-boot crash protection.
 
 ## Testing
 
 - `library/src/restart.rs`: relay unit tests.
-- `library/src/updater.rs` (`hot_restart_tests`): second-launch-cycle
-  contract.
+- `library/src/updater.rs` (`hot_restart_tests`): restart lifecycle contract.
 - `shorebird_code_push/test/integration/all_test.dart`: full FFI round
   trip against the real Rust library via `library_test_hooks`' fake
   restart handler.

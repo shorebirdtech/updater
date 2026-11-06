@@ -11,8 +11,5 @@ class ShorebirdHotRestartImpl implements ShorebirdHotRestart {
   ShorebirdHotRestartImpl({required ShorebirdUpdater updater});
 
   @override
-  Stream<PatchTransition> get patchTransitions => const Stream.empty();
-
-  @override
   Future<bool> dangerouslyHotRestart() async => false;
 }

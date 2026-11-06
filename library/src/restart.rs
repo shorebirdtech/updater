@@ -38,14 +38,21 @@ pub fn set_restart_handler(handler: Option<RestartHandler>) {
 /// Asks the engine to restart the app. Returns true if a handler was
 /// installed and it accepted the request. Returns false when no handler is
 /// registered (e.g. running against an engine without hot restart support,
-/// or in a debug build where the updater is not attached to an engine).
+/// or in a debug build where the updater is not attached to an engine) or
+/// when a prior hot restart failed or crashed earlier in this release.
 ///
 /// The handler runs on the calling thread, which is whichever thread
 /// asked for the restart — the Dart isolate's thread when the request
 /// comes from `package:shorebird_code_push`. Tearing down that isolate
 /// from this call would be tearing down the thread it is running on, so
-/// the engine hops to its platform thread itself.
+/// the engine hops to its UI thread itself.
 pub fn request_restart() -> bool {
+    if crate::updater::is_restart_disabled() {
+        shorebird_warn!(
+            "Restart requested, but hot restart is disabled for this release after an earlier failure."
+        );
+        return false;
+    }
     // Copy the handler out of the lock before invoking it so a slow or
     // re-entrant handler cannot deadlock against set_restart_handler.
     let handler = *handler_lock();

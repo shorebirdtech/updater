@@ -5,13 +5,10 @@
   it. Requires an engine with hot restart support. On older engines
   `dangerouslyHotRestart()` returns `false` and the patch still applies on
   the next launch.
-- feat: `ShorebirdHotRestart.patchTransitions` reports when a patch is waiting
-  on a restart, so the app can pick the moment instead of having one picked
-  for it. Nothing restarts on its own.
-- note: both live on their own class rather than on `ShorebirdUpdater`,
-  because a new member on that interface would break anyone implementing it.
-  Marked experimental: the surface may move onto the updater in the next
-  major version.
+- note: `ShorebirdHotRestart` lives on its own class rather than on
+  `ShorebirdUpdater`, because a new member on that interface would break
+  anyone implementing it. Marked experimental: the surface may move onto the
+  updater in the next major version.
 
 # 2.0.7
 

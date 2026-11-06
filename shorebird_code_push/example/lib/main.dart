@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
@@ -38,7 +36,6 @@ class _MyHomePageState extends State<MyHomePage> {
   var _currentTrack = UpdateTrack.stable;
   var _isCheckingForUpdates = false;
   Patch? _currentPatch;
-  StreamSubscription<PatchTransition>? _transitions;
 
   @override
   void initState() {
@@ -54,20 +51,6 @@ class _MyHomePageState extends State<MyHomePage> {
       // If an error occurs, we log it for now.
       debugPrint('Error reading current patch: $error');
     });
-
-    // Ask to be told when a patch is waiting on a restart, from this check or
-    // any other. The app decides what to do about it: here, offer the user the
-    // choice rather than take their screen away from them.
-    _transitions = _hotRestart.patchTransitions.listen((_) {
-      if (!mounted) return;
-      _showRestartBanner();
-    });
-  }
-
-  @override
-  void dispose() {
-    _transitions?.cancel();
-    super.dispose();
   }
 
   Future<void> _checkForUpdate() async {

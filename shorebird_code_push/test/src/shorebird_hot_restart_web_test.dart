@@ -14,12 +14,6 @@ void main() {
       }),
     );
 
-    group('patchTransitions', () {
-      test('emits nothing', () async {
-        await expectLater(hotRestart.patchTransitions, emitsDone);
-      });
-    });
-
     group('dangerouslyHotRestart', () {
       test('returns false', () async {
         await expectLater(

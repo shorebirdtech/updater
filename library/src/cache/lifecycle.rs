@@ -147,15 +147,21 @@ pub struct ReleasePointers {
     /// Unix timestamp (seconds) when `currently_booting_patch` was set.
     pub boot_started_at: Option<u64>,
 
-    /// Whether `currently_booting_patch` was armed by a repeat launch
-    /// cycle, meaning the live process had already booted that same patch
-    /// to a success before asking for another cycle. Crash recovery needs
-    /// this on disk because it runs in a *later* process, where the
-    /// in-memory evidence that the patch once ran is gone. The two patch
-    /// pointers cannot carry it: after a first success, every ordinary
-    /// cold boot also has `currently_booting_patch == last_booted_patch`.
+    /// Patch number (or `0` for the base release) that a hot restart in the
+    /// current or prior process began relaunching into. Written by
+    /// `record_restart_start` and cleared by `record_restart_success` or
+    /// `record_restart_failure`. If still set on next `init`, the prior
+    /// process crashed during a hot restart; `init` sends a restart-crashed
+    /// event and disables hot restart for the rest of the release without
+    /// affecting patch state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currently_restarting_patch: Option<usize>,
+
+    /// Whether a hot restart failed or crashed during this release. When
+    /// true, `dangerouslyHotRestart()` (`shorebird_restart_app`) returns
+    /// `false` for the rest of this release.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub boot_is_repeat_cycle: bool,
+    pub restart_failed: bool,
 }
 
 /// Per-release patch lifecycle and storage. Owns
@@ -214,7 +220,7 @@ impl PatchLifecycle {
     /// than on disk, so the patch is retried on the next cold boot.
     ///
     /// Every reader of the boot target goes through here, including
-    /// [`arm_boot_breadcrumb`]'s check that the engine is booting the
+    /// [`record_boot_start`]'s check that the engine is booting the
     /// patch we named — after a failed restart, the patch we named is
     /// the fallback, not the one in `pointers`.
     pub fn effective_next_boot_patch(&self) -> Option<usize> {
@@ -606,14 +612,6 @@ impl PatchLifecycle {
     /// one we said to boot. Carries forward the same defensive check the
     /// prior `PatchManager::record_boot_start_for_patch` had.
     pub fn record_boot_start(&mut self, n: usize) -> Result<()> {
-        self.arm_boot_breadcrumb(n, false)
-    }
-
-    /// Validates `n` and arms the breadcrumb in one write. Two writes
-    /// would leave a kill between them holding a breadcrumb with the
-    /// wrong repeat flag, which is the exact state this mechanism
-    /// exists to avoid.
-    fn arm_boot_breadcrumb(&mut self, n: usize, is_repeat: bool) -> Result<()> {
         match self.read_state(n) {
             Some(PatchState::Installed { .. }) => {}
             other => {
@@ -627,45 +625,76 @@ impl PatchLifecycle {
         }
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
-        self.pointers.boot_is_repeat_cycle = is_repeat;
         self.save_pointers()
     }
 
-    /// Records the start of a *repeat* launch cycle for patch `n`, the
-    /// shape a hot restart takes: this process already booted `n` to a
-    /// success and is bringing up a fresh isolate on it.
+    /// Records that a hot restart is starting to relaunch into `patch_number`
+    /// (`0` for the base release).
     ///
-    /// Same breadcrumb as [`record_boot_start`], flagged so that a later
-    /// process's crash recovery spares the patch instead of marking it
-    /// bad. A patch that has run is not condemned by a death we cannot
-    /// attribute to it, and a restart that fails for the patch's own sake
-    /// still reaches `record_boot_failure` through `report_launch_failure`.
-    pub fn record_repeat_boot_start(&mut self, n: usize) -> Result<()> {
-        self.arm_boot_breadcrumb(n, true)
-    }
-
-    /// Drops the boot-in-progress breadcrumb without judging the patch.
-    /// Crash recovery uses this on the repeat-cycle path.
-    pub fn clear_boot_breadcrumb(&mut self) -> Result<()> {
-        self.pointers.currently_booting_patch = None;
-        self.pointers.boot_started_at = None;
-        self.pointers.boot_is_repeat_cycle = false;
+    /// Written to `pointers.currently_restarting_patch` rather than
+    /// `currently_booting_patch`, because only a cold boot judges a patch:
+    /// a hot restart runs inside an already-dirty process, so a crash or
+    /// failure during one disables hot restart for the rest of the release
+    /// and reports a restart-specific event without marking the patch bad or
+    /// altering `last_booted_patch`.
+    pub fn record_restart_start(&mut self, patch_number: usize) -> Result<()> {
+        self.pointers.currently_restarting_patch = Some(patch_number);
         self.save_pointers()
     }
 
-    /// Records that a hot restart could not bring up patch `n`, without
-    /// judging the patch.
+    /// Records that the in-flight hot restart survived its launch window.
     ///
-    /// Drops the breadcrumb and excludes `n` from the boot target for
-    /// the rest of this process, so the engine's recovery relaunch lands
-    /// on the last patch that booted (or the base release). The patch
-    /// keeps its `Installed` state and its artifacts: a restart can fail
-    /// for reasons that are the engine's, and a cold boot onto the same
-    /// patch is how we find out. Condemning it here would delete the
-    /// bytes and make that retry impossible.
-    pub fn record_restart_failure(&mut self, n: usize) -> Result<()> {
-        crate::config::add_restart_failed_patch(n);
-        self.clear_boot_breadcrumb()
+    /// Clears `currently_restarting_patch` without promoting the patch to
+    /// `last_booted_patch` or running `cleanup_older_than`: a patch that has
+    /// only hot-restarted is not yet cold-boot-proven, so the prior
+    /// cold-booted patch stays as `last_booted_patch` (and its files stay on
+    /// disk as the rollback target) until this patch survives a cold boot.
+    pub fn record_restart_success(&mut self) -> Result<()> {
+        let _ = self
+            .pointers
+            .currently_restarting_patch
+            .context("record_restart_success without currently_restarting_patch")?;
+        self.pointers.currently_restarting_patch = None;
+        self.save_pointers()
+    }
+
+    /// Records that the in-flight hot restart failed to load or relaunch,
+    /// without judging the patch.
+    ///
+    /// Clears `currently_restarting_patch`, marks `restart_failed = true` so
+    /// further hot restart requests in this release are refused, and excludes
+    /// the patch from the boot target for the rest of this process so the
+    /// engine's recovery relaunch lands on `last_booted_patch` (or the base
+    /// release). The patch keeps its `Installed` state and its artifacts so
+    /// the next cold boot can try it cleanly.
+    pub fn record_restart_failure(&mut self) -> Result<usize> {
+        let n = self
+            .pointers
+            .currently_restarting_patch
+            .context("record_restart_failure without currently_restarting_patch")?;
+        if n > 0 {
+            crate::config::add_restart_failed_patch(n);
+        }
+        self.pointers.currently_restarting_patch = None;
+        self.pointers.restart_failed = true;
+        self.save_pointers()?;
+        Ok(n)
+    }
+
+    /// If the prior process crashed while a hot restart was in flight
+    /// (`currently_restarting_patch` is still set), clears the marker,
+    /// disables hot restart for the rest of this release, and returns the
+    /// patch number (`0` for the base release) that was restarting. Leaves
+    /// patch state untouched so this cold boot still tries the patch under
+    /// normal cold-boot crash protection.
+    pub fn record_restart_crash(&mut self) -> Result<Option<usize>> {
+        let Some(n) = self.pointers.currently_restarting_patch else {
+            return Ok(None);
+        };
+        self.pointers.currently_restarting_patch = None;
+        self.pointers.restart_failed = true;
+        self.save_pointers()?;
+        Ok(Some(n))
     }
 
     /// Records a successful boot. Promotes `currently_booting_patch` to
@@ -679,7 +708,6 @@ impl PatchLifecycle {
         self.pointers.last_booted_patch = Some(n);
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
-        self.pointers.boot_is_repeat_cycle = false;
         self.save_pointers()?;
         self.cleanup_older_than(n);
         Ok(())
@@ -706,7 +734,6 @@ impl PatchLifecycle {
         self.mark_bad(n, BadReason::BootCrash)?;
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
-        self.pointers.boot_is_repeat_cycle = false;
         self.save_pointers()?;
         self.recompute_next_boot()
     }
@@ -1250,7 +1277,8 @@ mod tests {
                 last_booted_patch: Some(2),
                 currently_booting_patch: None,
                 boot_started_at: None,
-                boot_is_repeat_cycle: false,
+                currently_restarting_patch: None,
+                restart_failed: false,
             };
             lifecycle.save_pointers().unwrap();
         }
