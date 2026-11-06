@@ -45,6 +45,7 @@ jobs:
               - ./.github/actions/flutter_package/action.yaml
               - shorebird_code_push/**
               - Cargo.lock
+              - rust-toolchain.toml
               # Integration tests under shorebird_code_push/test/integration
               # build and load the library_test_hooks cdylib, which
               # re-exports the production updater C API. A change to
@@ -63,16 +64,19 @@ jobs:
               - ./.github/actions/rust_crate/action.yaml
               - Cargo.lock
               - Cargo.toml
+              - rust-toolchain.toml
               - library/**
             patch:
               - ./.github/actions/rust_crate/action.yaml
               - Cargo.lock
               - Cargo.toml
+              - rust-toolchain.toml
               - patch/**
             library_test_hooks:
               - ./.github/actions/rust_crate/action.yaml
               - Cargo.lock
               - Cargo.toml
+              - rust-toolchain.toml
               - library/**
               - library_test_hooks/**
               # tests/fixture_corpus.rs replays the fixture corpus.
@@ -158,10 +162,10 @@ jobs:
 
     steps:
       - name: 📚 Git Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🛡️ cargo deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories bans sources
 
