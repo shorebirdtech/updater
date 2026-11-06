@@ -61,17 +61,12 @@ runs:
       shell: ${{ inputs.shell }}
       run: flutter test --coverage
 
-    - name: Exclude Generated Code from Coverage
-      if: ${{ inputs.coverage_excludes != '' }}
+    - name: Check Coverage
       working-directory: ${{ inputs.working_directory }}
-      shell: ${{ inputs.shell }}
+      shell: bash
+      env:
+        EXCLUDES: ${{ inputs.coverage_excludes }}
+        MIN_COVERAGE: ${{ inputs.min_coverage }}
       run: |
-        mv coverage/lcov.info coverage/lcov.info.bak
-        sudo apt-get -y install lcov
-        lcov --remove coverage/lcov.info.bak "${{inputs.coverage_excludes}}" -o coverage/lcov.info
-
-    - uses: VeryGoodOpenSource/very_good_coverage@c953fca3e24a915e111cc6f55f03f756dcb3964c # v3.0.0
-      with:
-        path: ${{inputs.working_directory}}/coverage/lcov.info
-        exclude: ${{inputs.coverage_excludes}}
-        min_coverage: ${{inputs.min_coverage}}
+        dart pub global activate shorebird_ci 0.2.6
+        dart pub global run shorebird_ci:shorebird_ci check_coverage coverage/lcov.info --min "$MIN_COVERAGE" --exclude "$EXCLUDES"
