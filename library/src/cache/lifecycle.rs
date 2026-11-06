@@ -403,14 +403,19 @@ pub enum DownloadAction {
     /// Bytes for this exact url+hash are fully on disk. Skip the network
     /// request entirely and proceed to install.
     Complete,
+    /// The patch is installed on disk but isn't `next_boot_patch` (the
+    /// device moved to another patch since installing it, e.g. by
+    /// switching tracks). Skip the network request and make it the
+    /// next-boot patch again.
+    Reselect,
     /// The patch is in a terminal state and shouldn't be re-fetched.
     Skip(SkipReason),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkipReason {
-    /// Already installed; `should_install_patch` returns NoUpdate to
-    /// avoid downloading the patch we're already running.
+    /// Already installed and already `next_boot_patch`; the update
+    /// returns NoUpdate, since there is nothing left to do.
     AlreadyInstalled,
     /// Tombstoned in this release. Subsequent attempts short-circuit.
     KnownBad,
@@ -467,9 +472,10 @@ impl PatchLifecycle {
                 }
             }
             Some(PatchState::Downloaded { .. }) => DownloadAction::Fresh,
-            Some(PatchState::Installed { .. }) => {
+            Some(PatchState::Installed { .. }) if self.pointers.next_boot_patch == Some(n) => {
                 DownloadAction::Skip(SkipReason::AlreadyInstalled)
             }
+            Some(PatchState::Installed { .. }) => DownloadAction::Reselect,
             // A signature refusal condemns only the exact (hash, signature)
             // pair refused, not the patch number: anyone able to send a bad
             // offer could otherwise block the genuine patch N on this device.
@@ -489,8 +495,9 @@ impl PatchLifecycle {
     /// signature verification: writes a `Bad{InvalidSignature}` tombstone
     /// carrying the refused pair (so `decide_start` skips only that pair)
     /// and removes any partial or complete download left by an earlier
-    /// offer. `n` is never `Installed` here, since `decide_start` skips
-    /// installed patches before the check.
+    /// offer. `n` is never `Installed` here: `decide_start` skips the
+    /// installed next-boot patch, and `reselect_installed_patch` uninstalls
+    /// any other installed patch before downloading it again.
     pub fn record_signature_refused(
         &self,
         n: usize,
@@ -724,7 +731,9 @@ impl PatchLifecycle {
     /// Sets `next_boot_patch` to a freshly Installed patch. Replaces any
     /// prior `next_boot_patch` that was Installed-but-never-booted (those
     /// are forgotten via [`cleanup`]); a Bad tombstone in that slot is
-    /// preserved.
+    /// preserved. A prior `next_boot_patch` that is booting right now
+    /// (`currently_booting_patch`, between launch start and launch
+    /// success) is kept, since the engine is loading its file.
     pub fn promote_to_next_boot(&mut self, n: usize) -> Result<()> {
         if !matches!(self.read_state(n), Some(PatchState::Installed { .. })) {
             bail!("promote_to_next_boot({n}) requires Installed state");
@@ -732,8 +741,9 @@ impl PatchLifecycle {
         // If we're replacing an Installed-but-never-booted previous
         // next_boot, retire it. cleanup handles tombstones correctly.
         let last_booted = self.pointers.last_booted_patch;
+        let booting = self.pointers.currently_booting_patch;
         if let Some(prev) = self.pointers.next_boot_patch {
-            if prev != n && Some(prev) != last_booted {
+            if prev != n && Some(prev) != last_booted && Some(prev) != booting {
                 self.cleanup(prev)?;
             }
         }
@@ -1408,20 +1418,31 @@ mod tests {
     }
 
     #[test]
-    fn decide_start_skips_installed() {
-        let (_tmp, lifecycle) = fixture();
-        lifecycle
-            .write_state(
-                1,
-                &PatchState::Installed {
-                    signature: None,
-                    size: 1000,
-                },
-            )
-            .unwrap();
+    fn decide_start_skips_installed_next_boot_patch() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 1000);
+        lifecycle.promote_to_next_boot(1).unwrap();
         assert_eq!(
             lifecycle.decide_start(1, "u", "h", None),
             DownloadAction::Skip(SkipReason::AlreadyInstalled)
+        );
+    }
+
+    #[test]
+    fn decide_start_reselects_installed_patch_that_is_not_next_boot() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 1000);
+        install_state(&lifecycle, 2, 1000);
+        lifecycle.promote_to_next_boot(1).unwrap();
+        assert_eq!(
+            lifecycle.decide_start(2, "u", "h", None),
+            DownloadAction::Reselect
+        );
+        // With no next-boot patch at all, an installed patch is reselected too.
+        lifecycle.pointers.next_boot_patch = None;
+        assert_eq!(
+            lifecycle.decide_start(1, "u", "h", None),
+            DownloadAction::Reselect
         );
     }
 
@@ -1609,6 +1630,23 @@ mod tests {
         lifecycle.save_pointers().unwrap();
         // Engine claims to boot 1 but our pointer says 2.
         assert!(lifecycle.record_boot_start(1).is_err());
+    }
+
+    #[test]
+    fn promote_to_next_boot_keeps_the_booting_patch() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 100);
+        lifecycle.promote_to_next_boot(1).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        // Patch 1 is booting for the first time, so it isn't last booted yet.
+        lifecycle.promote_to_next_boot(2).unwrap();
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+        assert!(lifecycle.installed_artifact_path(1).exists());
     }
 
     #[test]

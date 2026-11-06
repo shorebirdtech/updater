@@ -78,7 +78,10 @@ SHOREBIRD_EXPORT uintptr_t shorebird_next_boot_patch_number(void);
  *   2. The channel specified in shorebird.yaml
  *   3. The default "stable" channel
  *
- * Returns true if an update exists that has not yet been downloaded.
+ * Returns true if an update exists that has not yet been downloaded, or if
+ * the offered patch is already installed but isn't the next-boot patch (so
+ * `shorebird_update_with_result` would make it next boot, usually without
+ * downloading it).
  */
 SHOREBIRD_EXPORT
 bool shorebird_check_for_downloadable_update(const char *c_channel);
