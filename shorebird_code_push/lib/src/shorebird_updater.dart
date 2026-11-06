@@ -106,12 +106,19 @@ abstract class ShorebirdUpdater {
   /// {@macro shorebird_updater}
   factory ShorebirdUpdater() => ShorebirdUpdaterImpl();
 
-  /// Whether the updater is available on the current platform.
-  /// The most common reasons for this returning false are:
-  /// 1. The app is running in debug mode (Shorebird only supports release
-  ///    mode).
-  /// 2. The app was *NOT* built using `shorebird release` and does *NOT*
-  ///    contain the Shorebird engine.
+  /// Whether the running app contains the Shorebird engine.
+  ///
+  /// This is false when the app was *NOT* built using `shorebird release` or
+  /// `shorebird preview` and does *NOT* contain the Shorebird engine (e.g. it
+  /// was built with `flutter build` or `flutter run`), or on an unsupported
+  /// platform (e.g. web).
+  ///
+  /// This does not check the build mode. Shorebird only supports release mode,
+  /// but a debug build that contains the Shorebird engine still reports true
+  /// even though its updater is not configured. In such a build,
+  /// [readCurrentPatch] and [readNextPatch] return `null`, [checkForUpdate]
+  /// returns [UpdateStatus.upToDate], and [update] throws an
+  /// [UpdateException].
   bool get isAvailable;
 
   /// Returns information about the currently installed patch.
@@ -155,8 +162,8 @@ abstract class ShorebirdUpdater {
   /// Updates the app to the latest patch available on the specified track, or
   /// [UpdateTrack.stable] if no track is specified.
   ///
-  /// If no update is available or the update fails, this method will throw an
-  /// [UpdateException].
+  /// If the update fails, this method will throw an [UpdateException]. It does
+  /// not throw if no update is available.
   ///
   /// The returned Future will complete once the update is fully downloaded and
   /// ready to be used on the next app start.
