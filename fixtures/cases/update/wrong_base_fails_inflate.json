@@ -74,6 +74,27 @@
             "signature": null,
             "size": 63
           }
+        },
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": [
+              {
+                "app_id": "fixture-app-id",
+                "arch": "<arch>",
+                "client_id": "00000000-0000-4000-8000-000000000001",
+                "event_id": "<uuid>",
+                "type": "__patch_update_failure__",
+                "patch_number": 1,
+                "platform": "<platform>",
+                "release_version": "1.0.0+1",
+                "timestamp": "<number>",
+                "message": "<prefix:update_failure: patch 1 failed (failed to fill whole buffer: Patch read past the end of the base snapshot.>",
+                "failure_category": "corrupt_patch"
+              }
+            ]
+          }
         }
       }
     }

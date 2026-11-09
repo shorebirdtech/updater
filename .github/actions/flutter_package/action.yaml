@@ -68,5 +68,5 @@ runs:
         EXCLUDES: ${{ inputs.coverage_excludes }}
         MIN_COVERAGE: ${{ inputs.min_coverage }}
       run: |
-        dart pub global activate shorebird_ci 0.2.6
+        dart pub global activate shorebird_ci 0.2.7
         dart pub global run shorebird_ci:shorebird_ci check_coverage coverage/lcov.info --min "$MIN_COVERAGE" --exclude "$EXCLUDES"

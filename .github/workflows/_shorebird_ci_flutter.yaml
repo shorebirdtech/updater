@@ -13,10 +13,6 @@ on:
         required: false
         default: ""
         type: string
-      has_bloc_lint:
-        required: false
-        default: false
-        type: boolean
       has_integration_tests:
         required: false
         default: false
@@ -45,9 +41,6 @@ jobs:
         with:
           flutter-version: ${{ inputs.flutter_version || '' }}
           channel: ${{ inputs.flutter_version && '' || 'stable' }}
-      - name: Setup Bloc Tools
-        if: inputs.has_bloc_lint
-        uses: felangel/setup-bloc-tools@7be2b47e63c845e5a92032c6ff2243f42cda65f3 # v0.1.1
       - name: Install Dependencies
         working-directory: ${{ inputs.package_path }}
         run: |
@@ -59,10 +52,6 @@ jobs:
         run: dart format --set-exit-if-changed .
       - working-directory: ${{ inputs.package_path }}
         run: flutter analyze .
-      - name: Bloc Lint
-        if: inputs.has_bloc_lint
-        working-directory: ${{ inputs.package_path }}
-        run: bloc lint .
       - if: inputs.has_unit_tests
         working-directory: ${{ inputs.package_path }}
         run: flutter test
