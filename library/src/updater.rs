@@ -1287,20 +1287,27 @@ impl<R: Read> Read for CountingReader<R> {
     }
 }
 
-/// Read+Seek wrapper that counts bytes read, seek calls, and tracks the last
-/// seek-target position. Used to wrap the base reader inside `inflate` so we
+/// Read+Seek wrapper that counts bytes read, seek calls, tracks the last
+/// seek-target position, and records whether a `read` ever returned `0` (EOF)
+/// for a non-empty buffer. Used to wrap the base reader inside `inflate` so we
 /// can report exactly where bipatch's interaction with the base reader was
-/// when an error occurred.
+/// when an error occurred and distinguish a base-reader EOF from a truncated
+/// patch stream.
 struct CountingReadSeek<RS> {
     inner: RS,
     bytes_read: std::sync::Arc<std::sync::atomic::AtomicU64>,
     seek_count: std::sync::Arc<std::sync::atomic::AtomicU64>,
     last_seek_pos: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    hit_eof: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<RS: Read> Read for CountingReadSeek<RS> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
+        if n == 0 && !buf.is_empty() {
+            self.hit_eof
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.bytes_read
             .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
         Ok(n)
@@ -1385,8 +1392,8 @@ fn inflate<RS>(patch_path: &Path, base_r: RS, output_path: &Path) -> anyhow::Res
 where
     RS: Read + Seek,
 {
-    use std::io::{BufReader, BufWriter, SeekFrom, Write};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::io::{BufReader, BufWriter, SeekFrom};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     // Validate the compressed patch before attempting decompression.
@@ -1432,6 +1439,7 @@ where
     let base_bytes_read = Arc::new(AtomicU64::new(0));
     let base_seek_count = Arc::new(AtomicU64::new(0));
     let base_last_seek_pos = Arc::new(AtomicU64::new(0));
+    let base_hit_eof = Arc::new(AtomicBool::new(false));
     let output_bytes_written = Arc::new(AtomicU64::new(0));
 
     let snapshot = || InflateDiagnostics {
@@ -1445,6 +1453,7 @@ where
     };
 
     let patch_r = zstd::Decoder::with_buffer(compressed_patch_r)
+        .context(UpdateError::CorruptPatch)
         .with_context(|| format!("Failed to start zstd decoder. {}", snapshot()))?;
     let patch_r_counted = CountingReader {
         inner: patch_r,
@@ -1455,12 +1464,14 @@ where
         bytes_read: Arc::clone(&base_bytes_read),
         seek_count: Arc::clone(&base_seek_count),
         last_seek_pos: Arc::clone(&base_last_seek_pos),
+        hit_eof: Arc::clone(&base_hit_eof),
     };
 
     // bipatch::Reader::new reads the bipatch header (4-byte magic + 4-byte
     // version) and seeks the base reader to learn its length, so this is the
     // first place a malformed patch or a bad base reader can surface.
     let mut fresh_r = bipatch::Reader::new(patch_r_counted, base_r_counted)
+        .context(UpdateError::CorruptPatch)
         .with_context(|| format!("Failed to initialize bipatch reader. {}", snapshot()))?;
 
     // Write out the resulting patched file to the new location, counting
@@ -1471,9 +1482,12 @@ where
         inner: BufWriter::new(output_file_w),
         bytes_written: Arc::clone(&output_bytes_written),
     };
-    let patch_result = std::io::copy(&mut fresh_r, &mut output_w_counted)
-        .and_then(|_| output_w_counted.flush())
-        .with_file_context(FileOperation::WriteFile, output_path);
+    let patch_result = apply_patch_stream(
+        &mut fresh_r,
+        &mut output_w_counted,
+        output_path,
+        &base_hit_eof,
+    );
 
     let diag = snapshot();
     match patch_result {
@@ -1490,6 +1504,55 @@ where
             Err(patch_err).with_context(|| format!("Patch application failed. {}", diag))
         }
     }
+}
+
+/// Streams patched bytes from `fresh_r` into `output_w`, attributing read
+/// errors to `UpdateError::CorruptPatch` and write/flush errors to
+/// `FileOperation::WriteFile` on `output_path`.
+///
+/// `std::io::copy` would conflate reads and writes into a single `io::Error`,
+/// causing `with_file_context(FileOperation::WriteFile, output_path)` to
+/// mislabel a truncated patch or a short base snapshot (`UnexpectedEof` on
+/// `fresh_r`) as `"Failed to write to file '.../dlc.vmcode': failed to fill
+/// whole buffer"` and classify it as `FailureCategory::Filesystem` instead of
+/// `FailureCategory::CorruptPatch`.
+fn apply_patch_stream<R: Read, W: std::io::Write>(
+    fresh_r: &mut R,
+    output_w: &mut W,
+    output_path: &Path,
+    base_hit_eof: &std::sync::atomic::AtomicBool,
+) -> anyhow::Result<()> {
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = match fresh_r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                let err = if e.kind() == std::io::ErrorKind::UnexpectedEof
+                    && base_hit_eof.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "{e}: Patch read past the end of the base snapshot. This is most often \
+                             caused by using the same version number with a different app binary \
+                             than the release that was submitted to Shorebird."
+                        ),
+                    )
+                } else {
+                    e
+                };
+                return Err(anyhow::Error::new(err).context(UpdateError::CorruptPatch));
+            }
+        };
+        output_w
+            .write_all(&buf[..n])
+            .with_file_context(FileOperation::WriteFile, output_path)?;
+    }
+    output_w
+        .flush()
+        .with_file_context(FileOperation::WriteFile, output_path)
 }
 
 /// Performs integrity checks on the next boot patch. If the patch fails these checks, the patch
@@ -2383,6 +2446,169 @@ patch_verification: bogus_mode
             err.contains("valid zstd magic bytes"),
             "Expected validation error, got: {}",
             err
+        );
+    }
+
+    #[test]
+    fn inflate_with_shorter_base_reports_base_eof_not_output_write_error() {
+        // Regression test for shorebird#3876: when the device's base
+        // snapshot is shorter than the release snapshot the patch was diffed
+        // against, bipatch seeks to/past the end of the base and hits
+        // UnexpectedEof ("failed to fill whole buffer"). Previously,
+        // `std::io::copy(...).with_file_context(FileOperation::WriteFile, output_path)`
+        // blamed the read EOF on writing `dlc.vmcode` and classified the
+        // failure as `FailureCategory::Filesystem` instead of `CorruptPatch`.
+        let tmp_dir = TempDir::new().unwrap();
+        let patch_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixtures/bipatch/text_edit/patch.bin");
+        let full_base = fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../fixtures/bipatch/text_edit/base.bin"),
+        )
+        .unwrap();
+        // Truncate the base so bipatch seeks to the end of the shorter base
+        // and hits EOF when reading.
+        let shorter_base = std::io::Cursor::new(full_base[..full_base.len() / 2].to_vec());
+        let output_path = tmp_dir.path().join("dlc.vmcode");
+
+        let err = super::inflate(&patch_path, shorter_base, &output_path).unwrap_err();
+        let err_chain = format!("{:#}", err);
+        let root_first = super::root_cause_first(&err);
+
+        assert!(
+            root_first.starts_with(
+                "failed to fill whole buffer: Patch read past the end of the base snapshot."
+            ),
+            "Expected root_cause_first to lead with base-EOF explanation so 256b truncation preserves it, got: {root_first}"
+        );
+        assert!(
+            !err_chain.contains("Failed to write to file"),
+            "Read EOF on base must not be mislabeled as an output write error, got: {err_chain}"
+        );
+        assert_eq!(
+            super::classify_failure(&err),
+            super::FailureCategory::CorruptPatch,
+            "Base EOF during inflate should classify as CorruptPatch, not Filesystem"
+        );
+    }
+
+    #[test]
+    fn inflate_with_truncated_patch_does_not_blame_base_or_output_file() {
+        // When the patch stream itself is truncated (either a truncated zstd
+        // frame or a valid zstd frame wrapping a truncated bipatch stream that
+        // hits `UnexpectedEof` / "failed to fill whole buffer" mid-apply) while
+        // the base snapshot is complete, `base_r` never hits EOF. Both must
+        // classify as `CorruptPatch` without falsely blaming the base snapshot
+        // or the output file write.
+        let tmp_dir = TempDir::new().unwrap();
+        let full_patch = fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../fixtures/bipatch/text_edit/patch.bin"),
+        )
+        .unwrap();
+        let full_base = fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../fixtures/bipatch/text_edit/base.bin"),
+        )
+        .unwrap();
+        let output_path = tmp_dir.path().join("dlc.vmcode");
+
+        // Case 1: truncated zstd frame (fails in `bipatch::Reader::new`).
+        let truncated_zstd_path = tmp_dir.path().join("truncated_zstd.patch");
+        fs::write(&truncated_zstd_path, &full_patch[..30]).unwrap();
+        let err = super::inflate(
+            &truncated_zstd_path,
+            std::io::Cursor::new(full_base.clone()),
+            &output_path,
+        )
+        .unwrap_err();
+        let err_chain = format!("{:#}", err);
+        assert!(
+            !err_chain.contains("Patch read past the end of the base snapshot"),
+            "Truncated zstd stream must not blame the base snapshot, got: {err_chain}"
+        );
+        assert!(
+            !err_chain.contains("Failed to write to file"),
+            "Truncated zstd stream must not blame output file write, got: {err_chain}"
+        );
+        assert_eq!(
+            super::classify_failure(&err),
+            super::FailureCategory::CorruptPatch,
+        );
+
+        // Case 2: valid zstd frame whose inner bipatch instruction stream is
+        // truncated after the header, so `fresh_r.read` fails mid-stream with
+        // `UnexpectedEof` ("failed to fill whole buffer") while `base_hit_eof`
+        // is still false.
+        let decompressed_bipatch = zstd::decode_all(&full_patch[..]).unwrap();
+        let truncated_bipatch =
+            zstd::encode_all(&decompressed_bipatch[..decompressed_bipatch.len() / 2], 3).unwrap();
+        let truncated_bipatch_path = tmp_dir.path().join("truncated_bipatch.patch");
+        fs::write(&truncated_bipatch_path, &truncated_bipatch).unwrap();
+
+        let err = super::inflate(
+            &truncated_bipatch_path,
+            std::io::Cursor::new(full_base),
+            &output_path,
+        )
+        .unwrap_err();
+        let err_chain = format!("{:#}", err);
+
+        assert!(
+            err_chain.contains("Patch application failed")
+                && err_chain.contains("failed to fill whole buffer"),
+            "Expected mid-stream UnexpectedEof during patch application, got: {err_chain}"
+        );
+        assert!(
+            !err_chain.contains("Patch read past the end of the base snapshot"),
+            "Truncated bipatch stream must not blame the base snapshot, got: {err_chain}"
+        );
+        assert!(
+            !err_chain.contains("Failed to write to file"),
+            "Truncated bipatch stream must not be mislabeled as an output write error, got: {err_chain}"
+        );
+        assert_eq!(
+            super::classify_failure(&err),
+            super::FailureCategory::CorruptPatch,
+        );
+    }
+
+    #[test]
+    fn apply_patch_stream_preserves_output_write_error_and_category() {
+        // Real write failures on the output file (e.g. disk full) must still
+        // report `Failed to write to file` and classify by their OS error kind,
+        // not be papered over as `CorruptPatch`.
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut fresh_r = std::io::Cursor::new(b"patched bytes".to_vec());
+        let mut output_w = FailingWriter;
+        let output_path = std::path::Path::new("/tmp/dlc.vmcode");
+        let base_hit_eof = std::sync::atomic::AtomicBool::new(false);
+
+        let err =
+            super::apply_patch_stream(&mut fresh_r, &mut output_w, output_path, &base_hit_eof)
+                .unwrap_err();
+        let err_chain = format!("{:#}", err);
+
+        assert!(
+            err_chain.contains("Failed to write to file"),
+            "Expected output write context in error chain, got: {err_chain}"
+        );
+        assert!(
+            !err_chain.contains("Patch read past the end of the base snapshot"),
+            "Write error must not blame base snapshot, got: {err_chain}"
+        );
+        assert_eq!(
+            super::classify_failure(&err),
+            super::FailureCategory::OutOfSpace,
         );
     }
 
