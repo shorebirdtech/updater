@@ -1845,18 +1845,18 @@ mod tests {
     }
 
     /// A process that dies while writing pointers.json dies before the
-    /// rename, leaving a partial `pointers.json.tmp` and the previous
+    /// rename, leaving a partial `pointers.json.<nonce>.tmp` and the previous
     /// pointers in place. Dying while writing the success leaves the patch
     /// armed (blamed next launch); dying while writing the arm leaves it
-    /// unarmed. Either way the next process reads a whole file, and its
-    /// next write replaces the leftover temp file.
+    /// unarmed. Either way the next process reads a whole file and ignores
+    /// the leftover temp file.
     #[test]
     fn death_mid_pointers_write_leaves_the_previous_pointers() {
         let (tmp, mut lifecycle) = fixture();
         install_state(&lifecycle, 1, 100);
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
-        let tmp_file = tmp.path().join(format!("{POINTERS_FILE}.tmp"));
+        let tmp_file = tmp.path().join(format!("{POINTERS_FILE}.dead-writer.tmp"));
 
         // Death while writing the arm: on disk, still unarmed.
         std::fs::write(&tmp_file, r#"{"next_boot_patch":1,"currently_booting"#).unwrap();
@@ -1866,7 +1866,10 @@ mod tests {
 
         // The next process arms normally over the leftover temp file.
         reloaded.record_boot_resume(1).unwrap();
-        assert!(!tmp_file.exists());
+        assert_eq!(
+            reload_at(tmp.path()).pointers().currently_booting_patch,
+            Some(1)
+        );
 
         // Death while writing the success: on disk, still armed.
         std::fs::write(&tmp_file, r#"{"next_boot_patch":1,"last_booted_pa"#).unwrap();

@@ -6061,6 +6061,7 @@ mod unreadable_state_tests {
             Ok(())
         })
     }
+}
 
 /// Runs every sequence of [`LAUNCHES`] launches the engine can report, then
 /// one more init, and checks the boot invariants after each step. Each launch follows the engine's order (start, paused, resumed,
