@@ -42,7 +42,12 @@
 //! before any lifecycle transitions happen. `shorebird_current_boot_patch_number`
 //! reads that, not anything in this module.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs::{File, OpenOptions, TryLockError},
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -53,6 +58,25 @@ use crate::yaml::PatchVerificationMode;
 const PATCHES_DIR: &str = "patches";
 const PATCH_STATE_FILE: &str = "state.json";
 const POINTERS_FILE: &str = "pointers.json";
+const BOOT_LOCK_FILE: &str = "boot.lock";
+
+/// An exclusive advisory lock on `{state_root}/boot.lock`, held by the
+/// process that armed the breadcrumb until it clears it. The OS releases it
+/// when that process dies, so another process of the same app (a second
+/// desktop instance, an Android `android:process`) that finds it held knows
+/// the breadcrumb belongs to a boot still running, not one that crashed.
+/// Keyed by `state_root`: the lock belongs to that release's state.
+static BOOT_LOCKS: Mutex<BTreeMap<PathBuf, File>> = Mutex::new(BTreeMap::new());
+
+/// Whether this process may own the breadcrumb.
+#[derive(Debug, PartialEq)]
+enum BootOwner {
+    /// This process holds the lock, or the lock can't be used here (as
+    /// before the lock existed).
+    This,
+    /// Another live process holds it.
+    OtherProcess,
+}
 
 /// Per-patch lifecycle state. Persisted at `{root}/patches/{N}/state.json`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -139,9 +163,10 @@ pub struct ReleasePointers {
     /// a fallback target when `next_boot_patch` becomes invalid.
     pub last_booted_patch: Option<usize>,
 
-    /// Boot-in-progress breadcrumb. Set at `record_boot_start`, cleared
-    /// at `record_boot_success` / `record_boot_failure`. If still set on
-    /// next init, treat as a crashed boot.
+    /// Boot-in-progress breadcrumb. Set at `record_boot_start` and again at
+    /// `record_boot_resume`; cleared at `record_boot_pause`,
+    /// `record_boot_success` and `record_boot_failure`.
+    /// If still set on next init, the process died while booting the patch.
     pub currently_booting_patch: Option<usize>,
 
     /// Unix timestamp (seconds) when `currently_booting_patch` was set.
@@ -367,6 +392,16 @@ impl PatchLifecycle {
     }
 }
 
+/// Drops this process's boot locks on state under `dir`, as the OS does
+/// when a process dies.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn testing_release_boot_locks_under(dir: &Path) {
+    BOOT_LOCKS
+        .lock()
+        .expect("boot lock poisoned")
+        .retain(|root, _| !root.starts_with(dir));
+}
+
 /// Path the caller streams compressed download bytes to. Lives at
 /// `{download_root}/{N}` (flat under the OS-managed cache dir). Free
 /// function so callers in `update_internal` can compute it without
@@ -587,25 +622,151 @@ impl PatchLifecycle {
             Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
             None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
         }
+        self.set_breadcrumb(n)
+    }
+
+    /// Takes the boot lock for this process, unless another live process
+    /// holds it.
+    fn take_boot_lock(&self) -> BootOwner {
+        let mut held = BOOT_LOCKS.lock().expect("boot lock poisoned");
+        if held.contains_key(&self.state_root) {
+            return BootOwner::This;
+        }
+        let file = match self.open_boot_lock() {
+            Ok(file) => file,
+            Err(e) => {
+                shorebird_error!("Failed to open boot lock: {:?}", e);
+                return BootOwner::This;
+            }
+        };
+        match file.try_lock() {
+            Ok(()) => {
+                held.insert(self.state_root.clone(), file);
+                BootOwner::This
+            }
+            Err(TryLockError::WouldBlock) => BootOwner::OtherProcess,
+            Err(TryLockError::Error(e)) => {
+                shorebird_error!("Failed to take boot lock: {:?}", e);
+                BootOwner::This
+            }
+        }
+    }
+
+    /// Whether another live process holds the boot lock, so the breadcrumb
+    /// on disk is its boot in progress. Doesn't take the lock.
+    pub fn other_process_booting(&self) -> bool {
+        if BOOT_LOCKS
+            .lock()
+            .expect("boot lock poisoned")
+            .contains_key(&self.state_root)
+        {
+            return false;
+        }
+        let Ok(file) = self.open_boot_lock() else {
+            return false;
+        };
+        // A lock taken here is dropped, and so released, on return.
+        matches!(file.try_lock(), Err(TryLockError::WouldBlock))
+    }
+
+    fn open_boot_lock(&self) -> std::io::Result<File> {
+        std::fs::create_dir_all(&self.state_root)?;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.state_root.join(BOOT_LOCK_FILE))
+    }
+
+    #[cfg(test)]
+    pub fn boot_lock_path(&self) -> PathBuf {
+        self.state_root.join(BOOT_LOCK_FILE)
+    }
+
+    fn release_boot_lock(&self) {
+        BOOT_LOCKS
+            .lock()
+            .expect("boot lock poisoned")
+            .remove(&self.state_root);
+    }
+
+    fn set_breadcrumb(&mut self, n: usize) -> Result<()> {
+        if self.take_boot_lock() == BootOwner::OtherProcess {
+            shorebird_info!("Another process is booting; not arming patch {}", n);
+            return Ok(());
+        }
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
         self.save_pointers()
     }
 
+    fn clear_breadcrumb(&mut self) {
+        self.pointers.currently_booting_patch = None;
+        self.pointers.boot_started_at = None;
+    }
+
+    /// Clears the breadcrumb without promoting the patch: the engine has
+    /// built its Shell but may never run Dart, and a process that ends now
+    /// didn't crash running the patch. [`record_boot_resume`] arms it again
+    /// when the root isolate launches. No-op without a breadcrumb.
+    pub fn record_boot_pause(&mut self) -> Result<()> {
+        if self.pointers.currently_booting_patch.is_none() || self.other_process_booting() {
+            return Ok(());
+        }
+        self.clear_breadcrumb();
+        self.save_pointers()?;
+        self.release_boot_lock();
+        Ok(())
+    }
+
+    /// Arms the breadcrumb again for patch `n`, the patch this process
+    /// loaded, when the engine launches the root isolate. Unlike
+    /// [`record_boot_start`] it doesn't require `n` to still be
+    /// `next_boot_patch`: what matters is the patch that is running.
+    pub fn record_boot_resume(&mut self, n: usize) -> Result<()> {
+        match self.read_state(n) {
+            Some(PatchState::Installed { .. }) => {}
+            other => {
+                bail!("record_boot_resume({n}) expected Installed, got {other:?}");
+            }
+        }
+        self.set_breadcrumb(n)
+    }
+
+    /// Clears the breadcrumb if it names `n`, which is being uninstalled
+    /// (a server rollback during the launch window): success must not
+    /// promote a patch that is gone, nor clean up the patches before it.
+    pub fn forget_booting(&mut self, n: usize) -> Result<()> {
+        if self.pointers.currently_booting_patch != Some(n) {
+            return Ok(());
+        }
+        self.clear_breadcrumb();
+        self.save_pointers()?;
+        self.release_boot_lock();
+        Ok(())
+    }
+
     /// Records a successful boot. Promotes `currently_booting_patch` to
     /// `last_booted_patch` and runs cleanup on older patches (per-patch
     /// state-aware: Bad tombstones survive, others are forgotten).
+    ///
+    /// Recomputes `next_boot_patch` too: a newer patch installed and then
+    /// rolled back during the launch window left it at the last good patch
+    /// from before this boot, which this boot has just replaced.
     pub fn record_boot_success(&mut self) -> Result<()> {
+        if self.other_process_booting() {
+            bail!("record_boot_success while another process is booting");
+        }
         let n = self
             .pointers
             .currently_booting_patch
             .context("record_boot_success without currently_booting_patch")?;
         self.pointers.last_booted_patch = Some(n);
-        self.pointers.currently_booting_patch = None;
-        self.pointers.boot_started_at = None;
+        self.clear_breadcrumb();
         self.save_pointers()?;
+        self.release_boot_lock();
         self.cleanup_older_than(n);
-        Ok(())
+        self.recompute_next_boot()
     }
 
     /// Records that patch `n` failed to boot. Marks the patch
@@ -625,10 +786,13 @@ impl PatchLifecycle {
     /// an `Installed` patch with no breadcrumb — the next boot retries
     /// it silently.
     pub fn record_boot_failure(&mut self, n: usize) -> Result<()> {
+        if self.other_process_booting() {
+            bail!("record_boot_failure({n}) while another process is booting");
+        }
         self.mark_bad(n, BadReason::BootCrash)?;
-        self.pointers.currently_booting_patch = None;
-        self.pointers.boot_started_at = None;
+        self.clear_breadcrumb();
         self.save_pointers()?;
+        self.release_boot_lock();
         self.recompute_next_boot()
     }
 
@@ -641,6 +805,9 @@ impl PatchLifecycle {
         let Some(n) = self.pointers.currently_booting_patch else {
             return Ok(None);
         };
+        if self.other_process_booting() {
+            return Ok(None);
+        }
         self.record_boot_failure(n)?;
         Ok(Some(n))
     }
@@ -731,9 +898,13 @@ impl PatchLifecycle {
         }
         // If we're replacing an Installed-but-never-booted previous
         // next_boot, retire it. cleanup handles tombstones correctly.
+        // Not while it is booting: the app's own Dart code can install a
+        // patch during the launch window, and the booting patch must stay
+        // to be promoted at success or marked Bad if the launch dies.
         let last_booted = self.pointers.last_booted_patch;
+        let booting = self.pointers.currently_booting_patch;
         if let Some(prev) = self.pointers.next_boot_patch {
-            if prev != n && Some(prev) != last_booted {
+            if prev != n && Some(prev) != last_booted && Some(prev) != booting {
                 self.cleanup(prev)?;
             }
         }
@@ -1609,6 +1780,308 @@ mod tests {
         lifecycle.save_pointers().unwrap();
         // Engine claims to boot 1 but our pointer says 2.
         assert!(lifecycle.record_boot_start(1).is_err());
+    }
+
+    #[test]
+    fn record_boot_pause_clears_breadcrumb_and_persists() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+
+        lifecycle.record_boot_pause().unwrap();
+
+        // A process that dies now finds nothing armed on its next init.
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, None);
+        assert_eq!(reloaded.pointers().boot_started_at, None);
+        // Pausing promotes nothing.
+        assert_eq!(reloaded.pointers().last_booted_patch, None);
+        assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
+        assert!(matches!(
+            reloaded.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+    }
+
+    #[test]
+    fn record_boot_pause_without_breadcrumb_is_a_no_op() {
+        let (_tmp, mut lifecycle) = fixture();
+        lifecycle.record_boot_pause().unwrap();
+        assert_eq!(lifecycle.pointers().currently_booting_patch, None);
+    }
+
+    #[test]
+    fn record_boot_resume_arms_breadcrumb_and_persists() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_pause().unwrap();
+
+        lifecycle.record_boot_resume(1).unwrap();
+
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert!(reloaded.pointers().boot_started_at.is_some());
+    }
+
+    #[test]
+    fn record_boot_resume_arms_running_patch_when_next_boot_moved_on() {
+        // record_boot_start insists on next_boot_patch; resume names the
+        // patch this process loaded, whatever next_boot says by now.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.record_boot_resume(1).unwrap();
+
+        assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+    }
+
+    /// A process that dies while writing pointers.json dies before the
+    /// rename, leaving a partial `pointers.json.<nonce>.tmp` and the previous
+    /// pointers in place. Dying while writing the success leaves the patch
+    /// armed (blamed next launch); dying while writing the arm leaves it
+    /// unarmed. Either way the next process reads a whole file and ignores
+    /// the leftover temp file.
+    #[test]
+    fn death_mid_pointers_write_leaves_the_previous_pointers() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        let tmp_file = tmp.path().join(format!("{POINTERS_FILE}.dead-writer.tmp"));
+
+        // Death while writing the arm: on disk, still unarmed.
+        std::fs::write(&tmp_file, r#"{"next_boot_patch":1,"currently_booting"#).unwrap();
+        let mut reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, None);
+        assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
+
+        // The next process arms normally over the leftover temp file.
+        reloaded.record_boot_resume(1).unwrap();
+        assert_eq!(
+            reload_at(tmp.path()).pointers().currently_booting_patch,
+            Some(1)
+        );
+
+        // Death while writing the success: on disk, still armed.
+        std::fs::write(&tmp_file, r#"{"next_boot_patch":1,"last_booted_pa"#).unwrap();
+        let mut reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert_eq!(reloaded.detect_boot_crash_on_init().unwrap(), Some(1));
+        assert!(matches!(
+            reloaded.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::BootCrash,
+                ..
+            })
+        ));
+    }
+
+    /// Takes the boot lock as another live process of the app would (a
+    /// second desktop instance, an Android `android:process`). Dropping the
+    /// file is that process dying.
+    fn lock_as_another_process(root: &Path) -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(root.join(BOOT_LOCK_FILE))
+            .unwrap();
+        file.lock().unwrap();
+        file
+    }
+
+    /// Another process of the app starting while the first is in its launch
+    /// window doesn't judge the first's breadcrumb a crash, and its own
+    /// start, pause, success and failure leave the first's boot alone.
+    #[test]
+    fn another_live_process_keeps_its_boot() {
+        let (tmp, mut first) = fixture();
+        install_state(&first, 1, 100);
+        first.pointers.next_boot_patch = Some(1);
+        first.pointers.currently_booting_patch = Some(1);
+        first.save_pointers().unwrap();
+        let first_alive = lock_as_another_process(tmp.path());
+
+        let mut second = reload_at(tmp.path());
+        assert_eq!(second.detect_boot_crash_on_init().unwrap(), None);
+        second.record_boot_start(1).unwrap();
+        second.record_boot_pause().unwrap();
+        second.record_boot_resume(1).unwrap();
+        assert!(second.record_boot_success().is_err());
+        assert!(second.record_boot_failure(1).is_err());
+
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert_eq!(reloaded.pointers().last_booted_patch, None);
+        assert!(matches!(
+            reloaded.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+
+        // The first process dies in its window: the next init blames it.
+        drop(first_alive);
+        let mut next = reload_at(tmp.path());
+        assert_eq!(next.detect_boot_crash_on_init().unwrap(), Some(1));
+        assert!(matches!(
+            next.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::BootCrash,
+                ..
+            })
+        ));
+    }
+
+    /// The process that arms holds the lock until it clears the
+    /// breadcrumb, so another process sees its boot as live exactly while
+    /// it's armed.
+    #[test]
+    fn boot_lock_is_held_while_armed() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        let lock_free = || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(tmp.path().join(BOOT_LOCK_FILE))
+                .unwrap();
+            file.try_lock().is_ok()
+        };
+
+        lifecycle.record_boot_start(1).unwrap();
+        assert!(!lock_free());
+        lifecycle.record_boot_pause().unwrap();
+        assert!(lock_free());
+        lifecycle.record_boot_resume(1).unwrap();
+        assert!(!lock_free());
+        lifecycle.record_boot_success().unwrap();
+        assert!(lock_free());
+
+        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.forget_booting(1).unwrap();
+        assert!(lock_free());
+
+        lifecycle.record_boot_resume(1).unwrap();
+        lifecycle.record_boot_failure(1).unwrap();
+        assert!(lock_free());
+    }
+
+    #[test]
+    fn record_boot_resume_errs_unless_installed() {
+        let (_tmp, mut lifecycle) = fixture();
+        // Unknown patch.
+        assert!(lifecycle.record_boot_resume(1).is_err());
+        // Bad patch: never armed again.
+        install_state(&lifecycle, 2, 100);
+        lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
+        assert!(lifecycle.record_boot_resume(2).is_err());
+        assert_eq!(lifecycle.pointers().currently_booting_patch, None);
+    }
+
+    #[test]
+    fn forget_booting_clears_only_the_named_patch() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+
+        lifecycle.forget_booting(2).unwrap();
+        assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
+
+        lifecycle.forget_booting(1).unwrap();
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, None);
+        assert_eq!(reloaded.pointers().boot_started_at, None);
+        // Forgetting the breadcrumb marks nothing Bad.
+        assert!(matches!(
+            reloaded.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+    }
+
+    #[test]
+    fn promote_to_next_boot_keeps_the_booting_patch() {
+        // Patch 1 is booting for the first time (never booted, so not
+        // last_booted) when the app's Dart code installs patch 2.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        install_state(&lifecycle, 2, 200);
+
+        lifecycle.promote_to_next_boot(2).unwrap();
+
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(lifecycle.installed_artifact_path(1).exists());
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+    }
+
+    #[test]
+    fn promote_to_next_boot_still_retires_a_never_booted_patch() {
+        // The guard is only for the booting patch: with nothing booting,
+        // a newer install retires the never-booted next_boot as before.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        install_state(&lifecycle, 2, 200);
+
+        lifecycle.promote_to_next_boot(2).unwrap();
+
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(lifecycle.read_state(1).is_none());
+        assert!(!lifecycle.patch_dir(1).exists());
+    }
+
+    #[test]
+    fn record_boot_success_points_next_boot_at_the_booted_patch() {
+        // During patch 1's window patch 2 installed and was rolled back,
+        // which left next_boot at the last good patch from before (none).
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.pointers.next_boot_patch = None;
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.record_boot_success().unwrap();
+
+        assert_eq!(lifecycle.pointers().last_booted_patch, Some(1));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(1));
+    }
+
+    #[test]
+    fn record_boot_success_keeps_a_newer_next_boot() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        install_state(&lifecycle, 2, 200);
+        lifecycle.promote_to_next_boot(2).unwrap();
+
+        lifecycle.record_boot_success().unwrap();
+
+        assert_eq!(lifecycle.pointers().last_booted_patch, Some(1));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(lifecycle.installed_artifact_path(2).exists());
     }
 
     #[test]
