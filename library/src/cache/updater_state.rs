@@ -311,6 +311,43 @@ impl UpdaterState {
         self.lifecycle.record_boot_failure(patch_number)
     }
 
+    /// Records that a hot restart is starting to relaunch into `patch_number`
+    /// (`0` for the base release).
+    pub fn record_restart_start(&mut self, patch_number: usize) -> Result<()> {
+        self.lifecycle.record_restart_start(patch_number)
+    }
+
+    /// Records that the in-flight hot restart survived its launch window.
+    pub fn record_restart_success(&mut self) -> Result<()> {
+        self.lifecycle.record_restart_success()
+    }
+
+    /// Records that the in-flight hot restart failed to load or relaunch,
+    /// without condemning the patch. Returns the patch number (`0` for the
+    /// base release) that was restarting.
+    pub fn record_restart_failure(&mut self) -> Result<usize> {
+        self.lifecycle.record_restart_failure()
+    }
+
+    /// If the prior process crashed while a hot restart was in flight, clears
+    /// the marker, disables hot restart for the rest of the release, and
+    /// returns the patch number (`0` for the base release) that was
+    /// restarting.
+    pub fn record_restart_crash(&mut self) -> Result<Option<usize>> {
+        self.lifecycle.record_restart_crash()
+    }
+
+    /// Patch number (`0` for the base release) that an in-flight hot restart
+    /// is relaunching into, if any.
+    pub fn currently_restarting_patch_number(&self) -> Option<usize> {
+        self.lifecycle.pointers().currently_restarting_patch
+    }
+
+    /// Whether a hot restart failed or crashed earlier in this release.
+    pub fn restart_failed(&self) -> bool {
+        self.lifecycle.pointers().restart_failed
+    }
+
     /// Records that the in-flight boot succeeded.
     pub fn record_boot_success(&mut self) -> Result<()> {
         self.lifecycle.record_boot_success()
@@ -348,8 +385,7 @@ impl UpdaterState {
 
     pub fn next_boot_patch(&mut self) -> Option<PatchInfo> {
         self.lifecycle
-            .pointers()
-            .next_boot_patch
+            .effective_next_boot_patch()
             .map(|n| self.patch_info(n))
     }
 

@@ -15,6 +15,8 @@ pub enum EventType {
     PatchInstallFailure,
     PatchDownload,
     PatchUpdateFailure,
+    PatchRestartFailure,
+    PatchRestartCrash,
 }
 
 impl Serialize for EventType {
@@ -27,6 +29,8 @@ impl Serialize for EventType {
             EventType::PatchInstallFailure => "__patch_install_failure__",
             EventType::PatchDownload => "__patch_download__",
             EventType::PatchUpdateFailure => "__patch_update_failure__",
+            EventType::PatchRestartFailure => "__patch_restart_failure__",
+            EventType::PatchRestartCrash => "__patch_restart_crash__",
         })
     }
 }
@@ -42,6 +46,8 @@ impl<'de> Deserialize<'de> for EventType {
             "__patch_install_failure__" => Ok(EventType::PatchInstallFailure),
             "__patch_download__" => Ok(EventType::PatchDownload),
             "__patch_update_failure__" => Ok(EventType::PatchUpdateFailure),
+            "__patch_restart_failure__" => Ok(EventType::PatchRestartFailure),
+            "__patch_restart_crash__" => Ok(EventType::PatchRestartCrash),
             _ => Err(serde::de::Error::custom(format!("Unknown event type: {s}"))),
         }
     }
@@ -137,6 +143,8 @@ mod tests {
             (EventType::PatchInstallFailure, "__patch_install_failure__"),
             (EventType::PatchDownload, "__patch_download__"),
             (EventType::PatchUpdateFailure, "__patch_update_failure__"),
+            (EventType::PatchRestartFailure, "__patch_restart_failure__"),
+            (EventType::PatchRestartCrash, "__patch_restart_crash__"),
         ];
         for (event_type, expected_str) in &types {
             let json = serde_json::to_string(event_type).unwrap();

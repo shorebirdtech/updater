@@ -17,6 +17,7 @@ mod file_errors;
 mod http;
 mod logging;
 mod network;
+mod restart;
 mod time;
 mod updater;
 mod updater_lock;
