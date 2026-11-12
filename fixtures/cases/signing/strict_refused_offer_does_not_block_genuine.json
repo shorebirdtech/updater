@@ -86,6 +86,7 @@
       },
       "expect_tree": [
         "app/libapp.so",
+        "storage/boot.lock",
         "storage/patches/1/state.json",
         "storage/state.json",
         "storage/state.lock"

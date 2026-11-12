@@ -122,6 +122,7 @@
       "expect_tree": [
         "app/libapp.so",
         "cache/downloads/4",
+        "storage/boot.lock",
         "storage/patches/1/state.json",
         "storage/patches/3/dlc.vmcode",
         "storage/patches/3/state.json",
