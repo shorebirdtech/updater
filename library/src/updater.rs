@@ -518,8 +518,9 @@ pub fn should_auto_update() -> anyhow::Result<bool> {
 ///   2. The channel specified in shorebird.yaml
 ///   3. The default "stable" channel
 ///
-/// Returns true if an update is available for download. Will return false if the update is already
-/// downloaded and ready to install.
+/// Returns true if `update` would change the next-boot patch: a patch is
+/// available for download, or an offered patch is already installed but
+/// isn't next boot. Returns false if the offered patch is already next boot.
 pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bool> {
     let (client_id, current_patch_number) = with_state(|state| {
         Ok((
@@ -558,9 +559,17 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
                 patch.hash_signature.as_deref(),
             ))
         })?;
+        // True means `update` would change what boots next, not only that
+        // bytes are pending download. `Reselect` fetches nothing, but the
+        // patch only becomes next boot once `update` runs, and callers that
+        // see `false` here (the Dart package's `checkForUpdate`) don't run
+        // it.
         Ok(matches!(
             action,
-            DownloadAction::Fresh | DownloadAction::Resume { .. } | DownloadAction::Complete
+            DownloadAction::Fresh
+                | DownloadAction::Resume { .. }
+                | DownloadAction::Complete
+                | DownloadAction::Reselect
         ))
     } else {
         Ok(false)
@@ -725,7 +734,11 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let patch_number = patch.number;
-    let result = download_and_install_patch(&config, &patch, action);
+    let result = if action == DownloadAction::Reselect {
+        reselect_installed_patch(&config, &patch)
+    } else {
+        download_and_install_patch(&config, &patch, action)
+    };
 
     if let Err(ref err) = result {
         // Queue a diagnostic event for the failed update attempt.
@@ -1123,6 +1136,73 @@ fn download_and_install_patch(
     }
 
     install_downloaded_patch(config, patch, &download_path)
+}
+
+/// Makes an already-installed patch the next-boot patch again, without
+/// fetching it. This is the path for a device that moved to a different
+/// patch (say, by switching to a track whose latest patch is lower) and is
+/// now offered this one again.
+///
+/// The offer gets the same checks a download does, against the bytes
+/// already on disk: its signature must verify, and the installed artifact
+/// must hash to the offered hash.
+///
+/// A refused signature returns an error and changes no state: unlike the
+/// download path, nothing is tombstoned, because the installed bytes were
+/// accepted under an earlier offer and may be the patch the app is running.
+///
+/// Installed bytes that don't hash to the offer or can't be read (corrupted
+/// or missing on disk, or a patch number re-uploaded with different
+/// contents) are replaced by a fresh download, unless they are the running
+/// patch, whose file is in use; then this returns an error and changes
+/// nothing.
+///
+/// Bad patches never get here: `decide_start` skips them. No
+/// `PatchDownload` event is sent when nothing is downloaded.
+fn reselect_installed_patch(
+    config: &UpdateConfig,
+    patch: &crate::network::Patch,
+) -> anyhow::Result<UpdateStatus> {
+    crate::cache::check_patch_signature(
+        &patch.hash,
+        patch.hash_signature.as_deref(),
+        config.patch_public_key.as_deref(),
+    )
+    .context(UpdateError::InvalidSignature)?;
+
+    let installed_path =
+        lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch.number);
+    // An artifact that can't be read is treated like one that doesn't match.
+    let matches_offer = match crate::cache::hash_file(&installed_path) {
+        Ok(hash) => hash == patch.hash,
+        Err(e) => {
+            shorebird_error!("Failed to hash installed patch {}: {:?}", patch.number, e);
+            false
+        }
+    };
+    if !matches_offer {
+        let running = with_state(|state| Ok(state.running_patch().map(|p| p.number)))?;
+        if running == Some(patch.number) {
+            anyhow::bail!(
+                "Installed patch {} does not match the offered patch or could not be \
+                read, and it is the running patch, so it was left in place.",
+                patch.number
+            );
+        }
+        shorebird_info!(
+            "Installed patch {} does not match the offered patch; downloading it again.",
+            patch.number
+        );
+        with_mut_state(|state| state.uninstall_patch(patch.number))?;
+        return download_and_install_patch(config, patch, DownloadAction::Fresh);
+    }
+
+    with_mut_state(|state| state.lifecycle_mut().promote_to_next_boot(patch.number))?;
+    shorebird_info!(
+        "Patch {} is already installed. It will be launched when the app next restarts.",
+        patch.number
+    );
+    Ok(UpdateStatus::UpdateInstalled)
 }
 
 /// Inflates the compressed bytes at `download_path` into the lifecycle's
@@ -3301,6 +3381,76 @@ patch_verification: bogus_mode
         *OFFERED_SIGNATURE.lock().unwrap() = Some(HELLO_TESTS_SIGNATURE.to_string());
         assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
         assert_installed_and_bootable()
+    }
+
+    /// Moves patch 1, installed under a valid signature, out of next boot:
+    /// patch 1 boots, then a stand-in patch 2 is installed and made next
+    /// boot. Patch 1 stays `Installed` as the last booted patch.
+    fn install_patch_1_then_move_to_patch_2(tmp_dir: &TempDir) -> anyhow::Result<()> {
+        assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
+        super::report_launch_start()?;
+        super::report_launch_success()?;
+        let patch_2 = tmp_dir.path().join("patches/2/dlc.vmcode");
+        std::fs::create_dir_all(patch_2.parent().unwrap())?;
+        std::fs::write(&patch_2, b"patch 2")?;
+        super::with_mut_state(|state| {
+            state.lifecycle_mut().write_state(
+                2,
+                &crate::cache::lifecycle::PatchState::Installed {
+                    signature: None,
+                    size: 7,
+                },
+            )?;
+            state.lifecycle_mut().promote_to_next_boot(2)?;
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+            Ok(())
+        })
+    }
+
+    #[serial]
+    #[test]
+    fn reselect_checks_the_offered_signature() -> anyhow::Result<()> {
+        for (offered, cause) in [
+            (Some(WRONG_MESSAGE_SIGNATURE), "Patch signature is invalid"),
+            (None, "Patch signature is missing"),
+        ] {
+            let tmp_dir = TempDir::new().unwrap();
+            init_offering_signature(
+                &tmp_dir,
+                &signing_yaml("install_only"),
+                Some(HELLO_TESTS_SIGNATURE),
+            );
+            install_patch_1_then_move_to_patch_2(&tmp_dir)?;
+
+            // Patch 1 is offered again under an unverifiable signature. It is
+            // refused without tombstoning or removing the installed patch.
+            *OFFERED_SIGNATURE.lock().unwrap() = offered.map(String::from);
+            let err = super::update(None).expect_err("an unverifiable offer must not reselect");
+            assert_eq!(
+                super::classify_failure(&err),
+                super::FailureCategory::InvalidSignature
+            );
+            assert!(
+                format!("{err:#}").contains(cause),
+                "unexpected error: {err:#}"
+            );
+            assert!(tmp_dir.path().join("patches/1/dlc.vmcode").exists());
+            super::with_mut_state(|state| {
+                assert_eq!(state.next_boot_patch().map(|p| p.number), Some(2));
+                assert!(matches!(
+                    state.lifecycle_mut().read_state(1),
+                    Some(crate::cache::lifecycle::PatchState::Installed { .. })
+                ));
+                Ok(())
+            })?;
+
+            // The genuine offer reselects patch 1 without a download.
+            *OFFERED_SIGNATURE.lock().unwrap() = Some(HELLO_TESTS_SIGNATURE.to_string());
+            assert_eq!(super::update(None)?, crate::UpdateStatus::UpdateInstalled);
+            assert_eq!(DOWNLOADS.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_installed_and_bootable()?;
+        }
+        Ok(())
     }
 
     #[test]
