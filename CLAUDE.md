@@ -3,7 +3,7 @@
 - `library/include/*.h` come from `cbindgen` in `library/build.rs`; `updater_bindings.g.dart` comes from `ffigen`. Don't hand-edit either.
 - Fail open: any error leaves the app on its installed version.
 - `fixtures/` freezes updater behavior as JSON cases replayed through the C API by `library_test_hooks/tests/fixture_corpus.rs`; see `fixtures/README.md`. An intended behavior change updates its case in the same PR.
-- One change per PR; a PR that does several things is split before review. A refactor with no behavior change is its own PR, apart from any PR that changes behavior. General improvements (fixes, cleanups, tests, simplifications) go in their own PRs ahead of a feature and land first: we always want them, and may not want the feature.
+- One change per PR; split a PR that does several things before asking for review. A refactor with no behavior change is its own PR, apart from any PR that changes behavior. General improvements (fixes, cleanups, tests of existing code, simplifications) go in their own PRs ahead of a feature and land first: we always want them, and may not want the feature. A change keeps its own tests and fixture updates in its PR; a feature that needs an improvement builds on that PR's branch.
 
 ## FFI compatibility
 
