@@ -3,6 +3,7 @@
 - `library/include/*.h` come from `cbindgen` in `library/build.rs`; `updater_bindings.g.dart` comes from `ffigen`. Don't hand-edit either.
 - Fail open: any error leaves the app on its installed version.
 - `fixtures/` freezes updater behavior as JSON cases replayed through the C API by `library_test_hooks/tests/fixture_corpus.rs`; see `fixtures/README.md`. An intended behavior change updates its case in the same PR.
+- Keep PRs reviewable. A small PR can carry a little cleanup next to its change; once a PR gets large, split it along its seams: a refactor with no behavior change, general improvements (fixes, cleanups, tests of existing code, simplifications), and each separate behavior change. Improvements land first: we always want them, and may not want the feature. A change keeps its own tests and fixture updates in its PR; a feature that needs an improvement builds on that PR's branch.
 
 ## FFI compatibility
 
