@@ -665,13 +665,17 @@ impl PatchLifecycle {
     /// not a crash in a patch that's gone, and nothing should promote it),
     /// and recomputes `next_boot_patch`. This is the one path that removes
     /// the patch being booted.
+    ///
+    /// The breadcrumb is cleared before the files go, so a death between the
+    /// two, or a delete that fails (a file held open on Windows), never
+    /// leaves a rolled-back patch armed to be blamed or promoted.
     pub fn uninstall(&mut self, n: usize) -> Result<()> {
-        self.cleanup(n)?;
         if self.pointers.currently_booting_patch == Some(n) {
             self.pointers.currently_booting_patch = None;
             self.pointers.boot_started_at = None;
             self.save_pointers()?;
         }
+        self.cleanup(n)?;
         self.recompute_next_boot()
     }
 
