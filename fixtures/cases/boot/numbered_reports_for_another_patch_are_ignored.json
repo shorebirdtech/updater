@@ -62,7 +62,7 @@
     },
     {
       "call": "report_launch_resumed_for_patch",
-      "patch": 0,
+      "patch": 2,
       "expect_files": {
         "storage/pointers.json": {
           "json": {

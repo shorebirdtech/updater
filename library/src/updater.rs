@@ -1861,9 +1861,13 @@ pub fn report_launch_resumed_for_patch(loaded: Option<usize>) -> anyhow::Result<
 /// are sent even when the report is ignored.
 pub fn report_launch_success_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch of patch {:?}.", loaded);
-    crate::config::set_launch_outcome_reported();
+    // An ignored report (another patch) is no outcome for this launch.
+    let running = is_running_patch("success", loaded);
+    if running {
+        crate::config::set_launch_outcome_reported();
+    }
     let record = match loaded {
-        Some(n) if is_running_patch("success", loaded) => BootToRecord::Patch(n),
+        Some(n) if running => BootToRecord::Patch(n),
         // The base release, or a report for another patch: nothing to
         // record, but send what's queued.
         _ => BootToRecord::Nothing,
@@ -1875,10 +1879,10 @@ pub fn report_launch_success_for_patch(loaded: Option<usize>) -> anyhow::Result<
 /// that fails to launch has no patch to roll back: nothing is recorded.
 pub fn report_launch_failure_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch of patch {:?}.", loaded);
-    crate::config::set_launch_outcome_reported();
     if !is_running_patch("failure", loaded) {
         return Ok(());
     }
+    crate::config::set_launch_outcome_reported();
     let Some(n) = loaded else {
         return Ok(());
     };

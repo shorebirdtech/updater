@@ -391,8 +391,10 @@ pub extern "C" fn shorebird_report_launch_success() {
     );
 }
 
-// Launch reports that name the patch the engine loaded, from the number the
-// updater gave with its path; 0 for the base release. Each acts only on that
+// Launch reports that name the patch the engine loaded, or tried to load, from
+// the number the updater gave with its path; 0 only when the engine was given
+// no patch (the base release). A patch that fails to load is reported under
+// its own number, so it's marked bad. Each acts only on that
 // patch: a report for a patch other than the one this process started is
 // logged and ignored. Engines that pass the number call these in place of the
 // unnumbered calls above, which older engines keep using.
