@@ -48,6 +48,20 @@ pub fn running_patch_number() -> Option<usize> {
         .expect("Failed to acquire running_patch lock.")
 }
 
+/// Whether this process has reported its launch's outcome (success or
+/// failure). Session-scoped, like the running patch. Once set, resumed arms
+/// nothing: no later report would clear it.
+static LAUNCH_OUTCOME_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn launch_outcome_reported() -> bool {
+    LAUNCH_OUTCOME_REPORTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn set_launch_outcome_reported() {
+    LAUNCH_OUTCOME_REPORTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn set_running_patch_number(patch_number: Option<usize>) {
     *global_running_patch()
         .lock()
@@ -67,6 +81,7 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
+    LAUNCH_OUTCOME_REPORTED.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::updater::testing_reset_unreadable_state();
 }
 

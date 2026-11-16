@@ -1634,10 +1634,42 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     })
 }
 
+/// The engine has built its Shell but hasn't launched Dart: clears the boot
+/// breadcrumb without promoting the patch, so a process that ends before
+/// [`report_launch_resumed`] (an engine created and never run) doesn't mark
+/// the patch Bad. The patch stays the running patch. Clears only a
+/// breadcrumb naming the running patch, so another process's boot stays
+/// armed. Skips the state when this process runs the base release.
+pub fn report_launch_paused() -> anyhow::Result<()> {
+    let Some(patch_number) = crate::config::running_patch_number() else {
+        return Ok(());
+    };
+    shorebird_info!("Reporting launch paused.");
+    with_mut_state(|state| state.lifecycle_mut().record_boot_pause(patch_number))
+}
+
+/// The engine is launching the root isolate: arms the boot breadcrumb again
+/// for the running patch, the one this process loaded, whatever
+/// `next_boot_patch` says by now. A death from here until
+/// [`report_launch_success`] or [`report_launch_failure`] is a death booting
+/// the patch. A no-op once this process reported its outcome (nothing would
+/// clear the breadcrumb again) and when it runs the base release.
+pub fn report_launch_resumed() -> anyhow::Result<()> {
+    if crate::config::launch_outcome_reported() {
+        return Ok(());
+    }
+    let Some(patch_number) = crate::config::running_patch_number() else {
+        return Ok(());
+    };
+    shorebird_info!("Reporting launch resumed.");
+    with_mut_state(|state| state.lifecycle_mut().record_boot_resume(patch_number))
+}
+
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
+    crate::config::set_launch_outcome_reported();
 
     with_config(|config| {
         let (_lock, mut state) = load_state(config)?;
@@ -1671,6 +1703,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
 
 pub fn report_launch_success() -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch.");
+    crate::config::set_launch_outcome_reported();
 
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
@@ -4409,6 +4442,192 @@ mod state_recovery_tests {
         })?;
 
         Ok(())
+    }
+
+    /// An engine built and never run: the process ends after paused, and
+    /// the patch is not blamed.
+    #[serial]
+    #[test]
+    fn death_after_paused_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })
+    }
+
+    /// Without a patch, paused and resumed arm nothing.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_without_patch_arm_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        report_launch_start()?;
+        // Taking the state lock would recreate this: without a running
+        // patch, paused and resumed don't even load the state.
+        let lock = tmp_dir.path().join("state.lock");
+        std::fs::remove_file(&lock)?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        assert!(!lock.exists());
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// Once success is reported, a late resumed arms nothing: no later
+    /// report would clear it, and the next death of any kind would mark a
+    /// good patch Bad.
+    #[serial]
+    #[test]
+    fn resumed_after_success_arms_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        crate::report_launch_resumed()?;
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            Ok(())
+        })
+    }
+
+    /// Between paused and resumed nothing is armed, so a failure reported
+    /// there errs and blames no patch. The engine reports a failed root
+    /// isolate launch only after resumed.
+    #[serial]
+    #[test]
+    fn failure_while_paused_errs_and_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+
+        assert!(crate::report_launch_failure().is_err());
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })
+    }
+
+    /// A root isolate that fails to launch after resumed marks the patch
+    /// Bad and falls back to the release.
+    #[serial]
+    #[test]
+    fn failure_after_resumed_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        crate::report_launch_failure()?;
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert!(state.currently_booting_patch().is_none());
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// A death after resumed, before success, marks the patch Bad on the
+    /// next init, as a death before success always has.
+    #[serial]
+    #[test]
+    fn death_after_resumed_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// The full sequence promotes the patch and reports one install.
+    #[serial]
+    #[test]
+    fn start_paused_resumed_success_promotes_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        with_mut_state(|state| {
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// After a reported failure the process runs the release: paused and
+    /// resumed from a later engine arm nothing.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_after_failure_arm_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_failure()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// Before init nothing is running: paused and resumed are no-ops rather
+    /// than errors or panics.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_before_init_are_no_ops() {
+        crate::updater::testing_reset_config();
+        assert!(crate::report_launch_paused().is_ok());
+        assert!(crate::report_launch_resumed().is_ok());
     }
 
     /// When a newer patch crashes during boot, it should be marked bad.

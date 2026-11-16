@@ -139,9 +139,10 @@ pub struct ReleasePointers {
     /// a fallback target when `next_boot_patch` becomes invalid.
     pub last_booted_patch: Option<usize>,
 
-    /// Boot-in-progress breadcrumb. Set at `record_boot_start`, cleared
-    /// at `record_boot_success` / `record_boot_failure`. If still set on
-    /// next init, treat as a crashed boot.
+    /// Boot-in-progress breadcrumb. Set at `record_boot_start` and again at
+    /// `record_boot_resume`; cleared at `record_boot_pause`,
+    /// `record_boot_success` and `record_boot_failure`. If still set on next
+    /// init, the process died while booting the patch.
     pub currently_booting_patch: Option<usize>,
 
     /// Unix timestamp (seconds) when `currently_booting_patch` was set.
@@ -587,9 +588,43 @@ impl PatchLifecycle {
             Some(next) => bail!("record_boot_start({n}) but next_boot_patch is {next}"),
             None => bail!("record_boot_start({n}) but next_boot_patch is unset"),
         }
+        self.set_breadcrumb(n)
+    }
+
+    fn set_breadcrumb(&mut self, n: usize) -> Result<()> {
         self.pointers.currently_booting_patch = Some(n);
         self.pointers.boot_started_at = Some(crate::time::unix_timestamp());
         self.save_pointers()
+    }
+
+    /// Clears the breadcrumb without promoting the patch: the engine has
+    /// built its Shell but may never run Dart (an add-to-app engine created
+    /// and never run), and a process that ends now didn't crash running the
+    /// patch. [`Self::record_boot_resume`] arms it again when the engine
+    /// launches the root isolate. Clears only a breadcrumb naming `n`, the
+    /// patch this process loaded: one naming another patch is another
+    /// process's boot.
+    pub fn record_boot_pause(&mut self, n: usize) -> Result<()> {
+        if self.pointers.currently_booting_patch != Some(n) {
+            return Ok(());
+        }
+        self.pointers.currently_booting_patch = None;
+        self.pointers.boot_started_at = None;
+        self.save_pointers()
+    }
+
+    /// Arms the breadcrumb again for patch `n`, the patch this process
+    /// loaded, when the engine launches the root isolate. Unlike
+    /// [`Self::record_boot_start`] it doesn't require `n` to still be
+    /// `next_boot_patch`: what matters is the patch that is running.
+    pub fn record_boot_resume(&mut self, n: usize) -> Result<()> {
+        match self.read_state(n) {
+            Some(PatchState::Installed { .. }) => {}
+            other => {
+                bail!("record_boot_resume({n}) expected Installed, got {other:?}");
+            }
+        }
+        self.set_breadcrumb(n)
     }
 
     /// Records a successful boot. Promotes `currently_booting_patch` to
@@ -1609,6 +1644,95 @@ mod tests {
         lifecycle.save_pointers().unwrap();
         // Engine claims to boot 1 but our pointer says 2.
         assert!(lifecycle.record_boot_start(1).is_err());
+    }
+
+    #[test]
+    fn record_boot_pause_clears_breadcrumb_and_persists() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+
+        lifecycle.record_boot_pause(1).unwrap();
+
+        // A process that dies now finds nothing armed on its next init.
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, None);
+        assert_eq!(reloaded.pointers().boot_started_at, None);
+        // Pausing promotes nothing.
+        assert_eq!(reloaded.pointers().last_booted_patch, None);
+        assert_eq!(reloaded.pointers().next_boot_patch, Some(1));
+        assert!(matches!(
+            reloaded.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+    }
+
+    #[test]
+    fn record_boot_pause_without_breadcrumb_is_a_no_op() {
+        let (_tmp, mut lifecycle) = fixture();
+        lifecycle.record_boot_pause(1).unwrap();
+        assert_eq!(lifecycle.pointers().currently_booting_patch, None);
+    }
+
+    #[test]
+    fn record_boot_pause_leaves_a_breadcrumb_naming_another_patch() {
+        // Another process of the app armed patch 2; this process runs 1.
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 2, 100);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(2).unwrap();
+
+        lifecycle.record_boot_pause(1).unwrap();
+
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(2));
+    }
+
+    #[test]
+    fn record_boot_resume_arms_breadcrumb_and_persists() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_pause(1).unwrap();
+
+        lifecycle.record_boot_resume(1).unwrap();
+
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(1));
+        assert!(reloaded.pointers().boot_started_at.is_some());
+    }
+
+    #[test]
+    fn record_boot_resume_arms_running_patch_when_next_boot_moved_on() {
+        // record_boot_start insists on next_boot_patch; resume names the
+        // patch this process loaded, whatever next_boot says by now.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+
+        lifecycle.record_boot_resume(1).unwrap();
+
+        assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+    }
+
+    #[test]
+    fn record_boot_resume_errs_unless_installed() {
+        let (_tmp, mut lifecycle) = fixture();
+        // Unknown patch.
+        assert!(lifecycle.record_boot_resume(1).is_err());
+        // Bad patch: never armed again.
+        install_state(&lifecycle, 2, 100);
+        lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
+        assert!(lifecycle.record_boot_resume(2).is_err());
+        assert_eq!(lifecycle.pointers().currently_booting_patch, None);
     }
 
     #[test]
