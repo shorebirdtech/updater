@@ -629,18 +629,54 @@ impl PatchLifecycle {
 
     /// Records a successful boot. Promotes `currently_booting_patch` to
     /// `last_booted_patch` and runs cleanup on older patches (per-patch
-    /// state-aware: Bad tombstones survive, others are forgotten).
-    pub fn record_boot_success(&mut self) -> Result<()> {
+    /// state-aware: Bad tombstones survive, others are forgotten). Returns
+    /// the patch recorded as booted.
+    ///
+    /// Records only a patch still `Installed`: a breadcrumb naming anything
+    /// else (rolled back, marked Bad, or gone since the boot started) is
+    /// cleared without promoting it, so `last_booted_patch` never names a
+    /// patch that can't boot, and `Ok(None)` is returned.
+    pub fn record_boot_success(&mut self) -> Result<Option<usize>> {
         let n = self
             .pointers
             .currently_booting_patch
             .context("record_boot_success without currently_booting_patch")?;
-        self.pointers.last_booted_patch = Some(n);
+        let installed = matches!(self.read_state(n), Some(PatchState::Installed { .. }));
+        if installed {
+            self.pointers.last_booted_patch = Some(n);
+        } else {
+            shorebird_info!(
+                "Patch {} booted but is no longer installed; not recording it",
+                n
+            );
+        }
         self.pointers.currently_booting_patch = None;
         self.pointers.boot_started_at = None;
         self.save_pointers()?;
+        if !installed {
+            return Ok(None);
+        }
         self.cleanup_older_than(n);
-        Ok(())
+        Ok(Some(n))
+    }
+
+    /// Server-driven rollback of patch `n`: forgets it (a Bad tombstone
+    /// survives), clears the boot breadcrumb if it names `n` (a death now is
+    /// not a crash in a patch that's gone, and nothing should promote it),
+    /// and recomputes `next_boot_patch`. This is the one path that removes
+    /// the patch being booted.
+    ///
+    /// The breadcrumb is cleared before the files go, so a death between the
+    /// two, or a delete that fails (a file held open on Windows), never
+    /// leaves a rolled-back patch armed to be blamed or promoted.
+    pub fn uninstall(&mut self, n: usize) -> Result<()> {
+        if self.pointers.currently_booting_patch == Some(n) {
+            self.pointers.currently_booting_patch = None;
+            self.pointers.boot_started_at = None;
+            self.save_pointers()?;
+        }
+        self.cleanup(n)?;
+        self.recompute_next_boot()
     }
 
     /// Records that patch `n` failed to boot. Marks the patch
@@ -760,15 +796,22 @@ impl PatchLifecycle {
     /// prior `next_boot_patch` that was Installed-but-never-booted (those
     /// are forgotten via [`cleanup`]); a Bad tombstone in that slot is
     /// preserved.
-    pub fn promote_to_next_boot(&mut self, n: usize) -> Result<()> {
+    ///
+    /// Never retires a patch in use: the last booted patch (the fallback),
+    /// the patch named in `currently_booting_patch` (a boot in progress, in
+    /// this process or another), or `running_patch`, the patch this process
+    /// loaded (its breadcrumb is cleared while an engine is built and not
+    /// yet run). Such a patch stays `Installed` until a later boot's
+    /// [`Self::record_boot_success`] cleans up older patches.
+    pub fn promote_to_next_boot(&mut self, n: usize, running_patch: Option<usize>) -> Result<()> {
         if !matches!(self.read_state(n), Some(PatchState::Installed { .. })) {
             bail!("promote_to_next_boot({n}) requires Installed state");
         }
-        // If we're replacing an Installed-but-never-booted previous
-        // next_boot, retire it. cleanup handles tombstones correctly.
-        let last_booted = self.pointers.last_booted_patch;
         if let Some(prev) = self.pointers.next_boot_patch {
-            if prev != n && Some(prev) != last_booted {
+            let in_use = Some(prev) == self.pointers.last_booted_patch
+                || Some(prev) == self.pointers.currently_booting_patch
+                || Some(prev) == running_patch;
+            if prev != n && !in_use {
                 self.cleanup(prev)?;
             }
         }
@@ -1753,7 +1796,7 @@ mod tests {
         lifecycle.save_pointers().unwrap();
 
         lifecycle.record_boot_start(3).unwrap();
-        lifecycle.record_boot_success().unwrap();
+        assert_eq!(lifecycle.record_boot_success().unwrap(), Some(3));
 
         assert_eq!(lifecycle.pointers().last_booted_patch, Some(3));
         assert!(lifecycle.pointers().currently_booting_patch.is_none());
@@ -1779,7 +1822,7 @@ mod tests {
         lifecycle.mark_bad(2, BadReason::BootCrash).unwrap();
 
         lifecycle.record_boot_start(3).unwrap();
-        lifecycle.record_boot_success().unwrap();
+        assert_eq!(lifecycle.record_boot_success().unwrap(), Some(3));
 
         assert!(!lifecycle.patch_dir(1).exists(), "1 forgotten");
         // Patch 2's tombstone survives older-than cleanup.
@@ -1829,7 +1872,7 @@ mod tests {
         std::fs::write(lifecycle.download_artifact_path(7), b"in flight").unwrap();
 
         lifecycle.record_boot_start(5).unwrap();
-        lifecycle.record_boot_success().unwrap();
+        assert_eq!(lifecycle.record_boot_success().unwrap(), Some(5));
 
         assert!(
             !lifecycle.download_artifact_path(2).exists(),
@@ -1866,7 +1909,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(3);
         lifecycle.save_pointers().unwrap();
         lifecycle.record_boot_start(3).unwrap();
-        lifecycle.record_boot_success().unwrap();
+        assert_eq!(lifecycle.record_boot_success().unwrap(), Some(3));
 
         assert!(!lifecycle.patches_root().join("junk_dir").exists());
         assert!(!lifecycle.patches_root().join("not_a_number.txt").exists());
@@ -2391,12 +2434,135 @@ mod tests {
         let (_tmp, mut lifecycle) = fixture();
         install_state(&lifecycle, 1, 100);
         install_state(&lifecycle, 2, 200);
-        lifecycle.promote_to_next_boot(1).unwrap();
+        lifecycle.promote_to_next_boot(1, None).unwrap();
         // Now install 2 and promote it; 1 was never booted (last_booted is
         // None) and should be forgotten.
-        lifecycle.promote_to_next_boot(2).unwrap();
+        lifecycle.promote_to_next_boot(2, None).unwrap();
         assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
         assert!(!lifecycle.patch_dir(1).exists(), "unbooted 1 forgotten");
+    }
+
+    #[test]
+    fn promote_to_next_boot_keeps_the_patch_being_booted() {
+        // An install that lands while patch 1's first boot is in progress
+        // must not retire 1: the engine is running it.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.promote_to_next_boot(1, None).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+
+        lifecycle.promote_to_next_boot(2, None).unwrap();
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+
+        // The boot of 1 succeeds and is recorded; 2 stays next.
+        assert_eq!(lifecycle.record_boot_success().unwrap(), Some(1));
+        assert_eq!(lifecycle.pointers().last_booted_patch, Some(1));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+        assert!(lifecycle.installed_artifact_path(1).exists());
+
+        // 1 is retired once a later boot (of 2) succeeds.
+        lifecycle.record_boot_start(2).unwrap();
+        assert_eq!(lifecycle.record_boot_success().unwrap(), Some(2));
+        assert!(!lifecycle.patch_dir(1).exists());
+    }
+
+    #[test]
+    fn promote_to_next_boot_keeps_the_running_patch_while_paused() {
+        // An engine built and not yet run has no breadcrumb armed (paused),
+        // but its process loaded 1: an install must not retire it, so the
+        // breadcrumb can be armed again when the engine runs.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.promote_to_next_boot(1, None).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.record_boot_pause(1).unwrap();
+
+        lifecycle.promote_to_next_boot(2, Some(1)).unwrap();
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Installed { .. })
+        ));
+        lifecycle.record_boot_resume(1).unwrap();
+        assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
+    }
+
+    #[test]
+    fn promote_during_boot_then_crash_marks_only_the_booted_patch_bad() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.promote_to_next_boot(1, None).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.promote_to_next_boot(2, Some(1)).unwrap();
+
+        // The process dies booting 1; the next init finds the breadcrumb.
+        assert_eq!(lifecycle.detect_boot_crash_on_init().unwrap(), Some(1));
+        assert!(matches!(
+            lifecycle.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::BootCrash,
+                ..
+            })
+        ));
+        assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
+    }
+
+    #[test]
+    fn uninstall_of_the_booting_patch_removes_it_and_clears_the_breadcrumb() {
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        lifecycle.promote_to_next_boot(1, None).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+
+        lifecycle.uninstall(1).unwrap();
+        assert!(!lifecycle.patch_dir(1).exists());
+        assert_eq!(lifecycle.pointers().currently_booting_patch, None);
+        assert_eq!(lifecycle.pointers().boot_started_at, None);
+        assert_eq!(lifecycle.pointers().next_boot_patch, None);
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, None);
+
+        // Success afterwards has nothing to record.
+        assert!(lifecycle.record_boot_success().is_err());
+        assert_eq!(lifecycle.pointers().last_booted_patch, None);
+    }
+
+    #[test]
+    fn uninstall_of_another_patch_keeps_the_breadcrumb() {
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.promote_to_next_boot(1, None).unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+
+        lifecycle.uninstall(2).unwrap();
+        assert_eq!(lifecycle.pointers().currently_booting_patch, Some(1));
+    }
+
+    #[test]
+    fn record_boot_success_records_only_an_installed_patch() {
+        // The breadcrumb names 1, but 1 went Bad since the boot started:
+        // success clears the breadcrumb and records nothing, leaving
+        // last_booted and other patches alone.
+        let (_tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 1, 100);
+        install_state(&lifecycle, 2, 200);
+        lifecycle.pointers.last_booted_patch = Some(2);
+        lifecycle.pointers.next_boot_patch = Some(1);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(1).unwrap();
+        lifecycle.mark_bad(1, BadReason::ValidationFailed).unwrap();
+
+        assert_eq!(lifecycle.record_boot_success().unwrap(), None);
+        assert_eq!(lifecycle.pointers().currently_booting_patch, None);
+        assert_eq!(lifecycle.pointers().last_booted_patch, Some(2));
+        assert!(lifecycle.installed_artifact_path(2).exists());
     }
 
     #[test]
@@ -2412,7 +2578,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
         // Now install 2 and promote it; 1 is last_booted so survives.
-        lifecycle.promote_to_next_boot(2).unwrap();
+        lifecycle.promote_to_next_boot(2, None).unwrap();
         assert_eq!(lifecycle.pointers().next_boot_patch, Some(2));
         assert!(lifecycle.patch_dir(1).exists(), "last_booted 1 preserved");
     }
@@ -2420,6 +2586,6 @@ mod tests {
     #[test]
     fn promote_to_next_boot_requires_installed() {
         let (_tmp, mut lifecycle) = fixture();
-        assert!(lifecycle.promote_to_next_boot(1).is_err());
+        assert!(lifecycle.promote_to_next_boot(1, None).is_err());
     }
 }

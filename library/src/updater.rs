@@ -1173,7 +1173,12 @@ fn install_downloaded_patch(
         state
             .lifecycle_mut()
             .record_install_complete(patch.number, installed_size)?;
-        state.lifecycle_mut().promote_to_next_boot(patch.number)?;
+        // The patch this process loaded stays installed even while no boot
+        // breadcrumb names it (an engine built and not yet run).
+        let running_patch = crate::config::running_patch_number();
+        state
+            .lifecycle_mut()
+            .promote_to_next_boot(patch.number, running_patch)?;
         shorebird_info!(
             "Patch {} successfully downloaded. It will be launched when the app next restarts.",
             patch.number
@@ -1711,24 +1716,28 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         let (_lock, mut state) = load_state(config)?;
 
         // None means we didn't boot from a patch, so there's nothing to record.
-        if let Some(booting_patch) = state.currently_booting_patch() {
+        if state.currently_booting_patch().is_some() {
             // Get the last successfully booted patch before we record the boot success.
             let previous_boot_patch = state.last_successfully_booted_patch();
 
-            state.record_boot_success()?;
+            // None: the patch was rolled back or marked Bad during the boot,
+            // so nothing is recorded and no install is reported.
+            let booted = state.record_boot_success()?;
 
             // A patch counts as installed the first time it boots, so a boot
             // of the patch that last booted (including after a newer patch
             // failed and we fell back to it) reports nothing.
-            if previous_boot_patch.map(|p| p.number) != Some(booting_patch.number) {
-                let event = PatchEvent::new(
-                    config,
-                    EventType::PatchInstallSuccess,
-                    booting_patch.number,
-                    state.client_id(),
-                    None,
-                );
-                queue_or_send_event(&mut state, config, event);
+            if let Some(booted) = booted {
+                if previous_boot_patch.map(|p| p.number) != Some(booted) {
+                    let event = PatchEvent::new(
+                        config,
+                        EventType::PatchInstallSuccess,
+                        booted,
+                        state.client_id(),
+                        None,
+                    );
+                    queue_or_send_event(&mut state, config, event);
+                }
             }
         }
         Ok(!state.copy_events(1).is_empty())
