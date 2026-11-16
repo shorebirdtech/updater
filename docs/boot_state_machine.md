@@ -21,7 +21,7 @@ Release-level pointers live in `pointers.json` (`ReleasePointers` in
 |----------|------|-------------|
 | `next_boot_patch` | `Option<usize>` | The patch to boot on next app start. Set when a patch is installed. |
 | `last_booted_patch` | `Option<usize>` | The patch that last completed a successful boot cycle. Our "known good" state. |
-| `currently_booting_patch` | `Option<usize>` | Boot breadcrumb: set when boot starts, cleared on success/failure. If set on init, the previous boot crashed. |
+| `currently_booting_patch` | `Option<usize>` | Boot breadcrumb: set when boot starts and again when the root isolate launches, cleared while paused and on success/failure. If set on init, the previous boot crashed. |
 | `boot_started_at` | `Option<u64>` | When the breadcrumb was set; diagnostic only. |
 
 Each patch has its own lifecycle state in `patches/{N}/state.json`
@@ -63,6 +63,18 @@ release.
        ▼
     Shell::Shell() constructor, Dart VM created
        │
+       └─► report_launch_paused()  [once per process, guarded in the engine]
+       │   └─► currently_booting_patch = None (nothing promoted)
+       │
+       ▼
+    Shell::RunEngine(), just before Engine::Run()
+       │
+       └─► report_launch_resumed()  [once per process, guarded in the engine]
+       │   └─► currently_booting_patch = running_patch
+       │
+       ▼
+    Engine::Run() returns: root isolate created from the snapshot
+       │
        └─► report_launch_success()  [once per process, guarded in the engine]
        │   ├─► last_booted_patch = currently_booting_patch
        │   ├─► currently_booting_patch = None
@@ -78,7 +90,8 @@ release.
 ### Crash Recovery
 
 If the app crashes between `report_launch_start()` and
-`report_launch_success()`:
+`report_launch_paused()`, or between `report_launch_resumed()` and the
+outcome (`report_launch_success()` or `report_launch_failure()`):
 
 1. Process dies with `currently_booting_patch` still set on disk
 2. New process starts, calls `init()`
@@ -87,6 +100,10 @@ If the app crashes between `report_launch_start()` and
 4. Marks that patch `Bad { BootCrash }` and clears the breadcrumb
 5. Recomputes `next_boot_patch`: `last_booted_patch` if it is still
    `Installed`, otherwise the base release
+
+An engine that is built and never run (add-to-app) stops at paused, with
+nothing armed: a process that ends there doesn't mark the patch `Bad`. A
+later engine's run resumes and reports the launch.
 
 ### Patch Load Failure
 
@@ -107,12 +124,18 @@ and the ordering; the Rust library does not guard these calls itself.
 - **`report_launch_start()`**: `ResolveIsolateData()` in
   `runtime/dart_snapshot.cc`, when the engine resolves the isolate snapshot
   it is about to load.
-- **`report_launch_success()`** / **`report_launch_failure()`**: the
-  `Shell::Shell()` constructor in `shell/common/shell.cc`, depending on whether
-  the Dart VM was created. `report_launch_failure()` is also called from
-  `TryLoadFromPatch()` on a patch load failure.
-- **`start_update_thread()`**: from the shim's `ReportLaunchSuccess()`, after
-  the success report, when `init()` succeeded and auto-update is enabled.
+- **`report_launch_paused()`**: the `Shell::Shell()` constructor in
+  `shell/common/shell.cc`, when the Dart VM was created.
+- **`report_launch_resumed()`**: `Shell::RunEngine()`, just before
+  `Engine::Run()`.
+- **`report_launch_success()`** / **`report_launch_failure()`**:
+  `Shell::RunEngine()`, depending on whether `Engine::Run()` launched the root
+  isolate. `report_launch_failure()` is also called from the `Shell::Shell()`
+  constructor when the Dart VM wasn't created, and from `TryLoadFromPatch()`
+  on a patch load failure.
+- **`start_update_thread()`**: from the shim, after the success report or
+  after a failed `Engine::Run()`, when `init()` succeeded and auto-update is
+  enabled.
 
 ### Why This Placement Matters
 
@@ -124,8 +147,13 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
    Shell never resolves a snapshot, so it does not record a boot that never
    happened and cannot trigger false crash detection.
 
-2. **`report_launch_success()` in the Shell constructor**: Called after the
-   Dart VM is created, indicating the patch loaded successfully.
+2. **`report_launch_success()` when `Engine::Run()` returns**: the root
+   isolate group has been created from the patch's snapshot, so a patch
+   that aborts while it loads is never recorded as booted. Paused and
+   resumed keep an engine that is built and never run from leaving the
+   patch armed. `main` runs on a later UI task, after success; the only
+   Dart from the patch that runs first is the plugin registrant
+   (`registerWith` of Dart plugins), inside `Engine::Run`, while armed.
 
 3. **The update thread after `report_launch_success()`**: The thread must not
    run while a boot is in progress. Its patch check reports `running_patch`,
@@ -143,11 +171,12 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
    set
 2. **Crash recovery runs once per process**: Only on first successful `init()`
 3. **One boot cycle per process**: The engine's `Updater` shim calls
-   `report_launch_start()` and `report_launch_success()` /
+   `report_launch_start()`, `report_launch_paused()`,
+   `report_launch_resumed()` and `report_launch_success()` /
    `report_launch_failure()` at most once each, so a second engine in the same
    process (add-to-app) cannot re-report a boot or relabel the running patch
-4. **One update thread per process**: Started from the once-guarded success
-   report, not per engine
+4. **One update thread per process**: Started once the launch outcome is
+   reported, not per engine
 5. **State is persisted atomically**: Each state change writes to disk
    immediately
 6. **Bad patches are permanent**: A `Bad` tombstone is never retried for this
@@ -171,6 +200,21 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
 - Clears `currently_booting_patch`
 - Sets `last_booted_patch` and cleans up older patches
 - Subsequent calls are no-ops if `currently_booting_patch` is None
+
+### `report_launch_paused()`
+- Clears `currently_booting_patch` without promoting it, only if it names
+  the running patch (another process's boot stays armed)
+- No-op without a running patch, without loading the state
+
+### `report_launch_resumed()`
+- Sets `currently_booting_patch` to `running_patch`, which must be
+  `Installed`, whatever `next_boot_patch` says by now
+- No-op without a running patch (base release, or after a reported failure),
+  and once this process reported its outcome
+- If arming fails (the state can't be written, the patch isn't `Installed`),
+  the error is logged and nothing is armed: success then promotes nothing that
+  launch, and a crash in `Engine::Run` isn't detected. It fails open, and the
+  next launch arms again at start
 
 ### `report_launch_failure()`
 - Marks `currently_booting_patch` as `Bad`

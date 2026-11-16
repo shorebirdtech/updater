@@ -501,8 +501,16 @@ pub struct PatchCheckRequest {
     /// The release version from AndroidManifest.xml, Info.plist in the app.
     /// This is used to identify the version of the app that the client is
     /// running.  Patches are keyed to release versions and will only be
-    /// offered to clients running the same release version.
+    /// offered to clients running the same release version. For an
+    /// add-to-app module it is the version baked into shorebird.yaml.
     pub release_version: String,
+    /// The host app's bundle identifier, when the engine knows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_bundle_id: Option<String>,
+    /// The host app's version, sent only when it differs from
+    /// `release_version`. Absent means equal to `release_version`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_version: Option<String>,
     /// Platform (e.g. "android", "ios", "windows", "macos", "linux").
     pub platform: String,
     /// Architecture we're running (e.g. "aarch64", "x86", "x86_64").
@@ -532,6 +540,8 @@ impl std::fmt::Debug for PatchCheckRequest {
             app_id,
             channel,
             release_version,
+            host_bundle_id,
+            host_version,
             platform,
             arch,
             client_id: _,
@@ -541,6 +551,8 @@ impl std::fmt::Debug for PatchCheckRequest {
             .field("app_id", app_id)
             .field("channel", channel)
             .field("release_version", release_version)
+            .field("host_bundle_id", host_bundle_id)
+            .field("host_version", host_version)
             .field("platform", platform)
             .field("arch", arch)
             .field("client_id", &"<redacted>")
@@ -559,6 +571,8 @@ impl PatchCheckRequest {
             app_id: config.app_id.clone(),
             channel: config.channel.clone(),
             release_version: config.release_version.clone(),
+            host_bundle_id: config.host_bundle_id.clone(),
+            host_version: config.reported_host_version(),
             platform: current_platform().to_string(),
             arch: current_arch().to_string(),
             client_id: client_id.to_string(),
@@ -580,14 +594,25 @@ impl PatchCheckRequest {
             app_id,
             channel,
             release_version,
+            host_bundle_id,
+            host_version,
             platform,
             arch,
             client_id: _,
             current_patch_number,
         } = self;
-        format!(
-            "app_id: {app_id}, channel: {channel}, release_version: {release_version}, platform: {platform}, arch: {arch}, current_patch_number: {current_patch_number:?}"
-        )
+        let mut line =
+            format!("app_id: {app_id}, channel: {channel}, release_version: {release_version}");
+        if let Some(host_bundle_id) = host_bundle_id {
+            line.push_str(&format!(", host_bundle_id: {host_bundle_id}"));
+        }
+        if let Some(host_version) = host_version {
+            line.push_str(&format!(", host_version: {host_version}"));
+        }
+        line.push_str(&format!(
+            ", platform: {platform}, arch: {arch}, current_patch_number: {current_patch_number:?}"
+        ));
+        line
     }
 }
 
@@ -680,6 +705,8 @@ mod tests {
             app_id: "app_id".to_string(),
             channel: "stable".to_string(),
             release_version: "1.0.0+1".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             platform: "android".to_string(),
             arch: "aarch64".to_string(),
             client_id: "11111111-2222-3333-4444-555555555555".to_string(),
@@ -697,6 +724,8 @@ mod tests {
             app_id: "app_id".to_string(),
             channel: "stable".to_string(),
             release_version: "1.0.0+1".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             platform: "android".to_string(),
             arch: "aarch64".to_string(),
             client_id: "11111111-2222-3333-4444-555555555555".to_string(),
@@ -717,6 +746,8 @@ mod tests {
             app_id: "app_id".to_string(),
             channel: "stable".to_string(),
             release_version: "1.0.0+1".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             platform: "android".to_string(),
             arch: "aarch64".to_string(),
             client_id: "11111111-2222-3333-4444-555555555555".to_string(),
@@ -730,6 +761,29 @@ mod tests {
     }
 
     #[test]
+    fn patch_check_request_sends_host_fields_when_set() {
+        let request = super::PatchCheckRequest {
+            app_id: "app_id".to_string(),
+            channel: "stable".to_string(),
+            release_version: "module-7".to_string(),
+            host_bundle_id: Some("com.example.host".to_string()),
+            host_version: Some("2.0.0+5".to_string()),
+            platform: "android".to_string(),
+            arch: "aarch64".to_string(),
+            client_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            current_patch_number: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"app_id":"app_id","channel":"stable","release_version":"module-7","host_bundle_id":"com.example.host","host_version":"2.0.0+5","platform":"android","arch":"aarch64","client_id":"11111111-2222-3333-4444-555555555555"}"#
+        );
+        assert_eq!(
+            request.log_line(),
+            "app_id: app_id, channel: stable, release_version: module-7, host_bundle_id: com.example.host, host_version: 2.0.0+5, platform: android, arch: aarch64, current_patch_number: None"
+        );
+    }
+
+    #[test]
     fn create_patch_install_event_request_serializes() {
         let event = PatchEvent {
             app_id: "app_id".to_string(),
@@ -738,6 +792,8 @@ mod tests {
             patch_number: 1,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
             message: None,
@@ -763,6 +819,8 @@ mod tests {
             patch_number: 1,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             identifier: EventType::PatchUpdateFailure,
             timestamp: 1234,
             message: Some("update_failure: patch 1 failed (...)".to_string()),
@@ -785,6 +843,8 @@ mod tests {
             patch_number: 1,
             platform: "platform".to_string(),
             release_version: "release_version".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             identifier: EventType::PatchInstallSuccess,
             timestamp: 1234,
             message: Some("hello".to_string()),
@@ -811,6 +871,8 @@ mod tests {
                 app_id: "".to_string(),
                 channel: "".to_string(),
                 release_version: "".to_string(),
+                host_bundle_id: None,
+                host_version: None,
                 platform: "".to_string(),
                 arch: "".to_string(),
                 client_id: "".to_string(),
@@ -871,6 +933,8 @@ mod tests {
             app_id: "app_id".to_string(),
             channel: "stable".to_string(),
             release_version: "1.0.0+1".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             platform: "android".to_string(),
             arch: "aarch64".to_string(),
             client_id: "client_id".to_string(),
@@ -887,6 +951,8 @@ mod tests {
                 patch_number: 2,
                 platform: "platform".to_string(),
                 release_version: "release_version".to_string(),
+                host_bundle_id: None,
+                host_version: None,
                 identifier: EventType::PatchInstallSuccess,
                 timestamp: time::unix_timestamp(),
                 message: None,

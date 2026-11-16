@@ -48,6 +48,20 @@ pub fn running_patch_number() -> Option<usize> {
         .expect("Failed to acquire running_patch lock.")
 }
 
+/// Whether this process has reported its launch's outcome (success or
+/// failure). Session-scoped, like the running patch. Once set, resumed arms
+/// nothing: no later report would clear it.
+static LAUNCH_OUTCOME_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn launch_outcome_reported() -> bool {
+    LAUNCH_OUTCOME_REPORTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn set_launch_outcome_reported() {
+    LAUNCH_OUTCOME_REPORTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn set_running_patch_number(patch_number: Option<usize>) {
     *global_running_patch()
         .lock()
@@ -67,6 +81,7 @@ pub fn testing_reset_config() {
         *config = None;
     });
     set_running_patch_number(None);
+    LAUNCH_OUTCOME_REPORTED.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::updater::testing_reset_unreadable_state();
 }
 
@@ -113,13 +128,31 @@ pub struct UpdateConfig {
     pub auto_update: bool,
     pub channel: String,
     pub app_id: String,
+    /// The release this build belongs to: the version baked into
+    /// shorebird.yaml (add-to-app modules), else the host app's version.
+    /// Patches are keyed on it.
     pub release_version: String,
+    /// The host app's version as the platform reports it. Equal to
+    /// `release_version` unless shorebird.yaml carries a release version.
+    pub host_version: String,
+    /// The host app's bundle identifier, when the engine knows it.
+    pub host_bundle_id: Option<String>,
     pub libapp_path: PathBuf,
     pub base_url: String,
     pub network_hooks: NetworkHooks,
     pub file_provider: Arc<dyn ExternalFileProvider>,
     pub patch_public_key: Option<String>,
     pub patch_verification: PatchVerificationMode,
+}
+
+impl UpdateConfig {
+    /// The host version to send to the server: `None` when it equals the
+    /// release version, which the server assumes when the field is absent.
+    /// So a full app's requests are unchanged; only an add-to-app module
+    /// with a baked release version sends it.
+    pub fn reported_host_version(&self) -> Option<String> {
+        (self.host_version != self.release_version).then(|| self.host_version.clone())
+    }
 }
 
 /// Returns Ok if the config was set successfully, Err if it was already set.
@@ -152,7 +185,12 @@ pub fn set_config(
                 .to_owned(),
             auto_update: yaml.auto_update.unwrap_or(true),
             app_id: yaml.app_id.to_string(),
-            release_version: app_config.release_version.to_string(),
+            release_version: yaml
+                .release_version
+                .clone()
+                .unwrap_or_else(|| app_config.release_version.clone()),
+            host_version: app_config.release_version,
+            host_bundle_id: app_config.host_bundle_id,
             libapp_path,
             base_url: yaml
                 .base_url
@@ -220,6 +258,7 @@ mod tests {
             app_storage_dir: "/tmp".to_string(),
             code_cache_dir: "/tmp".to_string(),
             release_version: "1.0.0".to_string(),
+            host_bundle_id: None,
             original_libapp_paths: vec!["libapp.so".to_string()],
         }
     }
@@ -232,6 +271,7 @@ mod tests {
             base_url: Some("fake_base_url".to_string()),
             patch_public_key: None,
             patch_verification: None,
+            release_version: None,
         }
     }
 
@@ -246,6 +286,7 @@ mod tests {
                 app_storage_dir: "/app_storage".to_string(),
                 code_cache_dir: "/code_cache".to_string(),
                 release_version: "1.0.0".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec!["libapp.so".to_string()],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -257,6 +298,7 @@ mod tests {
                 base_url: Some("fake_base_url".to_string()),
                 patch_public_key: Some("patch_public_key".to_string()),
                 patch_verification: None,
+                release_version: None,
             },
             NetworkHooks::default(),
         )?;
@@ -309,6 +351,49 @@ mod tests {
         let config = super::with_config(|config| Ok(config.clone())).unwrap();
         assert_eq!(config.libapp_path.to_str(), Some("first_path"));
 
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn release_version_is_host_version_without_yaml_release_version() -> Result<()> {
+        testing_reset_config();
+        set_config(
+            AppConfig {
+                host_bundle_id: Some("com.example.host".to_string()),
+                ..fake_app_config()
+            },
+            Box::new(FakeExternalFileProvider {}),
+            "libapp.so".into(),
+            &fake_yaml(),
+            NetworkHooks::default(),
+        )?;
+        let config = super::with_config(|config| Ok(config.clone())).unwrap();
+        assert_eq!(config.release_version, "1.0.0");
+        assert_eq!(config.host_version, "1.0.0");
+        assert_eq!(config.host_bundle_id.as_deref(), Some("com.example.host"));
+        assert_eq!(config.reported_host_version(), None);
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn yaml_release_version_replaces_host_version() -> Result<()> {
+        testing_reset_config();
+        set_config(
+            fake_app_config(),
+            Box::new(FakeExternalFileProvider {}),
+            "libapp.so".into(),
+            &crate::yaml::YamlConfig {
+                release_version: Some("module-7".to_string()),
+                ..fake_yaml()
+            },
+            NetworkHooks::default(),
+        )?;
+        let config = super::with_config(|config| Ok(config.clone())).unwrap();
+        assert_eq!(config.release_version, "module-7");
+        assert_eq!(config.host_version, "1.0.0");
+        assert_eq!(config.reported_host_version(), Some("1.0.0".to_string()));
         Ok(())
     }
 }

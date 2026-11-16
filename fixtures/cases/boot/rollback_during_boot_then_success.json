@@ -1,0 +1,156 @@
+{
+  "description": "The server rolls back patch 1 while its first boot is armed. The rollback removes 1 and clears the breadcrumb; the success that follows records nothing and reports no install, and the next launch boots the base release.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": null,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "validate_next_boot_patch"
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": "storage/patches/1/dlc.vmcode"
+    },
+    {
+      "call": "report_launch_start",
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": null,
+            "currently_booting_patch": 1,
+            "boot_started_at": "<number>"
+          }
+        }
+      }
+    },
+    {
+      "call": "report_launch_paused",
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    },
+    {
+      "call": "report_launch_resumed",
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": null,
+            "currently_booting_patch": 1,
+            "boot_started_at": "<number>"
+          }
+        }
+      }
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "1.0.0+1",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001",
+              "current_patch_number": 1
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": false,
+              "rolled_back_patch_numbers": [
+                1
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": 0,
+        "message": "No update"
+      },
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": null,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        },
+        "storage/patches/1": {
+          "absent": true
+        }
+      }
+    },
+    {
+      "call": "report_launch_success",
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": null,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 1
+    },
+    {
+      "call": "restart"
+    },
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": null
+    }
+  ]
+}

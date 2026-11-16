@@ -245,7 +245,12 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
 pub struct AppConfig {
     pub app_storage_dir: String,
     pub code_cache_dir: String,
+    /// The host app's version, read from the platform (versionName+versionCode
+    /// on Android, CFBundleShortVersionString+CFBundleVersion on iOS).
+    /// The release version, unless shorebird.yaml carries one.
     pub release_version: String,
+    /// The host app's bundle identifier, when the engine knows it.
+    pub host_bundle_id: Option<String>,
     pub original_libapp_paths: Vec<String>,
 }
 
@@ -1168,7 +1173,12 @@ fn install_downloaded_patch(
         state
             .lifecycle_mut()
             .record_install_complete(patch.number, installed_size)?;
-        state.lifecycle_mut().promote_to_next_boot(patch.number)?;
+        // The patch this process loaded stays installed even while no boot
+        // breadcrumb names it (an engine built and not yet run).
+        let running_patch = crate::config::running_patch_number();
+        state
+            .lifecycle_mut()
+            .promote_to_next_boot(patch.number, running_patch)?;
         shorebird_info!(
             "Patch {} successfully downloaded. It will be launched when the app next restarts.",
             patch.number
@@ -1629,10 +1639,42 @@ pub fn report_launch_start() -> anyhow::Result<()> {
     })
 }
 
+/// The engine has built its Shell but hasn't launched Dart: clears the boot
+/// breadcrumb without promoting the patch, so a process that ends before
+/// [`report_launch_resumed`] (an engine created and never run) doesn't mark
+/// the patch Bad. The patch stays the running patch. Clears only a
+/// breadcrumb naming the running patch, so another process's boot stays
+/// armed. Skips the state when this process runs the base release.
+pub fn report_launch_paused() -> anyhow::Result<()> {
+    let Some(patch_number) = crate::config::running_patch_number() else {
+        return Ok(());
+    };
+    shorebird_info!("Reporting launch paused.");
+    with_mut_state(|state| state.lifecycle_mut().record_boot_pause(patch_number))
+}
+
+/// The engine is launching the root isolate: arms the boot breadcrumb again
+/// for the running patch, the one this process loaded, whatever
+/// `next_boot_patch` says by now. A death from here until
+/// [`report_launch_success`] or [`report_launch_failure`] is a death booting
+/// the patch. A no-op once this process reported its outcome (nothing would
+/// clear the breadcrumb again) and when it runs the base release.
+pub fn report_launch_resumed() -> anyhow::Result<()> {
+    if crate::config::launch_outcome_reported() {
+        return Ok(());
+    }
+    let Some(patch_number) = crate::config::running_patch_number() else {
+        return Ok(());
+    };
+    shorebird_info!("Reporting launch resumed.");
+    with_mut_state(|state| state.lifecycle_mut().record_boot_resume(patch_number))
+}
+
 /// Report that the current active path failed to launch.
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
+    crate::config::set_launch_outcome_reported();
 
     with_config(|config| {
         let (_lock, mut state) = load_state(config)?;
@@ -1666,6 +1708,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
 
 pub fn report_launch_success() -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch.");
+    crate::config::set_launch_outcome_reported();
 
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
@@ -1673,24 +1716,28 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         let (_lock, mut state) = load_state(config)?;
 
         // None means we didn't boot from a patch, so there's nothing to record.
-        if let Some(booting_patch) = state.currently_booting_patch() {
+        if state.currently_booting_patch().is_some() {
             // Get the last successfully booted patch before we record the boot success.
             let previous_boot_patch = state.last_successfully_booted_patch();
 
-            state.record_boot_success()?;
+            // None: the patch was rolled back or marked Bad during the boot,
+            // so nothing is recorded and no install is reported.
+            let booted = state.record_boot_success()?;
 
             // A patch counts as installed the first time it boots, so a boot
             // of the patch that last booted (including after a newer patch
             // failed and we fell back to it) reports nothing.
-            if previous_boot_patch.map(|p| p.number) != Some(booting_patch.number) {
-                let event = PatchEvent::new(
-                    config,
-                    EventType::PatchInstallSuccess,
-                    booting_patch.number,
-                    state.client_id(),
-                    None,
-                );
-                queue_or_send_event(&mut state, config, event);
+            if let Some(booted) = booted {
+                if previous_boot_patch.map(|p| p.number) != Some(booted) {
+                    let event = PatchEvent::new(
+                        config,
+                        EventType::PatchInstallSuccess,
+                        booted,
+                        state.client_id(),
+                        None,
+                    );
+                    queue_or_send_event(&mut state, config, event);
+                }
             }
         }
         Ok(!state.copy_events(1).is_empty())
@@ -1776,6 +1823,7 @@ mod tests {
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec![libapp_path],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -1799,6 +1847,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -1821,6 +1870,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -1999,6 +2049,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -2026,6 +2077,7 @@ patch_verification: bogus_mode
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec!["original_libapp_path".to_string()],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -4401,6 +4453,192 @@ mod state_recovery_tests {
         Ok(())
     }
 
+    /// An engine built and never run: the process ends after paused, and
+    /// the patch is not blamed.
+    #[serial]
+    #[test]
+    fn death_after_paused_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            assert!(state.copy_events(10).is_empty());
+            Ok(())
+        })
+    }
+
+    /// Without a patch, paused and resumed arm nothing.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_without_patch_arm_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        report_launch_start()?;
+        // Taking the state lock would recreate this: without a running
+        // patch, paused and resumed don't even load the state.
+        let lock = tmp_dir.path().join("state.lock");
+        std::fs::remove_file(&lock)?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        assert!(!lock.exists());
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// Once success is reported, a late resumed arms nothing: no later
+    /// report would clear it, and the next death of any kind would mark a
+    /// good patch Bad.
+    #[serial]
+    #[test]
+    fn resumed_after_success_arms_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        crate::report_launch_resumed()?;
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            Ok(())
+        })
+    }
+
+    /// Between paused and resumed nothing is armed, so a failure reported
+    /// there errs and blames no patch. The engine reports a failed root
+    /// isolate launch only after resumed.
+    #[serial]
+    #[test]
+    fn failure_while_paused_errs_and_keeps_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+
+        assert!(crate::report_launch_failure().is_err());
+
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
+            assert_eq!(state.next_boot_patch().map(|p| p.number), Some(1));
+            Ok(())
+        })
+    }
+
+    /// A root isolate that fails to launch after resumed marks the patch
+    /// Bad and falls back to the release.
+    #[serial]
+    #[test]
+    fn failure_after_resumed_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        crate::report_launch_failure()?;
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert!(state.currently_booting_patch().is_none());
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// A death after resumed, before success, marks the patch Bad on the
+    /// next init, as a death before success always has.
+    #[serial]
+    #[test]
+    fn death_after_resumed_marks_patch_bad() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        init_for_testing(&tmp_dir, None);
+
+        with_mut_state(|state| {
+            assert!(state.is_known_bad_patch(1));
+            assert!(state.next_boot_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// The full sequence promotes the patch and reports one install.
+    #[serial]
+    #[test]
+    fn start_paused_resumed_success_promotes_patch() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
+        with_mut_state(|state| {
+            assert_eq!(
+                state.last_successfully_booted_patch().map(|p| p.number),
+                Some(1)
+            );
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// After a reported failure the process runs the release: paused and
+    /// resumed from a later engine arm nothing.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_after_failure_arm_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_failure()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// Before init nothing is running: paused and resumed are no-ops rather
+    /// than errors or panics.
+    #[serial]
+    #[test]
+    fn paused_and_resumed_before_init_are_no_ops() {
+        crate::updater::testing_reset_config();
+        assert!(crate::report_launch_paused().is_ok());
+        assert!(crate::report_launch_resumed().is_ok());
+    }
+
     /// When a newer patch crashes during boot, it should be marked bad.
     /// The previously-good patch (patch 1) was booted successfully before
     /// patch 2 was installed, so crash recovery should mark only patch 2 bad.
@@ -5741,5 +5979,52 @@ mod unreadable_state_tests {
             assert!(message.contains("state.json"), "{message}");
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod host_field_tests {
+    use super::tests::init_for_testing_with_yaml;
+    use crate::config::with_config;
+    use crate::events::{EventType, PatchEvent};
+    use crate::network::PatchCheckRequest;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    #[serial]
+    #[test]
+    fn module_events_and_checks_carry_host_fields() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing_with_yaml(&tmp_dir, None, "\nrelease_version: \"module-7\"");
+        let mut config = with_config(|config| Ok(config.clone())).unwrap();
+        config.host_bundle_id = Some("com.example.host".to_string());
+
+        let event = PatchEvent::new(&config, EventType::PatchInstallSuccess, 1, "c".into(), None);
+        assert_eq!(event.release_version, "module-7");
+        assert_eq!(event.host_bundle_id.as_deref(), Some("com.example.host"));
+        assert_eq!(event.host_version.as_deref(), Some("1.0.0+1"));
+
+        let request = PatchCheckRequest::new(&config, "c", None);
+        assert_eq!(request.release_version, "module-7");
+        assert_eq!(request.host_bundle_id.as_deref(), Some("com.example.host"));
+        assert_eq!(request.host_version.as_deref(), Some("1.0.0+1"));
+    }
+
+    #[serial]
+    #[test]
+    fn full_app_sends_bundle_id_but_no_host_version() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing_with_yaml(&tmp_dir, None, "");
+        let mut config = with_config(|config| Ok(config.clone())).unwrap();
+        config.host_bundle_id = Some("com.example.app".to_string());
+
+        let event = PatchEvent::new(&config, EventType::PatchInstallSuccess, 1, "c".into(), None);
+        assert_eq!(event.release_version, "1.0.0+1");
+        assert_eq!(event.host_bundle_id.as_deref(), Some("com.example.app"));
+        assert_eq!(event.host_version, None);
+
+        let request = PatchCheckRequest::new(&config, "c", None);
+        assert_eq!(request.host_bundle_id.as_deref(), Some("com.example.app"));
+        assert_eq!(request.host_version, None);
     }
 }

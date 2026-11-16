@@ -30,6 +30,44 @@ pub struct YamlConfig {
     pub patch_public_key: Option<String>,
     /// When to verify patch signatures. Defaults to "install_only" (verify at install time).
     pub patch_verification: Option<PatchVerificationMode>,
+    /// The release version baked in at build time. Written only for
+    /// add-to-app modules (aar, ios-framework), whose version is the module's
+    /// own and not the host app's. When present it replaces the host app's
+    /// version as the release version the updater reports.
+    pub release_version: Option<String>,
+}
+
+/// Longest release version accepted from shorebird.yaml.
+pub const MAX_RELEASE_VERSION_LENGTH: usize = 128;
+
+/// Whether `value` is a release version the CLI and server also accept:
+/// 1 to 128 characters from `[A-Za-z0-9._+-]`. The set keeps out anything
+/// YAML would have to quote or escape, so what the device reads is exactly
+/// what the CLI baked.
+fn is_valid_release_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_RELEASE_VERSION_LENGTH
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+}
+
+/// Removes one pair of matching surrounding quotes from a YAML scalar.
+///
+/// The Flutter tool writes the compiled shorebird.yaml with `yaml_edit`,
+/// which quotes values that would otherwise read as numbers or booleans
+/// (`"2.0"`, `"2"`, `"true"`). Without this the updater would read the
+/// quotes as part of the value. Escapes inside quotes are left as written,
+/// since no value we read needs one.
+fn unquote(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if first == last && (first == b'"' || first == b'\'') {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
 }
 
 impl YamlConfig {
@@ -45,6 +83,7 @@ impl YamlConfig {
         let mut auto_update: Option<bool> = None;
         let mut patch_public_key: Option<String> = None;
         let mut patch_verification: Option<PatchVerificationMode> = None;
+        let mut release_version: Option<String> = None;
 
         for line in yaml.lines() {
             let line = line.trim();
@@ -57,6 +96,7 @@ impl YamlConfig {
             };
             let key = key.trim();
             let value = value.trim();
+            let value = unquote(value);
 
             match key {
                 "app_id" => app_id = Some(value.to_string()),
@@ -69,6 +109,14 @@ impl YamlConfig {
                         })?);
                 }
                 "patch_public_key" => patch_public_key = Some(value.to_string()),
+                "release_version" => {
+                    if !is_valid_release_version(value) {
+                        return Err(format!(
+                            "invalid value for release_version: '{value}': must be 1 to {MAX_RELEASE_VERSION_LENGTH} characters from [A-Za-z0-9._+-]"
+                        ));
+                    }
+                    release_version = Some(value.to_string());
+                }
                 "patch_verification" => {
                     patch_verification = Some(match value {
                         "strict" => PatchVerificationMode::Strict,
@@ -91,6 +139,7 @@ impl YamlConfig {
             auto_update,
             patch_public_key,
             patch_verification,
+            release_version,
         })
     }
 }
@@ -243,5 +292,72 @@ patch_verification: unknown_mode
         let result = YamlConfig::from_yaml(yaml);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("patch_verification"));
+    }
+
+    #[test]
+    fn release_version_defaults_to_none() {
+        let config = YamlConfig::from_yaml("app_id: test_app\n").unwrap();
+        assert_eq!(config.release_version, None);
+    }
+
+    #[test]
+    fn parses_release_version() {
+        let config = YamlConfig::from_yaml("app_id: test_app\nrelease_version: 1.2.3+4\n").unwrap();
+        assert_eq!(config.release_version.as_deref(), Some("1.2.3+4"));
+    }
+
+    #[test]
+    fn strips_quotes_from_release_version() {
+        // yaml_edit quotes values that would otherwise parse as numbers.
+        for (yaml, expected) in [
+            ("release_version: \"2.0\"", "2.0"),
+            ("release_version: '2'", "2"),
+            ("release_version: \"true\"", "true"),
+        ] {
+            let config = YamlConfig::from_yaml(&format!("app_id: test_app\n{yaml}\n")).unwrap();
+            assert_eq!(config.release_version.as_deref(), Some(expected), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn strips_quotes_from_other_values() {
+        let config = YamlConfig::from_yaml("app_id: \"test_app\"\nchannel: 'beta'\n").unwrap();
+        assert_eq!(config.app_id, "test_app");
+        assert_eq!(config.channel.as_deref(), Some("beta"));
+    }
+
+    #[test]
+    fn leaves_unmatched_quotes() {
+        let config = YamlConfig::from_yaml("app_id: \"test_app'\n").unwrap();
+        assert_eq!(config.app_id, "\"test_app'");
+    }
+
+    #[test]
+    fn accepts_release_version_of_max_length() {
+        let version = "a".repeat(MAX_RELEASE_VERSION_LENGTH);
+        let config =
+            YamlConfig::from_yaml(&format!("app_id: test_app\nrelease_version: {version}\n"))
+                .unwrap();
+        assert_eq!(config.release_version, Some(version));
+    }
+
+    #[test]
+    fn rejects_invalid_release_version() {
+        let too_long = "a".repeat(MAX_RELEASE_VERSION_LENGTH + 1);
+        for value in [
+            "",
+            "\"\"",
+            "1.0 beta",
+            "1.0/2",
+            "1.0\"",
+            "v1:2",
+            "é1",
+            too_long.as_str(),
+        ] {
+            let result =
+                YamlConfig::from_yaml(&format!("app_id: test_app\nrelease_version: {value}\n"));
+            let err = result.expect_err(value);
+            assert!(err.contains("release_version"), "{value}: {err}");
+        }
     }
 }

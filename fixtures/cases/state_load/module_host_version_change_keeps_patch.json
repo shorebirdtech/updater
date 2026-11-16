@@ -1,0 +1,85 @@
+{
+  "description": "A module's state is keyed on the release version baked into shorebird.yaml: when the host app's version changes but the module's does not, the installed patch is kept.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "module-7",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": 1,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true,
+      "release_version": "2.0.0+6"
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 1
+    },
+    {
+      "call": "next_boot_patch_path",
+      "expect": "storage/patches/1/dlc.vmcode"
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 0,
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "module-7",
+            "queued_events": []
+          }
+        },
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": 1,
+            "last_booted_patch": 1,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        },
+        "storage/patches/1/state.json": {
+          "json": {
+            "kind": "Installed",
+            "signature": null,
+            "size": 5
+          }
+        },
+        "storage/patches/1/dlc.vmcode": {
+          "text": "hello"
+        }
+      },
+      "expect_tree": [
+        "app/libapp.so",
+        "storage/patches/1/dlc.vmcode",
+        "storage/patches/1/state.json",
+        "storage/pointers.json",
+        "storage/state.json",
+        "storage/state.lock"
+      ]
+    }
+  ],
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nrelease_version: \"module-7\"\n"
+}

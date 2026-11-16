@@ -700,6 +700,7 @@ fn call_init(env: &CaseEnv, step: &Value, case: &Value) -> Value {
         .or(case["yaml"].as_str())
         .unwrap_or(DEFAULT_YAML);
     let release_version = c_string(release_version);
+    let host_bundle_id = step["host_bundle_id"].as_str().map(c_string);
     let yaml = c_string(&yaml.replace("{{server}}", &env.server_url));
     let storage = c_string(env.root.join("storage").to_str().unwrap());
     let cache = c_string(env.root.join("cache").to_str().unwrap());
@@ -711,6 +712,9 @@ fn call_init(env: &CaseEnv, step: &Value, case: &Value) -> Value {
         original_libapp_paths_size: 1,
         app_storage_dir: storage.as_ptr(),
         code_cache_dir: cache.as_ptr(),
+        host_bundle_id: host_bundle_id
+            .as_ref()
+            .map_or(std::ptr::null(), |id| id.as_ptr()),
     };
     let callbacks = engine::FileCallbacks {
         open: base_open,
@@ -745,6 +749,14 @@ fn run_call(env: &CaseEnv, step: &Value, case: &Value) -> Result<Option<Value>, 
         }
         "report_launch_failure" => {
             engine::shorebird_report_launch_failure();
+            None
+        }
+        "report_launch_paused" => {
+            engine::shorebird_report_launch_paused();
+            None
+        }
+        "report_launch_resumed" => {
+            engine::shorebird_report_launch_resumed();
             None
         }
         "validate_next_boot_patch" => {
@@ -821,6 +833,8 @@ const CALLS_WITHOUT_RESULT: &[&str] = &[
     "report_launch_start",
     "report_launch_success",
     "report_launch_failure",
+    "report_launch_paused",
+    "report_launch_resumed",
     "validate_next_boot_patch",
 ];
 
@@ -875,6 +889,7 @@ fn validate_case(case: &Value) -> Vec<String> {
                 "call",
                 "channel",
                 "release_version",
+                "host_bundle_id",
                 "yaml",
                 "write_files",
                 "http",

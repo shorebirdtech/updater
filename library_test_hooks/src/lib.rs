@@ -112,6 +112,7 @@ pub extern "C" fn shorebird_test_init(
         original_libapp_paths_size: 1,
         app_storage_dir,
         code_cache_dir,
+        host_bundle_id: std::ptr::null(),
     };
     let callbacks = engine::FileCallbacks {
         open: base_open,

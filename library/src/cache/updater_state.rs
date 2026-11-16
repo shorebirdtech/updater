@@ -311,8 +311,10 @@ impl UpdaterState {
         self.lifecycle.record_boot_failure(patch_number)
     }
 
-    /// Records that the in-flight boot succeeded.
-    pub fn record_boot_success(&mut self) -> Result<()> {
+    /// Records that the in-flight boot succeeded. Returns the patch recorded
+    /// as booted: `None` when the breadcrumb named a patch no longer
+    /// installed.
+    pub fn record_boot_success(&mut self) -> Result<Option<usize>> {
         self.lifecycle.record_boot_success()
     }
 
@@ -360,11 +362,11 @@ impl UpdaterState {
             .validate_next_boot_patch(self.patch_public_key.as_deref(), self.verification_mode)
     }
 
-    /// Removes the artifacts for `patch_number` and recomputes pointers.
-    /// Used today for server-driven rollbacks.
+    /// Removes the artifacts for `patch_number`, clears the boot breadcrumb
+    /// if it names it, and recomputes pointers. Used for server-driven
+    /// rollbacks and downloads the server cut short.
     pub fn uninstall_patch(&mut self, patch_number: usize) -> Result<()> {
-        self.lifecycle.cleanup(patch_number)?;
-        self.lifecycle.recompute_next_boot()
+        self.lifecycle.uninstall(patch_number)
     }
 
     /// True if `patch_number` is currently in `Bad` state — we tried it
@@ -523,6 +525,8 @@ mod tests {
             patch_number,
             platform: "android".to_string(),
             release_version: "1.0.0+1".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             timestamp: 1,
             message: None,
             failure_category: None,

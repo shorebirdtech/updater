@@ -41,7 +41,7 @@ pub fn install_fake_patch_into(
     fs::create_dir_all(installed.parent().unwrap())?;
     fs::write(&installed, "hello")?;
     lifecycle.record_install_complete(patch_number, fs::metadata(&installed)?.len())?;
-    lifecycle.promote_to_next_boot(patch_number)
+    lifecycle.promote_to_next_boot(patch_number, None)
 }
 
 /// Creates a fake APK at `apk_path` and writes `libapp_contents` to its relative `libapp.so` path.
