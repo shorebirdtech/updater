@@ -1637,22 +1637,27 @@ pub fn report_launch_start() -> anyhow::Result<()> {
 /// The engine has built its Shell but hasn't launched Dart: clears the boot
 /// breadcrumb without promoting the patch, so a process that ends before
 /// [`report_launch_resumed`] (an engine created and never run) doesn't mark
-/// the patch Bad. The patch stays the running patch. Touches no state when
-/// this process runs the base release.
+/// the patch Bad. The patch stays the running patch. Clears only a
+/// breadcrumb naming the running patch, so another process's boot stays
+/// armed. Skips the state when this process runs the base release.
 pub fn report_launch_paused() -> anyhow::Result<()> {
-    if crate::config::running_patch_number().is_none() {
+    let Some(patch_number) = crate::config::running_patch_number() else {
         return Ok(());
-    }
+    };
     shorebird_info!("Reporting launch paused.");
-    with_mut_state(|state| state.lifecycle_mut().record_boot_pause())
+    with_mut_state(|state| state.lifecycle_mut().record_boot_pause(patch_number))
 }
 
 /// The engine is launching the root isolate: arms the boot breadcrumb again
 /// for the running patch, the one this process loaded, whatever
 /// `next_boot_patch` says by now. A death from here until
 /// [`report_launch_success`] or [`report_launch_failure`] is a death booting
-/// the patch. Touches no state when this process runs the base release.
+/// the patch. A no-op once this process reported its outcome (nothing would
+/// clear the breadcrumb again) and when it runs the base release.
 pub fn report_launch_resumed() -> anyhow::Result<()> {
+    if crate::config::launch_outcome_reported() {
+        return Ok(());
+    }
     let Some(patch_number) = crate::config::running_patch_number() else {
         return Ok(());
     };
@@ -1664,6 +1669,7 @@ pub fn report_launch_resumed() -> anyhow::Result<()> {
 /// This will mark the patch as bad and activate the next best patch.
 pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
+    crate::config::set_launch_outcome_reported();
 
     with_config(|config| {
         let (_lock, mut state) = load_state(config)?;
@@ -1697,6 +1703,7 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
 
 pub fn report_launch_success() -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch.");
+    crate::config::set_launch_outcome_reported();
 
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
@@ -4465,11 +4472,44 @@ mod state_recovery_tests {
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
         report_launch_start()?;
+        // Taking the state lock would recreate this: without a running
+        // patch, paused and resumed don't even load the state.
+        let lock = tmp_dir.path().join("state.lock");
+        std::fs::remove_file(&lock)?;
         crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        assert!(!lock.exists());
+
+        with_mut_state(|state| {
+            assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })
+    }
+
+    /// Once success is reported, a late resumed arms nothing: no later
+    /// report would clear it, and the next death of any kind would mark a
+    /// good patch Bad.
+    #[serial]
+    #[test]
+    fn resumed_after_success_arms_nothing() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing(&tmp_dir, None);
+        install_fake_patch(1)?;
+        report_launch_start()?;
+        crate::report_launch_paused()?;
+        crate::report_launch_resumed()?;
+        report_launch_success()?;
+        crate::updater::testing_wait_for_event_flushes();
+
         crate::report_launch_resumed()?;
 
         with_mut_state(|state| {
             assert!(state.currently_booting_patch().is_none());
+            Ok(())
+        })?;
+        init_for_testing(&tmp_dir, None);
+        with_mut_state(|state| {
+            assert!(!state.is_known_bad_patch(1));
             Ok(())
         })
     }

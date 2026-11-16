@@ -90,7 +90,8 @@ release.
 ### Crash Recovery
 
 If the app crashes between `report_launch_start()` and
-`report_launch_success()`:
+`report_launch_paused()`, or between `report_launch_resumed()` and the
+outcome (`report_launch_success()` or `report_launch_failure()`):
 
 1. Process dies with `currently_booting_patch` still set on disk
 2. New process starts, calls `init()`
@@ -150,8 +151,9 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
    isolate group has been created from the patch's snapshot, so a patch
    that aborts while it loads is never recorded as booted. Paused and
    resumed keep an engine that is built and never run from leaving the
-   patch armed. No Dart from the patch runs before success: `main` runs on a
-   later UI task.
+   patch armed. `main` runs on a later UI task, after success; the only
+   Dart from the patch that runs first is the plugin registrant
+   (`registerWith` of Dart plugins), inside `Engine::Run`, while armed.
 
 3. **The update thread after `report_launch_success()`**: The thread must not
    run while a boot is in progress. Its patch check reports `running_patch`,
@@ -169,7 +171,8 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
    set
 2. **Crash recovery runs once per process**: Only on first successful `init()`
 3. **One boot cycle per process**: The engine's `Updater` shim calls
-   `report_launch_start()` and `report_launch_success()` /
+   `report_launch_start()`, `report_launch_paused()`,
+   `report_launch_resumed()` and `report_launch_success()` /
    `report_launch_failure()` at most once each, so a second engine in the same
    process (add-to-app) cannot re-report a boot or relabel the running patch
 4. **One update thread per process**: Started once the launch outcome is
@@ -199,13 +202,19 @@ engine did boot. Every lifecycle side effect keys off the launch reports:
 - Subsequent calls are no-ops if `currently_booting_patch` is None
 
 ### `report_launch_paused()`
-- Clears `currently_booting_patch` without promoting it
-- No-op without a running patch
+- Clears `currently_booting_patch` without promoting it, only if it names
+  the running patch (another process's boot stays armed)
+- No-op without a running patch, without loading the state
 
 ### `report_launch_resumed()`
 - Sets `currently_booting_patch` to `running_patch`, which must be
   `Installed`, whatever `next_boot_patch` says by now
-- No-op without a running patch (base release, or after a reported failure)
+- No-op without a running patch (base release, or after a reported failure),
+  and once this process reported its outcome
+- If arming fails (the state can't be written, the patch isn't `Installed`),
+  the error is logged and nothing is armed: success then promotes nothing that
+  launch, and a crash in `Engine::Run` isn't detected. It fails open, and the
+  next launch arms again at start
 
 ### `report_launch_failure()`
 - Marks `currently_booting_patch` as `Bad`

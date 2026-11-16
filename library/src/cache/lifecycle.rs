@@ -601,9 +601,11 @@ impl PatchLifecycle {
     /// built its Shell but may never run Dart (an add-to-app engine created
     /// and never run), and a process that ends now didn't crash running the
     /// patch. [`Self::record_boot_resume`] arms it again when the engine
-    /// launches the root isolate. No-op without a breadcrumb.
-    pub fn record_boot_pause(&mut self) -> Result<()> {
-        if self.pointers.currently_booting_patch.is_none() {
+    /// launches the root isolate. Clears only a breadcrumb naming `n`, the
+    /// patch this process loaded: one naming another patch is another
+    /// process's boot.
+    pub fn record_boot_pause(&mut self, n: usize) -> Result<()> {
+        if self.pointers.currently_booting_patch != Some(n) {
             return Ok(());
         }
         self.pointers.currently_booting_patch = None;
@@ -1652,7 +1654,7 @@ mod tests {
         lifecycle.save_pointers().unwrap();
         lifecycle.record_boot_start(1).unwrap();
 
-        lifecycle.record_boot_pause().unwrap();
+        lifecycle.record_boot_pause(1).unwrap();
 
         // A process that dies now finds nothing armed on its next init.
         let reloaded = reload_at(tmp.path());
@@ -1670,8 +1672,23 @@ mod tests {
     #[test]
     fn record_boot_pause_without_breadcrumb_is_a_no_op() {
         let (_tmp, mut lifecycle) = fixture();
-        lifecycle.record_boot_pause().unwrap();
+        lifecycle.record_boot_pause(1).unwrap();
         assert_eq!(lifecycle.pointers().currently_booting_patch, None);
+    }
+
+    #[test]
+    fn record_boot_pause_leaves_another_patchs_breadcrumb() {
+        // Another process of the app armed patch 2; this process runs 1.
+        let (tmp, mut lifecycle) = fixture();
+        install_state(&lifecycle, 2, 100);
+        lifecycle.pointers.next_boot_patch = Some(2);
+        lifecycle.save_pointers().unwrap();
+        lifecycle.record_boot_start(2).unwrap();
+
+        lifecycle.record_boot_pause(1).unwrap();
+
+        let reloaded = reload_at(tmp.path());
+        assert_eq!(reloaded.pointers().currently_booting_patch, Some(2));
     }
 
     #[test]
@@ -1681,7 +1698,7 @@ mod tests {
         lifecycle.pointers.next_boot_patch = Some(1);
         lifecycle.save_pointers().unwrap();
         lifecycle.record_boot_start(1).unwrap();
-        lifecycle.record_boot_pause().unwrap();
+        lifecycle.record_boot_pause(1).unwrap();
 
         lifecycle.record_boot_resume(1).unwrap();
 

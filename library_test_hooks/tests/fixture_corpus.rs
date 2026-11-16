@@ -751,6 +751,14 @@ fn run_call(env: &CaseEnv, step: &Value, case: &Value) -> Result<Option<Value>, 
             engine::shorebird_report_launch_failure();
             None
         }
+        "report_launch_paused" => {
+            engine::shorebird_report_launch_paused();
+            None
+        }
+        "report_launch_resumed" => {
+            engine::shorebird_report_launch_resumed();
+            None
+        }
         "validate_next_boot_patch" => {
             engine::shorebird_validate_next_boot_patch();
             None
@@ -825,6 +833,8 @@ const CALLS_WITHOUT_RESULT: &[&str] = &[
     "report_launch_start",
     "report_launch_success",
     "report_launch_failure",
+    "report_launch_paused",
+    "report_launch_resumed",
     "validate_next_boot_patch",
 ];
 
