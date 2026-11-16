@@ -1677,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn record_boot_pause_leaves_another_patchs_breadcrumb() {
+    fn record_boot_pause_leaves_a_breadcrumb_naming_another_patch() {
         // Another process of the app armed patch 2; this process runs 1.
         let (tmp, mut lifecycle) = fixture();
         install_state(&lifecycle, 2, 100);
