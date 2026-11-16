@@ -1,4 +1,4 @@
-# cspell:words dorny
+# cspell:words binstall dorny
 name: ci
 
 concurrency:
@@ -136,11 +136,16 @@ jobs:
 
       # The runner image ships an NDK at ANDROID_NDK_HOME; cargo-ndk points
       # the C compiler that zstd-sys builds with at it.
+      #
+      # install-action has no manifest for cargo-ndk and falls back to
+      # cargo-binstall, which takes the newest release unless a version is
+      # named. Dependabot doesn't track this tool, so bump the version here by
+      # hand.
       - name: 🤖 Install cargo-ndk
         if: ${{ contains(matrix.target, 'android') }}
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4.1.2
 
       - name: 🤖 Clippy (Android)
         if: ${{ contains(matrix.target, 'android') }}
