@@ -333,6 +333,45 @@ SHOREBIRD_EXPORT void shorebird_report_launch_resumed(void);
  */
 SHOREBIRD_EXPORT void shorebird_report_launch_success(void);
 
+/**
+ * `shorebird_report_launch_start` for the patch the engine loaded (0: the
+ * base release). Records it as this process's running patch and arms the
+ * boot breadcrumb for it if it's installed, even if the next boot patch has
+ * changed since the engine read its path.
+ */
+SHOREBIRD_EXPORT
+void shorebird_report_launch_start_for_patch(uintptr_t patch_number);
+
+/**
+ * `shorebird_report_launch_paused` for the patch the engine loaded (0: the
+ * base release). Ignored unless it's the patch reported at start.
+ */
+SHOREBIRD_EXPORT
+void shorebird_report_launch_paused_for_patch(uintptr_t patch_number);
+
+/**
+ * `shorebird_report_launch_resumed` for the patch the engine loaded (0: the
+ * base release). Ignored unless it's the patch reported at start.
+ */
+SHOREBIRD_EXPORT
+void shorebird_report_launch_resumed_for_patch(uintptr_t patch_number);
+
+/**
+ * `shorebird_report_launch_success` for the patch the engine loaded (0: the
+ * base release). Records the boot only when it's the patch reported at start
+ * and the boot breadcrumb names it; sends queued events either way.
+ */
+SHOREBIRD_EXPORT
+void shorebird_report_launch_success_for_patch(uintptr_t patch_number);
+
+/**
+ * `shorebird_report_launch_failure` for the patch the engine loaded (0: the
+ * base release, which has nothing to roll back). Marks the patch bad only
+ * when it's the patch reported at start and the boot breadcrumb names it.
+ */
+SHOREBIRD_EXPORT
+void shorebird_report_launch_failure_for_patch(uintptr_t patch_number);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
