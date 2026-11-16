@@ -390,3 +390,72 @@ pub extern "C" fn shorebird_report_launch_success() {
         (),
     );
 }
+
+// Launch reports that name the patch the engine loaded, from the number the
+// updater gave with its path; 0 for the base release. Each acts only on that
+// patch: a report for a patch other than the one this process started is
+// logged and ignored. Engines that pass the number call these in place of the
+// unnumbered calls above, which older engines keep using.
+
+fn loaded_patch(patch_number: usize) -> Option<usize> {
+    (patch_number != 0).then_some(patch_number)
+}
+
+/// `shorebird_report_launch_start` for the patch the engine loaded (0: the
+/// base release). Records it as this process's running patch and arms the
+/// boot breadcrumb for it if it's installed, even if the next boot patch has
+/// changed since the engine read its path.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_start_for_patch(patch_number: usize) {
+    log_on_error(
+        || updater::report_launch_start_for_patch(loaded_patch(patch_number)),
+        "reporting launch start",
+        (),
+    );
+}
+
+/// `shorebird_report_launch_paused` for the patch the engine loaded (0: the
+/// base release). Ignored unless it's the patch reported at start.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_paused_for_patch(patch_number: usize) {
+    log_on_error(
+        || updater::report_launch_paused_for_patch(loaded_patch(patch_number)),
+        "reporting launch paused",
+        (),
+    );
+}
+
+/// `shorebird_report_launch_resumed` for the patch the engine loaded (0: the
+/// base release). Ignored unless it's the patch reported at start.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_resumed_for_patch(patch_number: usize) {
+    log_on_error(
+        || updater::report_launch_resumed_for_patch(loaded_patch(patch_number)),
+        "reporting launch resumed",
+        (),
+    );
+}
+
+/// `shorebird_report_launch_success` for the patch the engine loaded (0: the
+/// base release). Records the boot only when it's the patch reported at start
+/// and the boot breadcrumb names it; sends queued events either way.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_success_for_patch(patch_number: usize) {
+    log_on_error(
+        || updater::report_launch_success_for_patch(loaded_patch(patch_number)),
+        "reporting launch success",
+        (),
+    );
+}
+
+/// `shorebird_report_launch_failure` for the patch the engine loaded (0: the
+/// base release, which has nothing to roll back). Marks the patch bad only
+/// when it's the patch reported at start and the boot breadcrumb names it.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_failure_for_patch(patch_number: usize) {
+    log_on_error(
+        || updater::report_launch_failure_for_patch(loaded_patch(patch_number)),
+        "reporting launch failure",
+        (),
+    );
+}
