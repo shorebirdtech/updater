@@ -729,6 +729,11 @@ fn call_init(env: &CaseEnv, step: &Value, case: &Value) -> Value {
     Value::Bool(engine::shorebird_init(&params, callbacks, yaml.as_ptr()))
 }
 
+/// The `patch` a `*_for_patch` step names (0: the base release).
+fn step_patch(step: &Value) -> usize {
+    step["patch"].as_u64().expect("checked by check_case") as usize
+}
+
 /// Runs one step's call and returns what it produced, or `None` for calls
 /// with no result.
 fn run_call(env: &CaseEnv, step: &Value, case: &Value) -> Result<Option<Value>, String> {
@@ -757,6 +762,26 @@ fn run_call(env: &CaseEnv, step: &Value, case: &Value) -> Result<Option<Value>, 
         }
         "report_launch_resumed" => {
             engine::shorebird_report_launch_resumed();
+            None
+        }
+        "report_launch_start_for_patch" => {
+            engine::shorebird_report_launch_start_for_patch(step_patch(step));
+            None
+        }
+        "report_launch_paused_for_patch" => {
+            engine::shorebird_report_launch_paused_for_patch(step_patch(step));
+            None
+        }
+        "report_launch_resumed_for_patch" => {
+            engine::shorebird_report_launch_resumed_for_patch(step_patch(step));
+            None
+        }
+        "report_launch_success_for_patch" => {
+            engine::shorebird_report_launch_success_for_patch(step_patch(step));
+            None
+        }
+        "report_launch_failure_for_patch" => {
+            engine::shorebird_report_launch_failure_for_patch(step_patch(step));
             None
         }
         "validate_next_boot_patch" => {
@@ -835,6 +860,11 @@ const CALLS_WITHOUT_RESULT: &[&str] = &[
     "report_launch_failure",
     "report_launch_paused",
     "report_launch_resumed",
+    "report_launch_start_for_patch",
+    "report_launch_paused_for_patch",
+    "report_launch_resumed_for_patch",
+    "report_launch_success_for_patch",
+    "report_launch_failure_for_patch",
     "validate_next_boot_patch",
 ];
 
@@ -891,6 +921,7 @@ fn validate_case(case: &Value) -> Vec<String> {
                 "release_version",
                 "host_bundle_id",
                 "yaml",
+                "patch",
                 "write_files",
                 "http",
                 "expect",
@@ -902,6 +933,11 @@ fn validate_case(case: &Value) -> Vec<String> {
             p,
         );
         let call = step["call"].as_str().unwrap_or_default();
+        if call.ends_with("_for_patch") != step["patch"].is_u64() {
+            p.push(format!(
+                "{at}: `patch` (a number, 0 for the base release) goes with, and only with, a *_for_patch call"
+            ));
+        }
         if call == "await" {
             check_keys(
                 step,

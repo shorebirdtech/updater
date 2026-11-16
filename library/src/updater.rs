@@ -1675,13 +1675,26 @@ pub fn report_launch_resumed() -> anyhow::Result<()> {
 pub fn report_launch_failure() -> anyhow::Result<()> {
     shorebird_info!("Reporting failed launch.");
     crate::config::set_launch_outcome_reported();
+    record_launch_failure(None)
+}
 
+/// Marks the booting patch bad and queues its failure event. With
+/// `only_patch`, acts only when the breadcrumb names that patch.
+fn record_launch_failure(only_patch: Option<usize>) -> anyhow::Result<()> {
     with_config(|config| {
         let (_lock, mut state) = load_state(config)?;
 
         let patch = state.currently_booting_patch().ok_or(anyhow::Error::from(
             UpdateError::InvalidState("currently_booting_patch is None".to_string()),
         ))?;
+        if only_patch.is_some_and(|n| n != patch.number) {
+            shorebird_info!(
+                "Launch failure is for patch {:?}, but patch {} is booting; ignoring it.",
+                only_patch,
+                patch.number
+            );
+            return Ok(());
+        }
         // Ignore the error here, we'll try to activate the next best patch
         // even if we fail to mark this one as bad (because it was already bad).
         let mark_result = state.record_boot_failure_for_patch(patch.number);
@@ -1709,14 +1722,44 @@ pub fn report_launch_failure() -> anyhow::Result<()> {
 pub fn report_launch_success() -> anyhow::Result<()> {
     shorebird_info!("Reporting successful launch.");
     crate::config::set_launch_outcome_reported();
+    record_launch_success(BootToRecord::Breadcrumb)
+}
 
+/// Which boot a success report records.
+enum BootToRecord {
+    /// Whatever patch the breadcrumb names.
+    Breadcrumb,
+    /// This patch, if the breadcrumb names it.
+    Patch(usize),
+    /// None: the base release launched, or the report was for another patch.
+    Nothing,
+}
+
+/// Records the booting patch as booted (as `record` says), reports its first
+/// install, and sends queued events, whether or not anything was recorded.
+fn record_launch_success(record: BootToRecord) -> anyhow::Result<()> {
     let has_events = with_config(|config| {
         // We can tell the UpdaterState that we have successfully booted from the "next" patch
         // and make that the "current" patch.
         let (_lock, mut state) = load_state(config)?;
 
         // None means we didn't boot from a patch, so there's nothing to record.
-        if state.currently_booting_patch().is_some() {
+        let booting = state.currently_booting_patch().map(|p| p.number);
+        let matches = match record {
+            BootToRecord::Breadcrumb => booting.is_some(),
+            BootToRecord::Patch(n) => {
+                if booting.is_some_and(|b| b != n) {
+                    shorebird_info!(
+                        "Launch success is for patch {}, but patch {:?} is booting; not recording it.",
+                        n,
+                        booting
+                    );
+                }
+                booting == Some(n)
+            }
+            BootToRecord::Nothing => false,
+        };
+        if matches {
             // Get the last successfully booted patch before we record the boot success.
             let previous_boot_patch = state.last_successfully_booted_patch();
 
@@ -1749,6 +1792,101 @@ pub fn report_launch_success() -> anyhow::Result<()> {
         spawn_event_flush();
     }
     Ok(())
+}
+
+// Launch reports that name the patch the engine loaded (`None`: the base
+// release). The engine knows which file it loaded; `next_boot_patch` may have
+// moved since it asked (an install in another process, say). Each acts only
+// on that patch: a report for a patch other than the one this process
+// started is logged and ignored, and success and failure act only when the
+// breadcrumb names it.
+
+/// Whether `loaded` is the patch this process started (`running_patch`).
+/// Logs and returns false when it isn't.
+fn is_running_patch(report: &str, loaded: Option<usize>) -> bool {
+    let running = crate::config::running_patch_number();
+    if running != loaded {
+        shorebird_info!(
+            "Launch {} is for patch {:?}, but this process runs {:?}; ignoring it.",
+            report,
+            loaded,
+            running
+        );
+        return false;
+    }
+    true
+}
+
+/// [`report_launch_start`] for the patch the engine loaded. Records `loaded`
+/// as the running patch and arms the breadcrumb for it if it's installed,
+/// whatever `next_boot_patch` says by now.
+pub fn report_launch_start_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
+    shorebird_info!("Reporting launch start for patch {:?}.", loaded);
+    with_mut_state(|state| {
+        state.set_running_patch(loaded);
+        let Some(n) = loaded else {
+            return Ok(());
+        };
+        let next_boot = state.lifecycle().pointers().next_boot_patch;
+        if next_boot != Some(n) {
+            shorebird_info!(
+                "Engine loaded patch {}, next boot is now {:?}.",
+                n,
+                next_boot
+            );
+        }
+        // Arms the patch that is running, like a resume: it must be
+        // installed, not necessarily next boot.
+        state.lifecycle_mut().record_boot_resume(n)
+    })
+}
+
+/// [`report_launch_paused`] for the patch the engine loaded.
+pub fn report_launch_paused_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
+    if !is_running_patch("paused", loaded) {
+        return Ok(());
+    }
+    report_launch_paused()
+}
+
+/// [`report_launch_resumed`] for the patch the engine loaded.
+pub fn report_launch_resumed_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
+    if !is_running_patch("resumed", loaded) {
+        return Ok(());
+    }
+    report_launch_resumed()
+}
+
+/// [`report_launch_success`] for the patch the engine loaded. Queued events
+/// are sent even when the report is ignored.
+pub fn report_launch_success_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
+    shorebird_info!("Reporting successful launch of patch {:?}.", loaded);
+    // An ignored report (another patch) is no outcome for this launch.
+    let running = is_running_patch("success", loaded);
+    if running {
+        crate::config::set_launch_outcome_reported();
+    }
+    let record = match loaded {
+        Some(n) if running => BootToRecord::Patch(n),
+        // The base release, or a report for another patch: nothing to
+        // record, but send what's queued.
+        _ => BootToRecord::Nothing,
+    };
+    record_launch_success(record)
+}
+
+/// [`report_launch_failure`] for the patch the engine loaded. A base release
+/// that fails to launch has no patch to roll back: nothing is recorded.
+pub fn report_launch_failure_for_patch(loaded: Option<usize>) -> anyhow::Result<()> {
+    shorebird_info!("Reporting failed launch of patch {:?}.", loaded);
+    if !is_running_patch("failure", loaded) {
+        return Ok(());
+    }
+    crate::config::set_launch_outcome_reported();
+    let Some(n) = loaded else {
+        return Ok(());
+    };
+    record_launch_failure(Some(n))
 }
 
 /// This does not return status.  The only output is the change to the saved

@@ -1,0 +1,65 @@
+{
+  "description": "A base-release launch (patch 0) records no breadcrumb, and its failure has no patch to roll back: nothing is marked bad and no event is queued.",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "1.0.0+1",
+        "queued_events": []
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": null,
+        "last_booted_patch": null,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "expect": true
+    },
+    {
+      "call": "report_launch_start_for_patch",
+      "patch": 0,
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": null,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        }
+      }
+    },
+    {
+      "call": "current_boot_patch_number",
+      "expect": 0
+    },
+    {
+      "call": "report_launch_failure_for_patch",
+      "patch": 0,
+      "expect_files": {
+        "storage/pointers.json": {
+          "json": {
+            "next_boot_patch": null,
+            "last_booted_patch": null,
+            "currently_booting_patch": null,
+            "boot_started_at": null
+          }
+        },
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "1.0.0+1",
+            "queued_events": []
+          }
+        }
+      }
+    }
+  ]
+}

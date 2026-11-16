@@ -167,6 +167,7 @@ Every key is optional. `call` is one of:
 | `report_launch_failure` | `shorebird_report_launch_failure` | none |
 | `report_launch_paused` | `shorebird_report_launch_paused` | none |
 | `report_launch_resumed` | `shorebird_report_launch_resumed` | none |
+| `report_launch_<start,paused,resumed,success,failure>_for_patch` | `shorebird_report_launch_<...>_for_patch(patch)`; takes `patch`, the number the engine loaded (0 = base release) | none |
 | `validate_next_boot_patch` | `shorebird_validate_next_boot_patch` | none |
 | `should_auto_update` | `shorebird_should_auto_update` | bool |
 | `next_boot_patch_number` | `shorebird_next_boot_patch_number` | number (0 = base release) |
