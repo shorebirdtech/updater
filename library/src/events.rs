@@ -76,8 +76,20 @@ pub struct PatchEvent {
     /// The platform we're running on (e.g. "android", "ios", "windows", "macos", "linux").
     pub platform: String,
 
-    /// The release version from AndroidManifest.xml, Info.plist in the app.
+    /// The release version: the one baked into shorebird.yaml for an
+    /// add-to-app module, else the app's version from AndroidManifest.xml or
+    /// Info.plist.
     pub release_version: String,
+
+    /// The host app's bundle identifier, when the engine knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_bundle_id: Option<String>,
+
+    /// The host app's version, sent only when it differs from
+    /// `release_version` (an add-to-app module with a baked release version).
+    /// Absent means equal to `release_version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_version: Option<String>,
 
     /// When this event occurred as a Unix epoch timestamp in seconds.
     pub timestamp: u64,
@@ -118,6 +130,8 @@ impl PatchEvent {
             patch_number,
             platform: current_platform().to_string(),
             release_version: config.release_version.clone(),
+            host_bundle_id: config.host_bundle_id.clone(),
+            host_version: config.reported_host_version(),
             timestamp: time::unix_timestamp(),
             message: message.map(|s| s.to_string()),
             failure_category: None,
@@ -154,10 +168,26 @@ mod tests {
             "message":null}"#;
         let event: PatchEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.event_id, None);
+        // Queued by an older updater: no host fields, and none are sent.
+        assert_eq!(event.host_bundle_id, None);
+        assert_eq!(event.host_version, None);
         assert!(serde_json::to_value(&event)
             .unwrap()
             .get("event_id")
             .is_none());
+    }
+
+    #[test]
+    fn event_serializes_host_fields_when_set() {
+        let json = r#"{"app_id":"a","arch":"aarch64","client_id":"c",
+            "type":"__patch_install__","patch_number":1,
+            "platform":"android","release_version":"module-7",
+            "host_bundle_id":"com.example.host","host_version":"2.0.0+5",
+            "timestamp":1,"message":null}"#;
+        let event: PatchEvent = serde_json::from_str(json).unwrap();
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["host_bundle_id"], "com.example.host");
+        assert_eq!(value["host_version"], "2.0.0+5");
     }
 
     #[test]

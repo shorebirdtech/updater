@@ -245,7 +245,12 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
 pub struct AppConfig {
     pub app_storage_dir: String,
     pub code_cache_dir: String,
+    /// The host app's version, read from the platform (versionName+versionCode
+    /// on Android, CFBundleShortVersionString+CFBundleVersion on iOS).
+    /// The release version, unless shorebird.yaml carries one.
     pub release_version: String,
+    /// The host app's bundle identifier, when the engine knows it.
+    pub host_bundle_id: Option<String>,
     pub original_libapp_paths: Vec<String>,
 }
 
@@ -1776,6 +1781,7 @@ mod tests {
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec![libapp_path],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -1799,6 +1805,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -1821,6 +1828,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -1999,6 +2007,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -2026,6 +2035,7 @@ patch_verification: bogus_mode
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec!["original_libapp_path".to_string()],
             },
             Box::new(FakeExternalFileProvider {}),

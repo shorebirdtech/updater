@@ -1,0 +1,17 @@
+{
+  "description": "A release_version in shorebird.yaml outside [A-Za-z0-9._+-] fails init; nothing is written.",
+  "steps": [
+    {
+      "call": "init",
+      "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nrelease_version: 1.0 beta\n",
+      "expect": false
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_tree": [
+        "app/libapp.so"
+      ]
+    }
+  ]
+}
