@@ -357,8 +357,30 @@ pub extern "C" fn shorebird_protected_data_available() {
     updater::protected_data_available();
 }
 
-/// Report that the app launched successfully. The Shell constructor calls
-/// this once per process when the VM has finished booting; it pairs with
+/// Report that the engine built its Shell but hasn't launched Dart. Clears
+/// the boot breadcrumb without promoting the patch, so an engine that is
+/// created and never run doesn't mark the patch Bad. Call once per process,
+/// after `shorebird_report_launch_start`.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_paused() {
+    log_on_error(updater::report_launch_paused, "reporting launch paused", ());
+}
+
+/// Report that the engine is launching the root isolate. Arms the boot
+/// breadcrumb again for the patch this process loaded. Call once per
+/// process, from the first engine to launch, before
+/// `shorebird_report_launch_success` or `shorebird_report_launch_failure`.
+#[no_mangle]
+pub extern "C" fn shorebird_report_launch_resumed() {
+    log_on_error(
+        updater::report_launch_resumed,
+        "reporting launch resumed",
+        (),
+    );
+}
+
+/// Report that the app launched successfully: the engine launched its root
+/// isolate from the patch's snapshot. Pairs with
 /// `shorebird_report_launch_start` to mark a patch as having booted cleanly.
 #[no_mangle]
 pub extern "C" fn shorebird_report_launch_success() {
