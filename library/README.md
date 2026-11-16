@@ -188,6 +188,15 @@ following states:
 3. Checking for new patches - A PatchCheckRequest is issued but not completed.
    a. If no patch is available, move back to Ready.
    b. If a new patch is is available, move to Downloading Patch.
+   c. If the offered patch is already installed but isn't the next-boot patch
+      (the device moved to another patch, e.g. by switching tracks), check the
+      offer's signature and the installed bytes' hash, make it the next-boot
+      patch without downloading it, and move back to Ready.
+      - If the signature is refused, fail and move back to Ready.
+      - If the installed bytes don't match the offer or can't be read, and the
+        patch isn't the running one, remove it and move to Downloading Patch.
+      - If they don't match and it is the running patch, fail and move back to
+        Ready, leaving it in place.
 4. Downloading Patch - A patch is available, we're downloading it.
    a. If the download fails, move back to Ready.
    b. If the download succeeds, move to Inflating Patch.
