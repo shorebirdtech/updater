@@ -140,6 +140,7 @@ mod test {
         AppParameters {
             app_storage_dir: c_string(&cache_dir),
             code_cache_dir: c_string(&cache_dir),
+            host_bundle_id: std::ptr::null(),
             release_version: c_string("1.0.0"),
             original_libapp_paths: app_paths as *const *const libc::c_char,
             original_libapp_paths_size: app_paths_size,
@@ -253,6 +254,7 @@ mod test {
         let c_params = AppParameters {
             app_storage_dir: std::ptr::null(),
             code_cache_dir: std::ptr::null(),
+            host_bundle_id: std::ptr::null(),
             release_version: std::ptr::null(),
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
@@ -283,6 +285,7 @@ mod test {
         let c_params = AppParameters {
             app_storage_dir: c_string(&cache_dir),
             code_cache_dir: c_string(&cache_dir),
+            host_bundle_id: std::ptr::null(),
             release_version: c_string("1.0.0"),
             original_libapp_paths: paths_array.as_ptr(),
             original_libapp_paths_size: 1,

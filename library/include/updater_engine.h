@@ -186,6 +186,12 @@ typedef struct AppParameters {
    * artifacts and data that can be deleted when a new release is detected.
    */
   const char *code_cache_dir;
+  /**
+   * The host app's bundle identifier (Android package name, iOS bundle
+   * ID), optional (null when not known). Sent with patch checks and
+   * events so a module embedded in several host apps can tell them apart.
+   */
+  const char *host_bundle_id;
 } AppParameters;
 
 typedef struct FileCallbacks {

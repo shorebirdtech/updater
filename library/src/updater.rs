@@ -245,7 +245,12 @@ pub fn classify_failure(err: &anyhow::Error) -> FailureCategory {
 pub struct AppConfig {
     pub app_storage_dir: String,
     pub code_cache_dir: String,
+    /// The host app's version, read from the platform (versionName+versionCode
+    /// on Android, CFBundleShortVersionString+CFBundleVersion on iOS).
+    /// The release version, unless shorebird.yaml carries one.
     pub release_version: String,
+    /// The host app's bundle identifier, when the engine knows it.
+    pub host_bundle_id: Option<String>,
     pub original_libapp_paths: Vec<String>,
 }
 
@@ -1776,6 +1781,7 @@ mod tests {
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec![libapp_path],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -1799,6 +1805,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -1821,6 +1828,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["/dir/lib/arch/libapp.so".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -1999,6 +2007,7 @@ mod tests {
                     app_storage_dir: cache_dir.clone(),
                     code_cache_dir: cache_dir.clone(),
                     release_version: "1.0.0+1".to_string(),
+                    host_bundle_id: None,
                     original_libapp_paths: vec!["original_libapp_path".to_string()],
                 },
                 Box::new(FakeExternalFileProvider {}),
@@ -2026,6 +2035,7 @@ patch_verification: bogus_mode
                 app_storage_dir: cache_dir.clone(),
                 code_cache_dir: cache_dir.clone(),
                 release_version: "1.0.0+1".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec!["original_libapp_path".to_string()],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -5741,5 +5751,52 @@ mod unreadable_state_tests {
             assert!(message.contains("state.json"), "{message}");
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod host_field_tests {
+    use super::tests::init_for_testing_with_yaml;
+    use crate::config::with_config;
+    use crate::events::{EventType, PatchEvent};
+    use crate::network::PatchCheckRequest;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    #[serial]
+    #[test]
+    fn module_events_and_checks_carry_host_fields() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing_with_yaml(&tmp_dir, None, "\nrelease_version: \"module-7\"");
+        let mut config = with_config(|config| Ok(config.clone())).unwrap();
+        config.host_bundle_id = Some("com.example.host".to_string());
+
+        let event = PatchEvent::new(&config, EventType::PatchInstallSuccess, 1, "c".into(), None);
+        assert_eq!(event.release_version, "module-7");
+        assert_eq!(event.host_bundle_id.as_deref(), Some("com.example.host"));
+        assert_eq!(event.host_version.as_deref(), Some("1.0.0+1"));
+
+        let request = PatchCheckRequest::new(&config, "c", None);
+        assert_eq!(request.release_version, "module-7");
+        assert_eq!(request.host_bundle_id.as_deref(), Some("com.example.host"));
+        assert_eq!(request.host_version.as_deref(), Some("1.0.0+1"));
+    }
+
+    #[serial]
+    #[test]
+    fn full_app_sends_bundle_id_but_no_host_version() {
+        let tmp_dir = TempDir::new().unwrap();
+        init_for_testing_with_yaml(&tmp_dir, None, "");
+        let mut config = with_config(|config| Ok(config.clone())).unwrap();
+        config.host_bundle_id = Some("com.example.app".to_string());
+
+        let event = PatchEvent::new(&config, EventType::PatchInstallSuccess, 1, "c".into(), None);
+        assert_eq!(event.release_version, "1.0.0+1");
+        assert_eq!(event.host_bundle_id.as_deref(), Some("com.example.app"));
+        assert_eq!(event.host_version, None);
+
+        let request = PatchCheckRequest::new(&config, "c", None);
+        assert_eq!(request.host_bundle_id.as_deref(), Some("com.example.app"));
+        assert_eq!(request.host_version, None);
     }
 }

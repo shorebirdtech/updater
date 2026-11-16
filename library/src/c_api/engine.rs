@@ -17,7 +17,7 @@
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use super::{allocate_c_string, free_c_string, log_on_error, to_rust};
+use super::{allocate_c_string, free_c_string, log_on_error, to_rust, to_rust_option};
 use crate::c_api::c_file::CFileProvider;
 use crate::updater;
 
@@ -45,6 +45,11 @@ pub struct AppParameters {
     /// Path to cache directory where the updater will store downloaded
     /// artifacts and data that can be deleted when a new release is detected.
     pub code_cache_dir: *const libc::c_char,
+
+    /// The host app's bundle identifier (Android package name, iOS bundle
+    /// ID), optional (null when not known). Sent with patch checks and
+    /// events so a module embedded in several host apps can tell them apart.
+    pub host_bundle_id: *const libc::c_char,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -201,6 +206,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> anyhow::Result<updater::
         app_storage_dir: to_rust(c_params_ref.app_storage_dir)?,
         code_cache_dir: to_rust(c_params_ref.code_cache_dir)?,
         release_version: to_rust(c_params_ref.release_version)?,
+        host_bundle_id: to_rust_option(c_params_ref.host_bundle_id)?,
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,

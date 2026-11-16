@@ -523,6 +523,8 @@ mod tests {
             patch_number,
             platform: "android".to_string(),
             release_version: "1.0.0+1".to_string(),
+            host_bundle_id: None,
+            host_version: None,
             timestamp: 1,
             message: None,
             failure_category: None,

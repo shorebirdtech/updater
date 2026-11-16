@@ -160,7 +160,7 @@ Every key is optional. `call` is one of:
 
 | call | C API | result compared with `expect` |
 |---|---|---|
-| `init` | `shorebird_init`; takes optional `release_version`, `yaml` | bool |
+| `init` | `shorebird_init`; takes optional `release_version`, `host_bundle_id` (default null), `yaml` | bool |
 | `restart` | none: the process dies here and a new one starts (all in-memory state gone, disk kept) | none |
 | `report_launch_start` | `shorebird_report_launch_start` | none |
 | `report_launch_success` | `shorebird_report_launch_success` | none |

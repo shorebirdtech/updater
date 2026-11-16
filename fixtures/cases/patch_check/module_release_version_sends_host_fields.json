@@ -1,0 +1,43 @@
+{
+  "description": "A module with a release version baked into shorebird.yaml reports it as release_version (quotes stripped), and sends the host app's version and bundle ID as host_version and host_bundle_id.",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nrelease_version: \"module-7\"\n",
+  "steps": [
+    {
+      "call": "init",
+      "release_version": "2.0.0+5",
+      "host_bundle_id": "com.example.host",
+      "expect": true
+    },
+    {
+      "call": "update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "module-7",
+              "host_bundle_id": "com.example.host",
+              "host_version": "2.0.0+5",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "<uuid>"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": false
+            }
+          }
+        }
+      ],
+      "expect": {
+        "status": 0,
+        "message": "No update"
+      }
+    }
+  ]
+}
