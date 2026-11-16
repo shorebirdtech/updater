@@ -65,11 +65,8 @@ jobs:
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
-      # Strip debuginfo, except on MSVC where it lives in the .pdb anyway
-      # (rust-lang/cargo#13630).
+      # Stripping comes from Cargo.toml's [profile.release].
       - name: Build
-        env:
-          CARGO_PROFILE_RELEASE_STRIP: ${{ contains(matrix.target, 'msvc') && 'none' || 'debuginfo' }}
         run: |
           rustup target add "$TARGET"
           cargo build --release --locked --bin patch --target "$TARGET"
