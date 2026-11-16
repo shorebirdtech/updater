@@ -17,7 +17,7 @@
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use super::{allocate_c_string, free_c_string, log_on_error, to_rust};
+use super::{allocate_c_string, free_c_string, log_on_error, to_rust, to_rust_option};
 use crate::c_api::c_file::CFileProvider;
 use crate::updater;
 
@@ -206,11 +206,7 @@ fn app_config_from_c(c_params: *const AppParameters) -> anyhow::Result<updater::
         app_storage_dir: to_rust(c_params_ref.app_storage_dir)?,
         code_cache_dir: to_rust(c_params_ref.code_cache_dir)?,
         release_version: to_rust(c_params_ref.release_version)?,
-        host_bundle_id: if c_params_ref.host_bundle_id.is_null() {
-            None
-        } else {
-            Some(to_rust(c_params_ref.host_bundle_id)?)
-        },
+        host_bundle_id: to_rust_option(c_params_ref.host_bundle_id)?,
         original_libapp_paths: to_rust_vector(
             c_params_ref.original_libapp_paths,
             c_params_ref.original_libapp_paths_size,

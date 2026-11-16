@@ -1,0 +1,51 @@
+{
+  "description": "A new module build (shorebird.yaml release_version module-7 -> module-8) wipes the installed patch even though the host app's version did not change.",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nrelease_version: module-8\n",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "queued_events": [],
+        "release_version": "module-7"
+      }
+    },
+    "storage/pointers.json": {
+      "json": {
+        "next_boot_patch": 1,
+        "last_booted_patch": 1,
+        "currently_booting_patch": null,
+        "boot_started_at": null
+      }
+    },
+    "storage/patches/1/state.json": {
+      "json": {
+        "kind": "Installed",
+        "signature": null,
+        "size": 5
+      }
+    },
+    "storage/patches/1/dlc.vmcode": {
+      "text": "hello"
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "release_version": "2.0.0+5",
+      "expect": true
+    },
+    {
+      "call": "next_boot_patch_number",
+      "expect": 0,
+      "expect_files": {
+        "storage/state.json": {
+          "json": {
+            "client_id": "00000000-0000-4000-8000-000000000001",
+            "release_version": "module-8",
+            "queued_events": []
+          }
+        }
+      }
+    }
+  ]
+}
