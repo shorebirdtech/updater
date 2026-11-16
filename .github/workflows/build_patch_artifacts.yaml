@@ -42,21 +42,50 @@ jobs:
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
-          - os: windows-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
 
     name: 🦀 Upload Artifacts
 
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      TARGET: ${{ matrix.target }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
-        with:
-          bin: "patch"
-          target: ${{ matrix.target }}
-          tar: none
-          zip: all
-          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # zstd-sys compiles C; for a musl target the cc crate looks for
+      # musl-gcc.
+      - name: Install musl-tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      # Stripping comes from Cargo.toml's [profile.release].
+      - name: Build
+        run: |
+          rustup target add "$TARGET"
+          cargo build --release --locked --bin patch --target "$TARGET"
+
+      # The zip holds the binary alone, at its root: the CLI extracts it
+      # as is (shorebird_cli's PatchArtifact).
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          archive="$GITHUB_WORKSPACE/patch-$TARGET.zip"
+          cd "target/$TARGET/release"
+          if [[ "$TARGET" == *windows* ]]; then
+            7z a "$archive" patch.exe
+          else
+            zip "$archive" patch
+          fi
+          gh release upload "$TAG" "$archive" --clobber --repo "$GITHUB_REPOSITORY"
 
   publish:
     needs: upload-artifacts
