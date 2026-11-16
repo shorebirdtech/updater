@@ -1,0 +1,49 @@
+{
+  "description": "An add-to-app module's shorebird.yaml carries its own release_version (quoted, as the Flutter tool writes it). The updater keys state and patch checks on it, and sends the host app's version and bundle ID as host_version and host_bundle_id.",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nrelease_version: '2.10'\n",
+  "files": {
+    "storage/state.json": {
+      "json": {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "release_version": "2.10",
+        "queued_events": []
+      }
+    }
+  },
+  "steps": [
+    {
+      "call": "init",
+      "release_version": "5.1.0+42",
+      "host_bundle_id": "com.example.host",
+      "expect": true
+    },
+    {
+      "call": "check_for_downloadable_update",
+      "http": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/api/v1/patches/check",
+            "json": {
+              "app_id": "fixture-app-id",
+              "channel": "stable",
+              "release_version": "2.10",
+              "platform": "<platform>",
+              "arch": "<arch>",
+              "client_id": "00000000-0000-4000-8000-000000000001",
+              "host_bundle_id": "com.example.host",
+              "host_version": "5.1.0+42"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "patch_available": false
+            }
+          }
+        }
+      ],
+      "expect": false
+    }
+  ]
+}

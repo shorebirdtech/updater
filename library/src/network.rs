@@ -519,6 +519,16 @@ pub struct PatchCheckRequest {
     /// this field instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_patch_number: Option<usize>,
+    /// For an add-to-app module, the bundle ID of the host app it runs in,
+    /// when the engine passed one. Informative: it does not change which
+    /// patch is offered. Omitted for a full app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_bundle_id: Option<String>,
+    /// For an add-to-app module, the host app's version, while
+    /// `release_version` is the module's own. Omitted for a full app, where
+    /// the two are the same.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_version: Option<String>,
 }
 
 /// Hand-written so `client_id` cannot reach a log through a `{:?}` render of
@@ -536,6 +546,8 @@ impl std::fmt::Debug for PatchCheckRequest {
             arch,
             client_id: _,
             current_patch_number,
+            host_bundle_id,
+            host_version,
         } = self;
         f.debug_struct("PatchCheckRequest")
             .field("app_id", app_id)
@@ -545,6 +557,8 @@ impl std::fmt::Debug for PatchCheckRequest {
             .field("arch", arch)
             .field("client_id", &"<redacted>")
             .field("current_patch_number", current_patch_number)
+            .field("host_bundle_id", host_bundle_id)
+            .field("host_version", host_version)
             .finish()
     }
 }
@@ -563,6 +577,8 @@ impl PatchCheckRequest {
             arch: current_arch().to_string(),
             client_id: client_id.to_string(),
             current_patch_number,
+            host_bundle_id: config.host.as_ref().and_then(|h| h.bundle_id.clone()),
+            host_version: config.host.as_ref().map(|h| h.version.clone()),
         }
     }
 
@@ -584,10 +600,21 @@ impl PatchCheckRequest {
             arch,
             client_id: _,
             current_patch_number,
+            host_bundle_id,
+            host_version,
         } = self;
-        format!(
+        let mut line = format!(
             "app_id: {app_id}, channel: {channel}, release_version: {release_version}, platform: {platform}, arch: {arch}, current_patch_number: {current_patch_number:?}"
-        )
+        );
+        // Only add-to-app modules carry host fields, so a full app's line is
+        // unchanged.
+        if let Some(host_version) = host_version {
+            line += &format!(", host_version: {host_version}");
+        }
+        if let Some(host_bundle_id) = host_bundle_id {
+            line += &format!(", host_bundle_id: {host_bundle_id}");
+        }
+        line
     }
 }
 
@@ -684,6 +711,8 @@ mod tests {
             arch: "aarch64".to_string(),
             client_id: "11111111-2222-3333-4444-555555555555".to_string(),
             current_patch_number: Some(3),
+            host_bundle_id: None,
+            host_version: None,
         };
         let debug = format!("{:?}", request);
         assert!(!debug.contains("11111111-2222-3333-4444-555555555555"));
@@ -701,6 +730,8 @@ mod tests {
             arch: "aarch64".to_string(),
             client_id: "11111111-2222-3333-4444-555555555555".to_string(),
             current_patch_number: Some(3),
+            host_bundle_id: None,
+            host_version: None,
         };
         // Pinned whole rather than by substring: the docs examples of this
         // line are matched to it character for character.
@@ -709,6 +740,22 @@ mod tests {
             "app_id: app_id, channel: stable, release_version: 1.0.0+1, platform: android, arch: aarch64, current_patch_number: Some(3)"
         );
         assert!(!request.log_line().contains("client_id"));
+    }
+
+    #[test]
+    fn patch_check_request_sends_host_fields_for_a_module() {
+        let request = super::PatchCheckRequest {
+            host_bundle_id: Some("com.example.host".to_string()),
+            host_version: Some("5.1.0".to_string()),
+            ..patch_check_request()
+        };
+        let json: serde_json::Value = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["host_bundle_id"], "com.example.host");
+        assert_eq!(json["host_version"], "5.1.0");
+        assert_eq!(
+            request.log_line(),
+            "app_id: app_id, channel: stable, release_version: 1.0.0+1, platform: android, arch: aarch64, current_patch_number: None, host_version: 5.1.0, host_bundle_id: com.example.host"
+        );
     }
 
     #[test]
@@ -721,6 +768,8 @@ mod tests {
             arch: "aarch64".to_string(),
             client_id: "11111111-2222-3333-4444-555555555555".to_string(),
             current_patch_number: Some(3),
+            host_bundle_id: None,
+            host_version: None,
         };
         let json_string = serde_json::to_string(&request).unwrap();
         assert_eq!(
@@ -815,6 +864,8 @@ mod tests {
                 arch: "".to_string(),
                 client_id: "".to_string(),
                 current_patch_number: None,
+                host_bundle_id: None,
+                host_version: None,
             },
         );
         assert!(result.is_err());
@@ -875,6 +926,8 @@ mod tests {
             arch: "aarch64".to_string(),
             client_id: "client_id".to_string(),
             current_patch_number: None,
+            host_bundle_id: None,
+            host_version: None,
         }
     }
 

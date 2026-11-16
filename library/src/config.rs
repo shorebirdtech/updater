@@ -105,6 +105,16 @@ where
     f(&mut lock)
 }
 
+/// The host app an add-to-app module runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostApp {
+    /// The host's bundle ID (Android package name or iOS bundle identifier),
+    /// if the engine passed one.
+    pub bundle_id: Option<String>,
+    /// The host's version, as the engine reads it today.
+    pub version: String,
+}
+
 // The config passed into init.  This is immutable once set and copyable.
 #[derive(Debug, Clone)]
 pub struct UpdateConfig {
@@ -113,7 +123,12 @@ pub struct UpdateConfig {
     pub auto_update: bool,
     pub channel: String,
     pub app_id: String,
+    /// The release this app patches: the module's baked release version
+    /// (shorebird.yaml) when present, else the host app's version.
     pub release_version: String,
+    /// The host app around an add-to-app module, sent with patch checks.
+    /// `None` for a full app, whose release_version is its own version.
+    pub host: Option<HostApp>,
     pub libapp_path: PathBuf,
     pub base_url: String,
     pub network_hooks: NetworkHooks,
@@ -152,7 +167,14 @@ pub fn set_config(
                 .to_owned(),
             auto_update: yaml.auto_update.unwrap_or(true),
             app_id: yaml.app_id.to_string(),
-            release_version: app_config.release_version.to_string(),
+            release_version: yaml
+                .release_version
+                .clone()
+                .unwrap_or_else(|| app_config.release_version.clone()),
+            host: yaml.release_version.as_ref().map(|_| HostApp {
+                bundle_id: app_config.host_bundle_id.clone(),
+                version: app_config.release_version.clone(),
+            }),
             libapp_path,
             base_url: yaml
                 .base_url
@@ -220,6 +242,7 @@ mod tests {
             app_storage_dir: "/tmp".to_string(),
             code_cache_dir: "/tmp".to_string(),
             release_version: "1.0.0".to_string(),
+            host_bundle_id: None,
             original_libapp_paths: vec!["libapp.so".to_string()],
         }
     }
@@ -232,7 +255,57 @@ mod tests {
             base_url: Some("fake_base_url".to_string()),
             patch_public_key: None,
             patch_verification: None,
+            release_version: None,
         }
+    }
+
+    #[serial]
+    #[test]
+    fn module_release_version_replaces_host_version() -> Result<()> {
+        testing_reset_config();
+        set_config(
+            AppConfig {
+                host_bundle_id: Some("com.example.host".to_string()),
+                ..fake_app_config()
+            },
+            Box::new(FakeExternalFileProvider {}),
+            "libapp.so".into(),
+            &crate::yaml::YamlConfig {
+                release_version: Some("2.0.0".to_string()),
+                ..fake_yaml()
+            },
+            NetworkHooks::default(),
+        )?;
+        let config = super::with_config(|config| Ok(config.clone())).unwrap();
+        assert_eq!(config.release_version, "2.0.0");
+        assert_eq!(
+            config.host,
+            Some(super::HostApp {
+                bundle_id: Some("com.example.host".to_string()),
+                version: "1.0.0".to_string(),
+            })
+        );
+        Ok(())
+    }
+
+    #[serial]
+    #[test]
+    fn full_app_has_no_host() -> Result<()> {
+        testing_reset_config();
+        set_config(
+            AppConfig {
+                host_bundle_id: Some("com.example.app".to_string()),
+                ..fake_app_config()
+            },
+            Box::new(FakeExternalFileProvider {}),
+            "libapp.so".into(),
+            &fake_yaml(),
+            NetworkHooks::default(),
+        )?;
+        let config = super::with_config(|config| Ok(config.clone())).unwrap();
+        assert_eq!(config.release_version, "1.0.0");
+        assert_eq!(config.host, None);
+        Ok(())
     }
 
     // These tests are serial because they modify global state.
@@ -246,6 +319,7 @@ mod tests {
                 app_storage_dir: "/app_storage".to_string(),
                 code_cache_dir: "/code_cache".to_string(),
                 release_version: "1.0.0".to_string(),
+                host_bundle_id: None,
                 original_libapp_paths: vec!["libapp.so".to_string()],
             },
             Box::new(FakeExternalFileProvider {}),
@@ -257,6 +331,7 @@ mod tests {
                 base_url: Some("fake_base_url".to_string()),
                 patch_public_key: Some("patch_public_key".to_string()),
                 patch_verification: None,
+                release_version: None,
             },
             NetworkHooks::default(),
         )?;

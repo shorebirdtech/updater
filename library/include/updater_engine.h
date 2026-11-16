@@ -186,6 +186,13 @@ typedef struct AppParameters {
    * artifacts and data that can be deleted when a new release is detected.
    */
   const char *code_cache_dir;
+  /**
+   * The host app's bundle ID (Android package name, iOS bundle
+   * identifier), optional (may be null). Sent as `host_bundle_id` on patch
+   * checks when the app is an add-to-app module, one whose shorebird.yaml
+   * carries its own `release_version`.
+   */
+  const char *host_bundle_id;
 } AppParameters;
 
 typedef struct FileCallbacks {

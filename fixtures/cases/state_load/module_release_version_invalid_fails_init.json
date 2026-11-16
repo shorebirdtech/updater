@@ -1,0 +1,10 @@
+{
+  "description": "A release_version in shorebird.yaml outside [A-Za-z0-9._+-] (or empty, or over 128 characters) fails init, leaving the app on its installed version.",
+  "yaml": "app_id: fixture-app-id\nbase_url: {{server}}\nrelease_version: 1.0 beta\n",
+  "steps": [
+    {
+      "call": "init",
+      "expect": false
+    }
+  ]
+}

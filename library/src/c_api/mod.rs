@@ -143,6 +143,7 @@ mod test {
             release_version: c_string("1.0.0"),
             original_libapp_paths: app_paths as *const *const libc::c_char,
             original_libapp_paths_size: app_paths_size,
+            host_bundle_id: std::ptr::null(),
         }
     }
 
@@ -256,6 +257,7 @@ mod test {
             release_version: std::ptr::null(),
             original_libapp_paths: std::ptr::null(),
             original_libapp_paths_size: 0,
+            host_bundle_id: std::ptr::null(),
         };
         assert!(!shorebird_init(
             &c_params,
@@ -286,6 +288,7 @@ mod test {
             release_version: c_string("1.0.0"),
             original_libapp_paths: paths_array.as_ptr(),
             original_libapp_paths_size: 1,
+            host_bundle_id: std::ptr::null(),
         };
         let c_yaml = c_string("app_id: foo");
 
