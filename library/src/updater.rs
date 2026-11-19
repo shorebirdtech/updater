@@ -3198,10 +3198,7 @@ patch_verification: bogus_mode
         with_state(|state| {
             let events = state.copy_events(10);
             assert_eq!(events.len(), 1, "expected one queued event");
-            assert_eq!(
-                events[0].identifier,
-                crate::events::EventType::PatchUpdateFailure
-            );
+            assert_eq!(events[0].identifier, EventType::PatchUpdateFailure);
             assert_eq!(events[0].patch_number, 1);
             let message = events[0].message.as_ref().unwrap();
             assert!(
@@ -3446,10 +3443,7 @@ patch_verification: bogus_mode
             assert_eq!(state.next_boot_patch(), None);
             let events = state.copy_events(10);
             assert_eq!(events.len(), 1, "expected one queued event");
-            assert_eq!(
-                events[0].identifier,
-                crate::events::EventType::PatchUpdateFailure
-            );
+            assert_eq!(events[0].identifier, EventType::PatchUpdateFailure);
             assert_eq!(events[0].patch_number, 1);
             assert_eq!(
                 events[0].failure_category.as_deref(),
