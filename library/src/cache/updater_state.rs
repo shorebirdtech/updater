@@ -18,6 +18,10 @@ fn default_schema_version() -> u32 {
     CURRENT_SCHEMA_VERSION
 }
 
+fn is_default_schema_version(v: &u32) -> bool {
+    *v == CURRENT_SCHEMA_VERSION
+}
+
 /// The most events kept waiting to be sent. A device offline for long enough
 /// to queue more drops the oldest, so the state file stays small.
 pub const MAX_QUEUED_EVENTS: usize = 50;
@@ -79,7 +83,10 @@ pub struct UpdaterState {
 /// recognize, so we discard it.
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
-    #[serde(default = "default_schema_version")]
+    #[serde(
+        default = "default_schema_version",
+        skip_serializing_if = "is_default_schema_version"
+    )]
     schema_version: u32,
     /// Stable per-install ID. Survives release-version changes; only
     /// reset when the app is uninstalled. Used for analytics.
