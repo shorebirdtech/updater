@@ -327,6 +327,14 @@ pub(crate) fn load_state(config: &UpdateConfig) -> anyhow::Result<(StateLock, Up
             Err(err)
         }
         Ok(mut state) => {
+            if let Some(reason) = state.take_regenerated_reason() {
+                let event = client_id_regenerated_event(&mut state, config, reason);
+                shorebird_warn!(
+                    "Updater client_id was regenerated ({}); reporting it now",
+                    reason
+                );
+                queue_or_send_event(&mut state, config, event);
+            }
             if let Some(unreadable) = held.take() {
                 let event = unreadable_state_event(&mut state, config, &unreadable);
                 shorebird_error!(
@@ -364,6 +372,23 @@ fn unreadable_state_event(
         Some(&message),
     );
     event.failure_category = Some(unreadable.category.code().to_string());
+    event
+}
+
+fn client_id_regenerated_event(
+    state: &mut UpdaterState,
+    config: &UpdateConfig,
+    reason: &str,
+) -> PatchEvent {
+    let message = format!("client_id_regenerated: reason={reason}");
+    let mut event = PatchEvent::new(
+        config,
+        EventType::PatchUpdateFailure,
+        state.next_boot_patch().map(|p| p.number).unwrap_or(0),
+        state.client_id(),
+        Some(&message),
+    );
+    event.failure_category = Some("client_id_regenerated".to_string());
     event
 }
 
@@ -3173,10 +3198,7 @@ patch_verification: bogus_mode
         with_state(|state| {
             let events = state.copy_events(10);
             assert_eq!(events.len(), 1, "expected one queued event");
-            assert_eq!(
-                events[0].identifier,
-                crate::events::EventType::PatchUpdateFailure
-            );
+            assert_eq!(events[0].identifier, EventType::PatchUpdateFailure);
             assert_eq!(events[0].patch_number, 1);
             let message = events[0].message.as_ref().unwrap();
             assert!(
@@ -4410,7 +4432,13 @@ mod state_recovery_tests {
         let tmp_dir = TempDir::new().unwrap();
         init_for_testing(&tmp_dir, None);
 
-        let original_client_id = with_state(|state| Ok(state.client_id()))?;
+        let original_client_id = with_state(|state| {
+            assert!(
+                state.copy_events(10).is_empty(),
+                "fresh install should not queue a regeneration event"
+            );
+            Ok(state.client_id())
+        })?;
         assert!(!original_client_id.is_empty());
 
         // Truncate state.json to empty.
@@ -4424,13 +4452,27 @@ mod state_recovery_tests {
         // Reinitialize.
         init_for_testing(&tmp_dir, None);
 
-        let new_client_id = with_state(|state| Ok(state.client_id()))?;
+        let (new_client_id, events) =
+            with_state(|state| Ok((state.client_id(), state.copy_events(10))))?;
         // A fresh state should have a new client_id (the old one was lost
         // along with the truncated file).
         assert!(!new_client_id.is_empty());
         assert_ne!(
             original_client_id, new_client_id,
             "Truncated state.json should generate a new client_id"
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].identifier,
+            crate::events::EventType::PatchUpdateFailure
+        );
+        assert_eq!(
+            events[0].failure_category.as_deref(),
+            Some("client_id_regenerated")
+        );
+        assert_eq!(
+            events[0].message.as_deref(),
+            Some("client_id_regenerated: reason=corrupt_state")
         );
 
         Ok(())

@@ -1,5 +1,5 @@
 use crate::file_errors::{FileOperation, IoResultExt};
-use anyhow::{bail, Context};
+use anyhow::Context;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::File,
@@ -93,7 +93,11 @@ where
         .try_exists()
         .with_file_context(FileOperation::ReadFile, path_as_ref)?
     {
-        bail!("File {} does not exist", path_as_ref.display());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("File {} does not exist", path_as_ref.display()),
+        ))
+        .with_file_context(FileOperation::ReadFile, path_as_ref);
     }
 
     let file = File::open(path_as_ref).with_file_context(FileOperation::ReadFile, path_as_ref)?;
