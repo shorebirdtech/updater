@@ -12,6 +12,11 @@ use super::lifecycle::{PatchLifecycle, PatchState};
 use super::{disk_io, PatchInfo};
 
 const STATE_FILE_NAME: &str = "state.json";
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+fn default_schema_version() -> u32 {
+    CURRENT_SCHEMA_VERSION
+}
 
 /// The most events kept waiting to be sent. A device offline for long enough
 /// to queue more drops the oldest, so the state file stays small.
@@ -56,6 +61,10 @@ pub struct UpdaterState {
     patch_public_key: Option<String>,
     verification_mode: PatchVerificationMode,
     serialized_state: SerializedState,
+    /// Set when `load_or_new_on_error` had to mint a new `client_id` because
+    /// an existing state file was corrupt or held an invalid `client_id` (not
+    /// on a fresh install where `state.json` did not exist).
+    regenerated_reason: Option<&'static str>,
 }
 
 /// UpdaterState fields that are serialized to disk at `{cache}/state.json`.
@@ -70,24 +79,81 @@ pub struct UpdaterState {
 /// recognize, so we discard it.
 #[derive(Debug, Deserialize, Serialize)]
 struct SerializedState {
+    #[serde(default = "default_schema_version")]
+    schema_version: u32,
     /// Stable per-install ID. Survives release-version changes; only
     /// reset when the app is uninstalled. Used for analytics.
     /// <https://shorebird.dev/privacy/>
+    #[serde(default)]
     client_id: String,
     /// The release version this cache corresponds to. Mismatch with the
     /// app's reported release version triggers a wipe of all per-release
     /// state.
+    #[serde(default)]
     release_version: String,
     /// Events that have not yet been sent to the server, oldest first. Kept
     /// across release-version changes: each event names its own release, and
-    /// dropping them would lose installs the server should count. An updater
-    /// that can't read an older format falls back to a new state (see
-    /// `load_or_new_on_error`), as for any unreadable state file.
+    /// dropping them would lose installs the server should count. Individual
+    /// unparseable entries (e.g. an unknown `EventType` from a newer updater)
+    /// are dropped so they do not fail the whole state file.
+    #[serde(default, deserialize_with = "deserialize_lossy_events")]
     queued_events: Vec<PatchEvent>,
+}
+
+fn deserialize_lossy_events<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<PatchEvent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value::<PatchEvent>(v) {
+            Ok(event) => Some(event),
+            Err(e) => {
+                shorebird_warn!("Dropping unparseable queued event: {}", e);
+                None
+            }
+        })
+        .collect())
 }
 
 fn generate_client_id() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+fn is_valid_client_id(id: &str) -> bool {
+    uuid::Uuid::parse_str(id).is_ok_and(|u| !u.is_nil())
+}
+
+#[derive(Debug)]
+struct InvalidClientIdError;
+
+impl std::fmt::Display for InvalidClientIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invalid client_id in state.json")
+    }
+}
+
+impl std::error::Error for InvalidClientIdError {}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+/// Best-effort extraction of a valid `client_id` from a `state.json` that
+/// failed full `SerializedState` deserialization (e.g. due to a schema change
+/// in another field or partial corruption).
+fn recover_client_id_from_file(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let id = value.get("client_id")?.as_str()?;
+    is_valid_client_id(id).then(|| id.to_owned())
 }
 
 /// True if `error` is a failure to read the file rather than to parse what
@@ -111,6 +177,12 @@ impl UpdaterState {
     pub fn client_id(&self) -> String {
         self.serialized_state.client_id.clone()
     }
+
+    /// Returns the reason `client_id` was regenerated on this load, if any,
+    /// clearing it so each regeneration is reported at most once.
+    pub(crate) fn take_regenerated_reason(&mut self) -> Option<&'static str> {
+        self.regenerated_reason.take()
+    }
 }
 
 impl UpdaterState {
@@ -129,10 +201,12 @@ impl UpdaterState {
             patch_public_key: patch_public_key.map(|s| s.to_owned()),
             verification_mode,
             serialized_state: SerializedState {
+                schema_version: CURRENT_SCHEMA_VERSION,
                 client_id,
                 release_version,
                 queued_events,
             },
+            regenerated_reason: None,
         }
     }
 
@@ -143,7 +217,10 @@ impl UpdaterState {
         verification_mode: PatchVerificationMode,
     ) -> Result<Self> {
         let path = cache_dir.join(STATE_FILE_NAME);
-        let serialized_state = disk_io::read(&path)?;
+        let serialized_state: SerializedState = disk_io::read(&path)?;
+        if !is_valid_client_id(&serialized_state.client_id) {
+            return Err(anyhow::Error::new(InvalidClientIdError));
+        }
         Ok(Self {
             cache_dir: cache_dir.to_path_buf(),
             lifecycle: PatchLifecycle::load_or_default(
@@ -153,6 +230,7 @@ impl UpdaterState {
             patch_public_key: patch_public_key.map(|s| s.to_owned()),
             verification_mode,
             serialized_state,
+            regenerated_reason: None,
         })
     }
 
@@ -258,15 +336,28 @@ impl UpdaterState {
             }
             Err(e) => {
                 shorebird_info!("No usable state file ({:#}), creating new state.", e);
-                Ok(Self::create_new_and_save(
+                let state_path = cache_dir.join(STATE_FILE_NAME);
+                let (client_id, regenerated_reason) = if is_not_found(&e) {
+                    (generate_client_id(), None)
+                } else if e.downcast_ref::<InvalidClientIdError>().is_some() {
+                    (generate_client_id(), Some("invalid_client_id"))
+                } else if let Some(recovered) = recover_client_id_from_file(&state_path) {
+                    shorebird_info!("Recovered client_id from partially readable state file.");
+                    (recovered, None)
+                } else {
+                    (generate_client_id(), Some("corrupt_state"))
+                };
+                let mut state = Self::create_new_and_save(
                     cache_dir,
                     download_dir,
                     release_version,
                     patch_public_key,
                     verification_mode,
-                    generate_client_id(),
+                    client_id,
                     Vec::new(),
-                ))
+                );
+                state.regenerated_reason = regenerated_reason;
+                Ok(state)
             }
         }
     }
@@ -790,5 +881,106 @@ mod tests {
             .collect();
         expected.sort();
         assert_eq!(ids, expected);
+    }
+
+    #[test]
+    fn schema_defaults_preserve_client_id_when_fields_missing() {
+        let tmp = TempDir::new().unwrap();
+        let existing_id = uuid::Uuid::new_v4().to_string();
+        std::fs::write(
+            tmp.path().join(STATE_FILE_NAME),
+            format!(r#"{{"client_id": "{existing_id}", "release_version": "1.0.0+1"}}"#),
+        )
+        .unwrap();
+
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert_eq!(reloaded.client_id(), existing_id);
+        assert!(reloaded.take_regenerated_reason().is_none());
+    }
+
+    #[test]
+    fn unknown_event_type_in_queue_is_dropped_without_losing_client_id() {
+        let tmp = TempDir::new().unwrap();
+        let mut original = load(&tmp, "1.0.0+1");
+        let existing_id = original.client_id();
+        original.queue_event(event(1)).unwrap();
+        install_fake_patch_into(&mut original, 1).unwrap();
+        original.save().unwrap();
+
+        let state_path = tmp.path().join(STATE_FILE_NAME);
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        let mut unknown = raw["queued_events"][0].clone();
+        unknown["type"] = serde_json::Value::String("__future_event__".to_string());
+        raw["queued_events"].as_array_mut().unwrap().push(unknown);
+        std::fs::write(&state_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert_eq!(reloaded.client_id(), existing_id);
+        assert_eq!(reloaded.copy_events(10), vec![event(1)]);
+        assert_eq!(reloaded.next_boot_patch().map(|p| p.number), Some(1));
+        assert!(reloaded.take_regenerated_reason().is_none());
+    }
+
+    #[test]
+    fn partial_parse_failure_recovers_client_id_without_regeneration_reason() {
+        let tmp = TempDir::new().unwrap();
+        let existing_id = uuid::Uuid::new_v4().to_string();
+        // `queued_events` is not an array, so `SerializedState` deserialization
+        // fails, but `client_id` is still readable from the JSON object.
+        std::fs::write(
+            tmp.path().join(STATE_FILE_NAME),
+            format!(
+                r#"{{"client_id": "{existing_id}", "release_version": "1.0.0+1", "queued_events": "corrupt"}}"#
+            ),
+        )
+        .unwrap();
+
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert_eq!(reloaded.client_id(), existing_id);
+        assert!(reloaded.take_regenerated_reason().is_none());
+    }
+
+    #[test]
+    fn missing_state_file_generates_client_id_without_regeneration_reason() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = load(&tmp, "1.0.0+1");
+        assert!(is_valid_client_id(&state.client_id()));
+        assert!(state.take_regenerated_reason().is_none());
+    }
+
+    #[test]
+    fn corrupt_state_file_sets_regeneration_reason() {
+        let tmp = TempDir::new().unwrap();
+        let original = load(&tmp, "1.0.0+1");
+        std::fs::write(tmp.path().join(STATE_FILE_NAME), "not json").unwrap();
+
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert_ne!(reloaded.client_id(), original.client_id());
+        assert_eq!(reloaded.take_regenerated_reason(), Some("corrupt_state"));
+        assert!(reloaded.take_regenerated_reason().is_none());
+    }
+
+    #[test]
+    fn invalid_client_id_is_replaced_and_sets_regeneration_reason() {
+        let tmp = TempDir::new().unwrap();
+        let nul_id = "\0".repeat(36);
+        let json = serde_json::json!({
+            "client_id": nul_id,
+            "release_version": "1.0.0+1",
+            "queued_events": [],
+        });
+        std::fs::write(
+            tmp.path().join(STATE_FILE_NAME),
+            serde_json::to_vec(&json).unwrap(),
+        )
+        .unwrap();
+
+        let mut reloaded = load(&tmp, "1.0.0+1");
+        assert!(is_valid_client_id(&reloaded.client_id()));
+        assert_eq!(
+            reloaded.take_regenerated_reason(),
+            Some("invalid_client_id")
+        );
     }
 }
