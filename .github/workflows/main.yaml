@@ -53,6 +53,8 @@ jobs:
               # flutter package job on those paths too.
               - library/**
               - library_test_hooks/**
+              - .github/actions/flutter_package/**
+              - .github/actions/setup_flutter/**
 
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         name: Build Detection

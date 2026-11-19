@@ -1,0 +1,31 @@
+name: Setup Flutter
+description: Install Flutter SDK via git clone without unpinned third-party actions
+
+inputs:
+  flutter_version:
+    required: false
+    default: ""
+    description: Flutter version tag (defaults to channel when empty)
+  channel:
+    required: false
+    default: "stable"
+    description: Flutter channel to clone when flutter_version is empty
+
+runs:
+  using: "composite"
+  steps:
+    - name: Clone Flutter SDK
+      shell: bash
+      env:
+        FLUTTER_VERSION: ${{ inputs.flutter_version }}
+        FLUTTER_CHANNEL: ${{ inputs.channel }}
+      run: |
+        ref="${FLUTTER_VERSION:-${FLUTTER_CHANNEL:-stable}}"
+        flutter_dir="$RUNNER_TOOL_CACHE/flutter-$ref"
+        if [ ! -x "$flutter_dir/bin/flutter" ]; then
+          rm -rf "$flutter_dir"
+          git clone --depth 1 --branch "$ref" https://github.com/flutter/flutter.git "$flutter_dir"
+        fi
+        echo "$flutter_dir/bin" >> "$GITHUB_PATH"
+        echo "$flutter_dir/bin/cache/dart-sdk/bin" >> "$GITHUB_PATH"
+        "$flutter_dir/bin/flutter" --version
