@@ -298,7 +298,7 @@ static UNREADABLE_STATE: Mutex<Option<UnreadableState>> = Mutex::new(None);
 
 /// Loads the updater state. A read failure is held (see [`UnreadableState`]);
 /// the first load that succeeds afterwards queues a `state_unreadable`
-/// failure event for it. The engine calls [`protected_data_available`] when
+/// diagnostic event for it. The engine calls [`protected_data_available`] when
 /// iOS unlocks the files, which makes that load.
 ///
 /// The state is loaded under [`StateLock`], which the caller holds until it's
@@ -348,7 +348,7 @@ pub(crate) fn load_state(config: &UpdateConfig) -> anyhow::Result<(StateLock, Up
     }
 }
 
-/// The `PatchUpdateFailure` event for `unreadable`, made from the first
+/// The `state_unreadable` diagnostic for `unreadable`, made from the first
 /// state that reads after it. Its patch number is the patch that state would
 /// boot (0 for none), so a report with a patch is a launch that lost it.
 fn unreadable_state_event(
@@ -357,39 +357,40 @@ fn unreadable_state_event(
     unreadable: &UnreadableState,
 ) -> PatchEvent {
     let patch_number = state.next_boot_patch().map(|p| p.number);
+    // The message keeps the `state_unreadable:` lead that the server's
+    // readers of the `__patch_update_failure__` form match, and carries the
+    // category, which diagnostics have no column for.
     let message = format!(
-        "state_unreadable: booted_base={},patch_installed={},first_failed_at={} ({})",
+        "state_unreadable: booted_base={},patch_installed={},first_failed_at={},category={} ({})",
         unreadable.booted_base,
         patch_number.is_some(),
         unreadable.first_failed_at,
+        unreadable.category.code(),
         unreadable.message,
     );
-    let mut event = PatchEvent::new(
+    PatchEvent::diagnostic(
         config,
-        EventType::PatchUpdateFailure,
+        "state_unreadable",
         patch_number.unwrap_or(0),
         state.client_id(),
-        Some(&message),
-    );
-    event.failure_category = Some(unreadable.category.code().to_string());
-    event
+        &message,
+    )
 }
 
+/// The `client_id_regenerated` diagnostic for a state that had to mint a new
+/// client_id because of `reason`.
 fn client_id_regenerated_event(
     state: &mut UpdaterState,
     config: &UpdateConfig,
     reason: &str,
 ) -> PatchEvent {
-    let message = format!("client_id_regenerated: reason={reason}");
-    let mut event = PatchEvent::new(
+    PatchEvent::diagnostic(
         config,
-        EventType::PatchUpdateFailure,
+        "client_id_regenerated",
         state.next_boot_patch().map(|p| p.number).unwrap_or(0),
         state.client_id(),
-        Some(&message),
-    );
-    event.failure_category = Some("client_id_regenerated".to_string());
-    event
+        &format!("client_id_regenerated: reason={reason}"),
+    )
 }
 
 /// The engine calls this when the app's protected files become readable
@@ -4464,12 +4465,10 @@ mod state_recovery_tests {
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].identifier,
-            crate::events::EventType::PatchUpdateFailure
+            crate::events::EventType::UpdaterDiagnostic
         );
-        assert_eq!(
-            events[0].failure_category.as_deref(),
-            Some("client_id_regenerated")
-        );
+        assert_eq!(events[0].kind.as_deref(), Some("client_id_regenerated"));
+        assert_eq!(events[0].failure_category, None);
         assert_eq!(
             events[0].message.as_deref(),
             Some("client_id_regenerated: reason=corrupt_state")
@@ -6053,7 +6052,9 @@ mod unreadable_state_tests {
             let events = state.copy_events(10);
             assert_eq!(events.len(), 1);
             let event = &events[0];
-            assert_eq!(event.identifier, EventType::PatchUpdateFailure);
+            assert_eq!(event.identifier, EventType::UpdaterDiagnostic);
+            assert_eq!(event.kind.as_deref(), Some("state_unreadable"));
+            assert_eq!(event.failure_category, None);
             assert_eq!(event.patch_number, 1);
             let message = event.message.as_deref().unwrap();
             assert!(
@@ -6063,7 +6064,7 @@ mod unreadable_state_tests {
             assert!(message.contains("state.json"), "{message}");
             // A directory opens, so its read error comes from inside the
             // JSON reader; the EPERM test below covers the category.
-            assert!(event.failure_category.is_some());
+            assert!(message.contains(",category="), "{message}");
             Ok(())
         })?;
         // Reported once.
@@ -6121,9 +6122,10 @@ mod unreadable_state_tests {
         let events = with_state(|state| Ok(state.copy_events(10)))?;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].patch_number, 1);
-        assert_eq!(
-            events[0].failure_category.as_deref(),
-            Some("permission_denied")
+        let message = events[0].message.as_deref().unwrap();
+        assert!(
+            message.contains(",category=permission_denied ("),
+            "{message}"
         );
         Ok(())
     }
@@ -6148,11 +6150,12 @@ mod unreadable_state_tests {
             };
             let (_lock, mut state) = load_state(config)?;
             let event = unreadable_state_event(&mut state, config, &unreadable);
-            assert_eq!(event.failure_category.as_deref(), Some("permission_denied"));
+            assert_eq!(event.identifier, EventType::UpdaterDiagnostic);
+            assert_eq!(event.kind.as_deref(), Some("state_unreadable"));
             let message = event.message.unwrap();
             assert!(
                 message.starts_with(
-                    "state_unreadable: booted_base=true,patch_installed=false,first_failed_at=7 ("
+                    "state_unreadable: booted_base=true,patch_installed=false,first_failed_at=7,category=permission_denied ("
                 ),
                 "{message}"
             );

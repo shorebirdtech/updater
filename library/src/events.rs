@@ -15,6 +15,11 @@ pub enum EventType {
     PatchInstallFailure,
     PatchDownload,
     PatchUpdateFailure,
+    /// Something the updater reports about itself that is not a patch
+    /// failure (its state file was unreadable, it had to mint a new
+    /// client_id). Carries a `kind`. The server keeps these out of patch
+    /// failure counts and everything customers see.
+    UpdaterDiagnostic,
 }
 
 impl Serialize for EventType {
@@ -27,6 +32,7 @@ impl Serialize for EventType {
             EventType::PatchInstallFailure => "__patch_install_failure__",
             EventType::PatchDownload => "__patch_download__",
             EventType::PatchUpdateFailure => "__patch_update_failure__",
+            EventType::UpdaterDiagnostic => "__updater_diagnostic__",
         })
     }
 }
@@ -42,13 +48,14 @@ impl<'de> Deserialize<'de> for EventType {
             "__patch_install_failure__" => Ok(EventType::PatchInstallFailure),
             "__patch_download__" => Ok(EventType::PatchDownload),
             "__patch_update_failure__" => Ok(EventType::PatchUpdateFailure),
+            "__updater_diagnostic__" => Ok(EventType::UpdaterDiagnostic),
             _ => Err(serde::de::Error::custom(format!("Unknown event type: {s}"))),
         }
     }
 }
 
-/// An event sent to the server about a patch: a download, an install, or an
-/// install or update failure.
+/// An event sent to the server about a patch (a download, an install, or an
+/// install or update failure) or about the updater itself (a diagnostic).
 ///
 /// Any edits to this struct should be made carefully and in accordance
 /// with our privacy policy, <https://shorebird.dev/privacy/>, and should
@@ -111,6 +118,12 @@ pub struct PatchEvent {
     /// that predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
+
+    /// For `UpdaterDiagnostic` events, what is being reported: a short code
+    /// such as `state_unreadable` or `client_id_regenerated`. The server
+    /// requires it on that type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl PatchEvent {
@@ -136,7 +149,28 @@ impl PatchEvent {
             message: message.map(|s| s.to_string()),
             failure_category: None,
             event_id: Some(uuid::Uuid::new_v4().to_string()),
+            kind: None,
         }
+    }
+
+    /// Creates an `UpdaterDiagnostic` event of `kind` for reporting to the
+    /// server.
+    pub fn diagnostic(
+        config: &UpdateConfig,
+        kind: &str,
+        patch_number: usize,
+        client_id: String,
+        message: &str,
+    ) -> PatchEvent {
+        let mut event = PatchEvent::new(
+            config,
+            EventType::UpdaterDiagnostic,
+            patch_number,
+            client_id,
+            Some(message),
+        );
+        event.kind = Some(kind.to_string());
+        event
     }
 }
 
@@ -151,6 +185,7 @@ mod tests {
             (EventType::PatchInstallFailure, "__patch_install_failure__"),
             (EventType::PatchDownload, "__patch_download__"),
             (EventType::PatchUpdateFailure, "__patch_update_failure__"),
+            (EventType::UpdaterDiagnostic, "__updater_diagnostic__"),
         ];
         for (event_type, expected_str) in &types {
             let json = serde_json::to_string(event_type).unwrap();
@@ -188,6 +223,22 @@ mod tests {
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["host_bundle_id"], "com.example.host");
         assert_eq!(value["host_version"], "2.0.0+5");
+    }
+
+    #[test]
+    fn kind_is_sent_only_when_set() {
+        let json = r#"{"app_id":"a","arch":"aarch64","client_id":"c",
+            "type":"__updater_diagnostic__","patch_number":0,
+            "platform":"ios","release_version":"1.0.0","timestamp":1,
+            "message":"m","kind":"state_unreadable"}"#;
+        let mut event: PatchEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.identifier, EventType::UpdaterDiagnostic);
+        assert_eq!(
+            serde_json::to_value(&event).unwrap()["kind"],
+            "state_unreadable"
+        );
+        event.kind = None;
+        assert!(serde_json::to_value(&event).unwrap().get("kind").is_none());
     }
 
     #[test]

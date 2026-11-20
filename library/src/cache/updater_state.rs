@@ -629,6 +629,7 @@ mod tests {
             message: None,
             failure_category: None,
             event_id: Some(format!("id-{patch_number}")),
+            kind: None,
         }
     }
 
