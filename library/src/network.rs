@@ -799,6 +799,7 @@ mod tests {
             message: None,
             failure_category: None,
             event_id: None,
+            kind: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -826,6 +827,7 @@ mod tests {
             message: Some("update_failure: patch 1 failed (...)".to_string()),
             failure_category: Some("network".to_string()),
             event_id: None,
+            kind: None,
         };
         let json_string = serde_json::to_string(&event).unwrap();
         assert!(
@@ -850,6 +852,7 @@ mod tests {
             message: Some("hello".to_string()),
             failure_category: None,
             event_id: None,
+            kind: None,
         };
         let request = super::CreatePatchEventRequest { event };
         let json_string = serde_json::to_string(&request).unwrap();
@@ -958,6 +961,7 @@ mod tests {
                 message: None,
                 failure_category: None,
                 event_id: None,
+                kind: None,
             },
         }
     }
