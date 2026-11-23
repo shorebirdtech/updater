@@ -381,8 +381,11 @@ impl std::fmt::Display for NetworkError {
                 status,
                 error: Some(error),
             } => write!(f, "{} (status {status}): {}", error.code, error.message),
-            // No endpoint the updater calls answers 429; it comes from
-            // infrastructure in front of the server shedding load.
+            // `POST /api/v1/patches/events` answers 429 with a `rate_limited`
+            // body, which matches the arm above. What reaches here is a 429
+            // with no body of ours, from infrastructure in front of the server
+            // shedding load. `is_refused_event` counts neither as a refusal,
+            // so a rate-limited event stays queued for a later flush.
             NetworkError::Server {
                 status: 429,
                 error: None,
