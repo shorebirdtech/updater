@@ -19,10 +19,11 @@ jobs:
       - name: 📚 Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           submodules: recursive
 
       - name: 📦 Publish Package
-        uses: ./.github/actions/publish_flutter_package
+        uses: $/.github/actions/publish_flutter_package
         with:
           # Specify the github actions deployment environment
           working-directory: shorebird_code_push

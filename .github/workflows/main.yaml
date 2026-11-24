@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: 📚 Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         name: Build Detection
@@ -100,9 +102,11 @@ jobs:
     steps:
       - name: 📚 Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: 🦀 Build ${{ matrix.crate }}
-        uses: ./.github/actions/rust_crate
+        uses: $/.github/actions/rust_crate
         with:
           working_directory: ${{ matrix.crate }}
 
@@ -132,6 +136,8 @@ jobs:
     steps:
       - name: 📚 Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: 🦀 Add ${{ matrix.target }}
         run: rustup target add ${{ matrix.target }}
@@ -166,6 +172,8 @@ jobs:
     steps:
       - name: 📚 Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: 🛡️ cargo deny
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -188,10 +196,11 @@ jobs:
       - name: 📚 Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           submodules: recursive
 
       - name: 🐦 Build ${{ matrix.package }}
-        uses: ./.github/actions/flutter_package
+        uses: $/.github/actions/flutter_package
         with:
           coverage_excludes: "**/*.g.dart"
           working_directory: ${{ matrix.package }}
