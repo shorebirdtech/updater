@@ -1,3 +1,4 @@
+pub mod asset_manifest;
 pub(crate) mod disk_io;
 pub mod lifecycle;
 mod signing;

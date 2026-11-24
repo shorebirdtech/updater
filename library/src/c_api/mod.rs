@@ -426,12 +426,7 @@ mod test {
                 assert_eq!(request.channel, "stable");
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -480,12 +475,7 @@ mod test {
                 assert_eq!(request.channel, "beta");
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -621,12 +611,7 @@ mod test {
                 assert_eq!(request.channel, "beta");
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -671,12 +656,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -731,12 +711,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -803,12 +778,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -888,12 +858,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -978,12 +943,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -1023,12 +983,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: Some(vec![]),
                 })
             },
@@ -1075,12 +1030,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 2,
-                        hash: HELLO_PATCH_2_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(2, "ignored", HELLO_PATCH_2_PATCH.hash)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -1099,12 +1049,7 @@ mod test {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: HELLO_TESTS_PATCH.hash.to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", HELLO_TESTS_PATCH.hash)),
                     rolled_back_patch_numbers: Some(vec![2]),
                 })
             },
@@ -1134,12 +1079,8 @@ mod test {
                 };
                 Ok(PatchCheckResponse {
                     patch_available: patch.is_some(),
-                    patch: patch.map(|(number, hash)| crate::Patch {
-                        number,
-                        hash: hash.to_owned(),
-                        download_url: number.to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: patch
+                        .map(|(number, hash)| crate::Patch::code(number, number.to_string(), hash)),
                     rolled_back_patch_numbers: Some(vec![]),
                 })
             },
@@ -1338,12 +1279,7 @@ mod test {
                 let _lock = CALLBACK_MUTEX.lock().unwrap();
                 Ok(PatchCheckResponse {
                     patch_available: false,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: "ignored".to_owned(),
-                        download_url: "ignored".to_owned(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(1, "ignored", "ignored")),
                     rolled_back_patch_numbers: None,
                 })
             },

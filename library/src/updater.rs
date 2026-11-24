@@ -24,10 +24,16 @@ use crate::yaml::YamlConfig;
 
 // Expose testing_reset_config for in-crate unit tests (under #[cfg(test)])
 // and for the `library_test_hooks` sibling crate (under feature = "test-hooks").
+pub use crate::cache::asset_manifest::{
+    asset_files_path, asset_path_for_key, blob_url, is_poison_asset_key, is_valid_sha256_hex,
+    manifest_path, validate_asset_key, PatchAssetEncoding, PatchAssetEntry, PatchAssetManifest,
+    POISON_ASSET_KEYS, SUPPORTED_VERSION,
+};
 #[cfg(any(test, feature = "test-hooks"))]
 pub use crate::config::testing_reset_config;
 #[cfg(test)]
-pub use crate::network::{DownloadToPathFn, Patch, PatchCheckRequestFn};
+pub use crate::network::{DownloadToPathFn, PatchCheckRequestFn};
+pub use crate::network::{Patch, PatchAssetManifestRef, PatchCheckResponse};
 
 #[derive(Debug, PartialEq)]
 pub enum UpdateStatus {
@@ -581,11 +587,16 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     }
 
     if let Some(patch) = response.patch {
+        let (Some(download_url), Some(hash)) =
+            (patch.download_url.as_deref(), patch.hash.as_deref())
+        else {
+            return Ok(false);
+        };
         let action = with_state(|state| {
             Ok(state.lifecycle().decide_start(
                 patch.number,
-                &patch.download_url,
-                &patch.hash,
+                download_url,
+                hash,
                 patch.hash_signature.as_deref(),
             ))
         })?;
@@ -734,12 +745,16 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
+    let (Some(download_url), Some(hash)) = (patch.download_url.as_deref(), patch.hash.as_deref())
+    else {
+        return Err(UpdateError::BadServerResponse.into());
+    };
 
     let action = with_state(|state| {
         Ok(state.lifecycle().decide_start(
             patch.number,
-            &patch.download_url,
-            &patch.hash,
+            download_url,
+            hash,
             patch.hash_signature.as_deref(),
         ))
     })?;
@@ -756,7 +771,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let patch_number = patch.number;
-    let result = download_and_install_patch(&config, &patch, action);
+    let result = download_and_install_patch(&config, &patch, download_url, hash, action);
 
     if let Err(ref err) = result {
         // Queue a diagnostic event for the failed update attempt.
@@ -1051,6 +1066,8 @@ fn truncate_error_message(msg: &str) -> String {
 fn download_and_install_patch(
     config: &UpdateConfig,
     patch: &crate::network::Patch,
+    download_url: &str,
+    hash: &str,
     action: DownloadAction,
 ) -> anyhow::Result<UpdateStatus> {
     // Verify the signature before anything is fetched, in every mode: it
@@ -1061,14 +1078,14 @@ fn download_and_install_patch(
     // refused pair is tombstoned so later checks skip it quietly rather
     // than re-reporting it on every launch.
     if let Err(e) = crate::cache::check_patch_signature(
-        &patch.hash,
+        hash,
         patch.hash_signature.as_deref(),
         config.patch_public_key.as_deref(),
     ) {
         if let Err(state_err) = with_mut_state(|state| {
             state.lifecycle_mut().record_signature_refused(
                 patch.number,
-                &patch.hash,
+                hash,
                 patch.hash_signature.as_deref(),
             )
         }) {
@@ -1105,8 +1122,8 @@ fn download_and_install_patch(
         with_mut_state(|state| {
             state.lifecycle_mut().record_download_started(
                 patch.number,
-                &patch.download_url,
-                &patch.hash,
+                download_url,
+                hash,
                 patch.hash_signature.as_deref(),
             )
         })?;
@@ -1118,7 +1135,7 @@ fn download_and_install_patch(
         // Consider supporting allowing the system to download for us (e.g. iOS).
         let dl_result = download_to_path(
             &config.network_hooks,
-            &patch.download_url,
+            download_url,
             &download_path,
             resume_from,
         )?;
@@ -1153,7 +1170,7 @@ fn download_and_install_patch(
         shorebird_info!("Prior download already complete; skipping fetch.");
     }
 
-    install_downloaded_patch(config, patch, &download_path)
+    install_downloaded_patch(config, patch.number, hash, &download_path)
 }
 
 /// Inflates the compressed bytes at `download_path` into the lifecycle's
@@ -1163,11 +1180,12 @@ fn download_and_install_patch(
 /// update cycle short-circuits via `decide_start`.
 fn install_downloaded_patch(
     config: &UpdateConfig,
-    patch: &crate::network::Patch,
+    patch_number: usize,
+    hash: &str,
     download_path: &Path,
 ) -> anyhow::Result<UpdateStatus> {
     let installed_path =
-        lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch.number);
+        lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch_number);
 
     let patch_base_rs = patch_base(config)?;
     if let Err(e) = inflate(download_path, patch_base_rs, &installed_path) {
@@ -1175,11 +1193,11 @@ fn install_downloaded_patch(
         // The error is returned as-is (message-preserving): content problems are
         // already tagged `CorruptPatch` inside `validate_compressed_patch`, and a
         // disk-full/permission IO cause stays downcastable for classification.
-        mark_patch_bad(patch.number, BadReason::InvalidPatchBytes);
+        mark_patch_bad(patch_number, BadReason::InvalidPatchBytes);
         return Err(e);
     }
 
-    if let Err(e) = check_hash(&installed_path, &patch.hash).with_context(|| {
+    if let Err(e) = check_hash(&installed_path, hash).with_context(|| {
         format!(
             "This app reports version {}, but the binary is different from \
         the version {} that was submitted to Shorebird.",
@@ -1189,7 +1207,7 @@ fn install_downloaded_patch(
         // Hash mismatch — bytes decompressed but produced the wrong
         // result. Most often a customer build/release mismatch on their
         // side; deterministic on this device.
-        mark_patch_bad(patch.number, BadReason::InstallHashMismatch);
+        mark_patch_bad(patch_number, BadReason::InstallHashMismatch);
         return Err(e);
     }
 
@@ -1198,22 +1216,22 @@ fn install_downloaded_patch(
     with_mut_state(|state| {
         state
             .lifecycle_mut()
-            .record_install_complete(patch.number, installed_size)?;
+            .record_install_complete(patch_number, installed_size)?;
         // The patch this process loaded stays installed even while no boot
         // breadcrumb names it (an engine built and not yet run).
         let running_patch = crate::config::running_patch_number();
         state
             .lifecycle_mut()
-            .promote_to_next_boot(patch.number, running_patch)?;
+            .promote_to_next_boot(patch_number, running_patch)?;
         shorebird_info!(
             "Patch {} successfully downloaded. It will be launched when the app next restarts.",
-            patch.number
+            patch_number
         );
 
         let event = PatchEvent::new(
             config,
             EventType::PatchDownload,
-            patch.number,
+            patch_number,
             state.client_id(),
             None,
         );
@@ -2269,11 +2287,12 @@ patch_verification: bogus_mode
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
+                download_url: Some(download_url.to_string()),
                 // Generated by `string_patch "hello world" "hello tests"`
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: Some(vec![2]),
         };
@@ -2338,11 +2357,12 @@ patch_verification: bogus_mode
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
+                download_url: Some(download_url.to_string()),
                 // Generated by `string_patch "hello world" "hello tests"`
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: Some(vec![2]),
         };
@@ -2834,12 +2854,7 @@ patch_verification: bogus_mode
         let mut server = mockito::Server::new();
         let check_response = PatchCheckResponse {
             patch_available: true,
-            patch: Some(crate::network::Patch {
-                number: 1,
-                download_url: "download_url".to_string(),
-                hash: "hash".to_string(),
-                hash_signature: None,
-            }),
+            patch: Some(crate::network::Patch::code(1, "download_url", "hash")),
             rolled_back_patch_numbers: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
@@ -2884,12 +2899,7 @@ patch_verification: bogus_mode
         let mut server = mockito::Server::new();
         let check_response = PatchCheckResponse {
             patch_available: true,
-            patch: Some(Patch {
-                number: patch_number,
-                hash: "#".to_string(),
-                download_url: "download_url".to_string(),
-                hash_signature: None,
-            }),
+            patch: Some(Patch::code(patch_number, "download_url", "#")),
             rolled_back_patch_numbers: None,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
@@ -3093,10 +3103,11 @@ patch_verification: bogus_mode
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                download_url: Some(download_url.to_string()),
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: None,
         };
@@ -3161,12 +3172,7 @@ patch_verification: bogus_mode
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(Patch {
-                        number: 1,
-                        hash: "abc123".to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(Patch::code(1, "http://example.com/patch/1", "abc123")),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -3264,9 +3270,10 @@ patch_verification: bogus_mode
                     patch_available: true,
                     patch: Some(Patch {
                         number: 1,
-                        hash: HELLO_TESTS_HASH.to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
+                        hash: Some(HELLO_TESTS_HASH.to_string()),
+                        download_url: Some("http://example.com/patch/1".to_string()),
                         hash_signature: OFFERED_SIGNATURE.lock().unwrap().clone(),
+                        asset_manifest: None,
                     }),
                     rolled_back_patch_numbers: None,
                 })
@@ -3699,10 +3706,11 @@ patch_verification: bogus_mode
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                download_url: Some(download_url.to_string()),
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: None,
         };
@@ -3761,10 +3769,11 @@ patch_verification: bogus_mode
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                download_url: Some(download_url.to_string()),
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: None,
         };
@@ -3844,10 +3853,11 @@ patch_verification: bogus_mode
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                download_url: Some(download_url.to_string()),
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: None,
         };
@@ -3994,10 +4004,11 @@ mod rollback_tests {
             patch_available: true,
             patch: Some(Patch {
                 number: 4,
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                download_url: download_url.to_string(),
-                hash_signature: None,
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                download_url: Some(download_url.to_string()),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: Some(vec![3, 2]),
         };
@@ -4145,11 +4156,12 @@ mod rollback_tests {
             patch_available: true,
             patch: Some(Patch {
                 number: 1,
-                download_url: download_url.to_string(),
+                download_url: Some(download_url.to_string()),
                 // Generated by `string_patch "hello world" "hello tests"`
-                hash: "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45"
-                    .to_string(),
-                hash_signature: None,
+                hash: Some(
+                    "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45".to_string(),
+                ),
+                ..Default::default()
             }),
             rolled_back_patch_numbers: Some(vec![2]),
         };
@@ -4228,12 +4240,7 @@ mod check_for_downloadable_update_tests {
         let mut server = mockito::Server::new();
         let check_response = PatchCheckResponse {
             patch_available: available_patch_number.is_some(),
-            patch: available_patch_number.map(|number| Patch {
-                number,
-                hash: "#".to_string(),
-                download_url: "download_url".to_string(),
-                hash_signature: None,
-            }),
+            patch: available_patch_number.map(|number| Patch::code(number, "download_url", "#")),
             rolled_back_patch_numbers,
         };
         let check_response_body = serde_json::to_string(&check_response).unwrap();
@@ -4920,12 +4927,7 @@ mod download_validation_tests {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(Patch {
-                        number: 1,
-                        hash: "abc123".to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(Patch::code(1, "http://example.com/patch/1", "abc123")),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -4967,12 +4969,7 @@ mod download_validation_tests {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(Patch {
-                        number: 1,
-                        hash: "abc123".to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(Patch::code(1, "http://example.com/patch/1", "abc123")),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -5015,12 +5012,7 @@ mod download_validation_tests {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(Patch {
-                        number: 1,
-                        hash: "abc123".to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(Patch::code(1, "http://example.com/patch/1", "abc123")),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -5240,12 +5232,7 @@ mod resume_edge_case_tests {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(Patch {
-                        number: 1,
-                        hash: PATCH_HASH.to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(Patch::code(1, "http://example.com/patch/1", PATCH_HASH)),
                     rolled_back_patch_numbers: None,
                 })
             },
@@ -5528,12 +5515,11 @@ mod resume_edge_case_tests {
             |_url, _request| {
                 Ok(PatchCheckResponse {
                     patch_available: true,
-                    patch: Some(crate::Patch {
-                        number: 1,
-                        hash: PATCH_HASH.to_string(),
-                        download_url: "http://example.com/patch/1".to_string(),
-                        hash_signature: None,
-                    }),
+                    patch: Some(crate::Patch::code(
+                        1,
+                        "http://example.com/patch/1",
+                        PATCH_HASH,
+                    )),
                     rolled_back_patch_numbers: None,
                 })
             },
