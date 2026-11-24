@@ -1,0 +1,6 @@
+# Not a Dart package: updater's only package is shorebird_code_push/. This file
+# exists so `shorebird_ci verify` can read the inputs `shorebird_ci generate`
+# was run with and rebuild .github/workflows from them, which is what tells a
+# hand edit apart from what generation writes.
+shorebird_ci:
+  required: true

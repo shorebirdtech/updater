@@ -10,8 +10,10 @@ name: build_patch_artifacts
 # Don't publish a patch release from the UI: it would have no binaries,
 # and an immutable release's tag can never be reused.
 
+# Each job below writes the draft release, so the grant sits on the jobs
+# rather than on the workflow, where it would also cover any job added later.
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
@@ -22,6 +24,8 @@ jobs:
   create-draft:
     runs-on: ubuntu-latest
     name: 📝 Create Draft Release
+    permissions:
+      contents: write
     steps:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,6 +37,8 @@ jobs:
 
   upload-artifacts:
     needs: create-draft
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -58,6 +64,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # zstd-sys compiles C; for a musl target the cc crate looks for
       # musl-gcc.
@@ -91,6 +99,8 @@ jobs:
     needs: upload-artifacts
     runs-on: ubuntu-latest
     name: 🚀 Publish Release
+    permissions:
+      contents: write
     steps:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
