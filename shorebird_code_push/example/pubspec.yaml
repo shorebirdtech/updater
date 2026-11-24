@@ -6,11 +6,12 @@ version: 1.0.0+1
 
 environment:
   sdk: ">=3.5.4 <4.0.0"
-  flutter: ">=3.24.5"
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  material_ui: ^1.11.1
   shorebird_code_push:
     path: ../
 

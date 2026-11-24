@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 void main() => runApp(const MyApp());
