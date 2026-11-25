@@ -468,19 +468,39 @@ pub fn testing_set_network_hooks(
     });
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Patch {
-    /// The patch number.  Starts at 1 for each new release and increases
-    /// monotonically.
-    pub number: usize,
-    /// The hex-encoded sha256 hash of the final uncompressed patch file.
-    /// Legacy: originally "#" before we implemented hash checks (remove).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PatchAssetManifestRef {
+    pub manifest_url: String,
+    pub blob_base_url: String,
     pub hash: String,
-    /// The URL to download the patch file from.
-    pub download_url: String,
-    /// The signature of `hash`, if this patch is signed. None otherwise.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_signature: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Patch {
+    /// Starts at 1 for each new release and increases monotonically.
+    pub number: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_manifest: Option<PatchAssetManifestRef>,
+}
+
+impl Patch {
+    pub fn code(number: usize, download_url: impl Into<String>, hash: impl Into<String>) -> Self {
+        Self {
+            number,
+            hash: Some(hash.into()),
+            download_url: Some(download_url.into()),
+            hash_signature: None,
+            asset_manifest: None,
+        }
+    }
 }
 
 /// The request body for the patch check endpoint.
@@ -629,7 +649,7 @@ pub struct CreatePatchEventRequest {
 }
 
 /// A response from the server telling us the latest state of patches for this release.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PatchCheckResponse {
     pub patch_available: bool,
     #[serde(default)]
@@ -639,6 +659,15 @@ pub struct PatchCheckResponse {
     /// uninstalled from the device and not booted from.
     #[serde(default)]
     pub rolled_back_patch_numbers: Option<Vec<usize>>,
+}
+
+impl PatchCheckResponse {
+    /// Returns the offered patch's asset manifest reference, if any.
+    pub fn asset_manifest(&self) -> Option<&PatchAssetManifestRef> {
+        self.patch
+            .as_ref()
+            .and_then(|patch| patch.asset_manifest.as_ref())
+    }
 }
 
 /// Reports a patch event (e.g., install success/failure) to the server.
@@ -694,12 +723,74 @@ mod tests {
         let response: PatchCheckResponse = serde_json::from_str(data).unwrap();
 
         assert!(response.patch_available);
+        assert!(response.asset_manifest().is_none());
         assert!(response.patch.is_some());
 
         let patch = response.patch.unwrap();
         assert_eq!(patch.number, 1);
-        assert_eq!(patch.download_url, "https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode");
-        assert_eq!(patch.hash, "1234");
+        assert_eq!(
+            patch.download_url.as_deref(),
+            Some("https://storage.googleapis.com/patch_artifacts/17a28ec1-00cf-452d-bdf9-dbb9acb78600/dlc.vmcode")
+        );
+        assert_eq!(patch.hash.as_deref(), Some("1234"));
+        assert_eq!(patch.asset_manifest, None);
+    }
+
+    #[test]
+    fn check_patch_response_deserializes_asset_manifest_and_code_optional_patch() {
+        let code_hash = "a".repeat(64);
+        let asset_hash = "b".repeat(64);
+        let with_code_and_assets = serde_json::json!({
+            "patch_available": true,
+            "patch": {
+                "number": 2,
+                "download_url": "https://cdn.example.com/app/ios/arm64/2/dlc.vmcode",
+                "hash": code_hash,
+                "hash_signature": "code-sig",
+                "asset_manifest": {
+                    "manifest_url": "https://cdn.example.com/app/patches/2/manifest.json",
+                    "blob_base_url": "https://cdn.example.com/app/patches/2/blobs",
+                    "hash": asset_hash,
+                    "hash_signature": "asset-sig"
+                }
+            }
+        });
+        let response: PatchCheckResponse = serde_json::from_value(with_code_and_assets).unwrap();
+        assert_eq!(
+            response.asset_manifest(),
+            Some(&super::PatchAssetManifestRef {
+                manifest_url: "https://cdn.example.com/app/patches/2/manifest.json".to_string(),
+                blob_base_url: "https://cdn.example.com/app/patches/2/blobs".to_string(),
+                hash: asset_hash.clone(),
+                hash_signature: Some("asset-sig".to_string()),
+            })
+        );
+
+        let assets_only = serde_json::json!({
+            "patch_available": true,
+            "patch": {
+                "number": 3,
+                "asset_manifest": {
+                    "manifest_url": "https://cdn.example.com/app/patches/3/manifest.json",
+                    "blob_base_url": "https://cdn.example.com/app/patches/3/blobs",
+                    "hash": asset_hash
+                }
+            }
+        });
+        let response: PatchCheckResponse = serde_json::from_value(assets_only).unwrap();
+        let patch = response.patch.as_ref().unwrap();
+        assert_eq!(patch.number, 3);
+        assert_eq!(patch.download_url, None);
+        assert_eq!(patch.hash, None);
+        assert_eq!(patch.hash_signature, None);
+        assert!(response.asset_manifest().is_some());
+
+        let round_trip = serde_json::to_value(&response).unwrap();
+        assert!(round_trip["patch"].get("download_url").is_none());
+        assert!(round_trip["patch"].get("hash").is_none());
+        assert!(round_trip["patch"]["asset_manifest"]
+            .get("hash_signature")
+            .is_none());
     }
 
     #[test]
