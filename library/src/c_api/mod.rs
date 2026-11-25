@@ -1314,4 +1314,42 @@ mod test {
             crate::UpdateStatus::NoUpdate
         );
     }
+
+    #[serial]
+    #[test]
+    fn asset_only_patch_install_through_c_api() {
+        testing_reset_config();
+        let tmp = TempDir::new().unwrap();
+        init_two_track_app(&tmp);
+        const BLOB: &[u8] = b"hello, world!";
+        const M: &str = r#"{"version":1,"assets":{"a/b.txt":{"hash":"68e656b251e67e8358bef8483ab0d51c6619f3e7a1a9f0e75838d41ff368f728","size":13}}}"#;
+        const RESP: &str = r#"{"patch_available":true,"patch":{"number":1,"asset_manifest":{"manifest_url":"http://c/m","blob_base_url":"http://c/b","hash":"e3a3c8971a5278a71f0050fc3ad6e2b10fae36145996ec89ec6450cbd4bec491"}}}"#;
+        testing_set_network_hooks(
+            |_, _| Ok(serde_json::from_str(RESP)?),
+            |url, dest: &Path, _| {
+                let b = if url == "http://c/m" {
+                    M.as_bytes()
+                } else {
+                    BLOB
+                };
+                std::fs::write(dest, b)?;
+                let n = b.len() as u64;
+                Ok(DownloadResult {
+                    total_bytes: n,
+                    content_length: Some(n),
+                })
+            },
+            |_, _| Ok(()),
+        );
+        assert!(shorebird_check_for_downloadable_update(std::ptr::null()));
+        run_update_expecting(std::ptr::null(), SHOREBIRD_UPDATE_INSTALLED);
+        shorebird_validate_next_boot_patch();
+        assert_eq!(shorebird_next_boot_patch_number(), 1);
+        assert_eq!(shorebird_next_boot_patch_path(), null_mut());
+        let c_dir = shorebird_next_boot_patch_assets_dir();
+        let dir = to_rust(c_dir).unwrap();
+        unsafe { shorebird_free_string(c_dir) };
+        let path = Path::new(&dir).join("a/b.txt");
+        assert_eq!(std::fs::read(path).unwrap(), BLOB);
+    }
 }
