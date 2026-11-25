@@ -3,12 +3,8 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::{self};
 use std::io::{Cursor, Read, Seek};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-// PathBuf is only used by `libapp_path_from_settings`, which is itself
-// gated to non-android, non-test builds.
-#[cfg(not(any(target_os = "android", test)))]
-use std::path::PathBuf;
 
 use crate::file_errors::{FileOperation, IoResultExt};
 use anyhow::{Context, Result};
@@ -536,6 +532,7 @@ pub fn handle_prior_boot_failure_if_necessary() -> Result<(), InitError> {
                 Some(&message),
             ))?;
         }
+        state.lifecycle().cleanup_unreferenced_patch_dirs();
 
         Ok(())
     })
@@ -1646,16 +1643,32 @@ pub fn validate_next_boot_patch() -> anyhow::Result<()> {
 ///  1. `update()`
 ///  2. `start_update_thread()`
 ///  3. `report_launch_failure()`
-pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
+fn with_boot_state<T>(f: impl FnOnce(&mut UpdaterState) -> T) -> anyhow::Result<T> {
     // Marked under the config lock, so protected_data_available can't send
     // the report between the failed load and the mark.
     with_config(|config| match load_state(config) {
-        Ok((_lock, mut state)) => Ok(state.next_boot_patch()),
+        Ok((_lock, mut state)) => Ok(f(&mut state)),
         Err(err) => {
             note_unreadable_state_booted_base();
             Err(err)
         }
     })
+}
+
+pub fn next_boot_patch() -> anyhow::Result<Option<PatchInfo>> {
+    with_boot_state(|state| state.next_boot_patch())
+}
+
+/// Path to the code artifact for the next boot patch, or `None` when there is
+/// no next patch or the next patch is asset-only.
+pub fn next_boot_patch_path() -> anyhow::Result<Option<PathBuf>> {
+    with_boot_state(|state| state.next_boot_patch_code_path())
+}
+
+/// Path to the patched assets directory for the next boot patch, or `None`
+/// when there is no next patch or it carries no patched assets.
+pub fn next_boot_patch_assets_dir() -> anyhow::Result<Option<PathBuf>> {
+    with_boot_state(|state| state.next_boot_patch_assets_dir())
 }
 
 /// The patch this process is using, set at `report_launch_start` and
@@ -6195,5 +6208,58 @@ mod host_field_tests {
         let request = PatchCheckRequest::new(&config, "c", None);
         assert_eq!(request.host_bundle_id.as_deref(), Some("com.example.app"));
         assert_eq!(request.host_version, None);
+    }
+
+    #[serial]
+    #[test]
+    fn asset_patch_c_api_and_deferred_live_rollback_cleanup() {
+        use crate::c_api::engine::{
+            shorebird_free_string, shorebird_next_boot_patch_assets_dir,
+            shorebird_next_boot_patch_path,
+        };
+        use crate::cache::{asset_manifest, lifecycle::PatchState};
+        use crate::updater::tests::init_for_testing;
+
+        let tmp = TempDir::new().unwrap();
+        init_for_testing(&tmp, None);
+        assert!(shorebird_next_boot_patch_assets_dir().is_null());
+
+        crate::with_mut_state(|state| {
+            let lc = state.lifecycle_mut();
+            let installed = PatchState::Installed {
+                signature: None,
+                size: 0,
+                has_code_artifact: false,
+            };
+            lc.write_state(1, &installed)?;
+            let dir = lc.installed_assets_dir(1);
+            std::fs::create_dir_all(asset_manifest::asset_files_path(&dir))?;
+            std::fs::write(
+                asset_manifest::manifest_path(&dir),
+                r#"{"version":1,"assets":{}}"#,
+            )?;
+            lc.promote_to_next_boot(1, None)
+        })
+        .unwrap();
+
+        assert!(shorebird_next_boot_patch_path().is_null());
+        let ptr = shorebird_next_boot_patch_assets_dir();
+        assert!(!ptr.is_null());
+        let dir = unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_str()
+            .unwrap()
+            .to_string();
+        unsafe { shorebird_free_string(ptr) };
+        assert!(
+            dir.ends_with("patches/1/assets/files") || dir.ends_with(r"patches\1\assets\files")
+        );
+
+        crate::report_launch_start().unwrap();
+        super::roll_back_patches_if_needed(vec![1]).unwrap();
+        assert!(shorebird_next_boot_patch_assets_dir().is_null());
+        assert!(std::path::Path::new(&dir).is_dir());
+
+        init_for_testing(&tmp, None);
+        assert!(!tmp.path().join("patches/1").exists());
     }
 }

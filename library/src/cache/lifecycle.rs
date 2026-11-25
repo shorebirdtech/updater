@@ -47,12 +47,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{disk_io, signing};
+use super::{asset_manifest, disk_io, signing};
 use crate::yaml::PatchVerificationMode;
 
 const PATCHES_DIR: &str = "patches";
 const PATCH_STATE_FILE: &str = "state.json";
 const POINTERS_FILE: &str = "pointers.json";
+const ASSETS_DIR: &str = "assets";
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
+}
 
 /// Per-patch lifecycle state. Persisted at `{root}/patches/{N}/state.json`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,6 +106,8 @@ pub enum PatchState {
     Installed {
         signature: Option<String>,
         size: u64,
+        #[serde(default = "default_true", skip_serializing_if = "is_true")]
+        has_code_artifact: bool,
     },
     /// Tombstone. The patch will not be re-attempted within this release.
     /// Optional fields preserve what we knew about the patch for diagnostics
@@ -256,7 +267,9 @@ impl PatchLifecycle {
                 size,
                 ..
             }) => (Some(hash), signature, Some(size)),
-            Some(PatchState::Installed { signature, size }) => (None, signature, Some(size)),
+            Some(PatchState::Installed {
+                signature, size, ..
+            }) => (None, signature, Some(size)),
             Some(PatchState::Bad {
                 hash,
                 signature,
@@ -293,10 +306,15 @@ impl PatchLifecycle {
     /// `{state_root}/patches/{N}/` except `state.json`, plus the
     /// compressed download at `{download_root}/{N}` if any.
     fn delete_artifact_files(&self, n: usize) -> Result<()> {
+        self.delete_patch_files(n, true, false)
+    }
+
+    fn delete_patch_files(&self, n: usize, keep_state: bool, keep_assets: bool) -> Result<()> {
         let dir = self.patch_dir(n);
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
-                if entry.file_name() == PATCH_STATE_FILE {
+                let name = entry.file_name();
+                if (keep_state && name == PATCH_STATE_FILE) || (keep_assets && name == ASSETS_DIR) {
                     continue;
                 }
                 let path = entry.path();
@@ -349,6 +367,20 @@ impl PatchLifecycle {
     /// around the free [`installed_artifact_path`].
     pub fn installed_artifact_path(&self, n: usize) -> PathBuf {
         installed_artifact_path(&self.state_root, n)
+    }
+
+    /// Root directory for installed patch assets (`{state_root}/patches/{N}/assets`).
+    pub fn installed_assets_dir(&self, n: usize) -> PathBuf {
+        self.patch_dir(n).join(ASSETS_DIR)
+    }
+
+    /// Directory containing patched asset files (`{state_root}/patches/{N}/assets/files`)
+    /// when patch `n` carries an installed asset manifest and files tree.
+    pub fn installed_assets_files_dir(&self, n: usize) -> Option<PathBuf> {
+        let assets_dir = self.installed_assets_dir(n);
+        let files_dir = asset_manifest::asset_files_path(&assets_dir);
+        (asset_manifest::manifest_path(&assets_dir).is_file() && files_dir.is_dir())
+            .then_some(files_dir)
     }
 
     fn patches_root(&self) -> PathBuf {
@@ -670,13 +702,57 @@ impl PatchLifecycle {
     /// two, or a delete that fails (a file held open on Windows), never
     /// leaves a rolled-back patch armed to be blamed or promoted.
     pub fn uninstall(&mut self, n: usize) -> Result<()> {
+        self.uninstall_preserving_running_assets(n, None)
+    }
+
+    /// Server-driven rollback of patch `n` that defers removing `assets/` when
+    /// `n` is the currently booted patch so lazy asset opens cannot split-brain
+    /// mid-session. Clears `state.json`, `dlc.vmcode`, and pointers now; the
+    /// orphaned patch directory is swept by [`Self::cleanup_unreferenced_patch_dirs`]
+    /// on the next cold boot.
+    pub fn uninstall_preserving_running_assets(
+        &mut self,
+        n: usize,
+        running_patch: Option<usize>,
+    ) -> Result<()> {
         if self.pointers.currently_booting_patch == Some(n) {
             self.pointers.currently_booting_patch = None;
             self.pointers.boot_started_at = None;
             self.save_pointers()?;
         }
-        self.cleanup(n)?;
+        if running_patch == Some(n) && self.installed_assets_dir(n).exists() {
+            let preserve_state = matches!(self.read_state(n), Some(PatchState::Bad { .. }));
+            self.delete_patch_files(n, preserve_state, true)?;
+        } else {
+            self.cleanup(n)?;
+        }
         self.recompute_next_boot()
+    }
+
+    /// Cold-boot sweep for orphaned patch directories left behind by
+    /// [`Self::uninstall_preserving_running_assets`]. Removes numeric patch
+    /// directories that have no `state.json` and are not referenced by any
+    /// release pointer, leaving tombstones, in-flight downloads, and installed
+    /// patches intact.
+    pub fn cleanup_unreferenced_patch_dirs(&self) {
+        let Ok(entries) = std::fs::read_dir(self.patches_root()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Ok(num) = name.parse::<usize>() else {
+                continue;
+            };
+            let referenced = Some(num) == self.pointers.next_boot_patch
+                || Some(num) == self.pointers.last_booted_patch
+                || Some(num) == self.pointers.currently_booting_patch;
+            if referenced || self.state_path(num).exists() {
+                continue;
+            }
+            if let Err(e) = self.forget_dir(num) {
+                shorebird_error!("cleanup_unreferenced_patch_dirs({}) failed: {:?}", num, e);
+            }
+        }
     }
 
     /// Records that patch `n` failed to boot. Marks the patch
@@ -819,17 +895,24 @@ impl PatchLifecycle {
         self.save_pointers()
     }
 
-    /// Validates a specific Installed patch against its on-disk artifact.
+    /// Validates a specific Installed patch against its on-disk artifacts.
     fn validate_installed_patch(
         &self,
         n: usize,
         public_key: Option<&str>,
         mode: PatchVerificationMode,
     ) -> Result<()> {
-        let (expected_size, signature) = match self.read_state(n) {
-            Some(PatchState::Installed { size, signature }) => (size, signature),
+        let (expected_size, signature, has_code_artifact) = match self.read_state(n) {
+            Some(PatchState::Installed {
+                size,
+                signature,
+                has_code_artifact,
+            }) => (size, signature, has_code_artifact),
             other => bail!("Patch {n} is not Installed: {other:?}"),
         };
+        if !has_code_artifact {
+            return self.validate_installed_assets(n, false);
+        }
         let path = self.installed_artifact_path(n);
         if !path.exists() {
             bail!("Patch {n} artifact missing at {}", path.display());
@@ -853,6 +936,46 @@ impl PatchLifecycle {
                 .context(crate::updater::UpdateError::InvalidSignature)?;
             } else {
                 shorebird_info!("No public key configured; skipping signature verification");
+            }
+        }
+        self.validate_installed_assets(n, true)
+    }
+
+    /// Size-only boot validation for patched assets: parses `assets/manifest.json`
+    /// and checks every listed file's on-disk byte length without SHA-256 reads.
+    fn validate_installed_assets(&self, n: usize, has_code_artifact: bool) -> Result<()> {
+        let assets_dir = self.installed_assets_dir(n);
+        if !assets_dir.exists() {
+            if !has_code_artifact {
+                bail!("Patch {n} has no code artifact and no assets directory");
+            }
+            return Ok(());
+        }
+        let manifest_file = asset_manifest::manifest_path(&assets_dir);
+        let bytes = std::fs::read(&manifest_file).with_context(|| {
+            format!(
+                "Patch {n} asset manifest missing at {}",
+                manifest_file.display()
+            )
+        })?;
+        let manifest = asset_manifest::PatchAssetManifest::parse(&bytes)?;
+        if !has_code_artifact && manifest.assets.is_empty() {
+            bail!("Patch {n} has no code artifact and no patched assets");
+        }
+        let files_root = asset_manifest::asset_files_path(&assets_dir);
+        for (key, entry) in &manifest.assets {
+            let asset_path = asset_manifest::asset_path_for_key(&files_root, key)?;
+            let meta = std::fs::metadata(&asset_path)
+                .with_context(|| format!("Patch {n} asset missing at {}", asset_path.display()))?;
+            if !meta.is_file() {
+                bail!("Patch {n} asset at {} is not a file", asset_path.display());
+            }
+            if meta.len() != entry.size {
+                bail!(
+                    "Patch {n} asset {key:?} size {} on disk, expected {}",
+                    meta.len(),
+                    entry.size
+                );
             }
         }
         Ok(())
@@ -961,6 +1084,7 @@ impl PatchLifecycle {
             &PatchState::Installed {
                 signature,
                 size: installed_size,
+                has_code_artifact: true,
             },
         )?;
         // The compressed bytes in the cache dir are no longer needed;
@@ -1032,6 +1156,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: Some("s".into()),
                     size: 999,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -1209,6 +1334,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: None,
                     size: 100,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -1235,6 +1361,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: None,
                     size: 1,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -1494,6 +1621,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: None,
                     size: 1000,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -1589,6 +1717,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: None,
                     size: 100,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -1620,6 +1749,7 @@ mod tests {
             PatchState::Installed {
                 signature: Some("s".into()),
                 size: 9999,
+                has_code_artifact: true,
             }
         );
         assert!(
@@ -1648,6 +1778,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: None,
                     size,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -2122,6 +2253,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: None,
                     size: 100,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -2197,6 +2329,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: signature.map(String::from),
                     size: 100,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -2216,6 +2349,7 @@ mod tests {
                 &PatchState::Installed {
                     signature: Some(INFLATED_PATCH_SIGNATURE.to_string()),
                     size: 1,
+                    has_code_artifact: true,
                 },
             )
             .unwrap();
@@ -2587,5 +2721,101 @@ mod tests {
     fn promote_to_next_boot_requires_installed() {
         let (_tmp, mut lifecycle) = fixture();
         assert!(lifecycle.promote_to_next_boot(1, None).is_err());
+    }
+
+    const TEST_ASSET_HASH: &str =
+        "68e656b251e67e8358bef8483ab0d51c6619f3e7a1a9f0e75838d41ff368f728";
+
+    fn write_patch_assets(
+        lifecycle: &PatchLifecycle,
+        n: usize,
+        key: &str,
+        bytes: &[u8],
+        size: u64,
+    ) {
+        let dir = lifecycle.installed_assets_dir(n);
+        let path = asset_manifest::asset_path_for_key(&asset_manifest::asset_files_path(&dir), key)
+            .unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let manifest = format!(
+            r#"{{"version":1,"assets":{{"{key}":{{"hash":"{TEST_ASSET_HASH}","size":{size},"encoding":"whole"}}}}}}"#
+        );
+        std::fs::write(asset_manifest::manifest_path(&dir), manifest).unwrap();
+    }
+
+    #[test]
+    fn installed_has_code_artifact_serialization_preserves_legacy_json() {
+        let with_code = PatchState::Installed {
+            signature: None,
+            size: 5,
+            has_code_artifact: true,
+        };
+        let json = serde_json::to_string(&with_code).unwrap();
+        assert!(!json.contains("has_code_artifact"));
+        assert_eq!(
+            serde_json::from_str::<PatchState>(&json).unwrap(),
+            with_code
+        );
+
+        let asset_only = PatchState::Installed {
+            signature: None,
+            size: 0,
+            has_code_artifact: false,
+        };
+        let asset_json = serde_json::to_string(&asset_only).unwrap();
+        assert!(asset_json.contains("\"has_code_artifact\":false"));
+        assert_eq!(
+            serde_json::from_str::<PatchState>(&asset_json).unwrap(),
+            asset_only
+        );
+    }
+
+    #[test]
+    fn validate_and_deferred_rollback_assets() {
+        let (_tmp, mut lc) = fixture();
+        let asset_only = PatchState::Installed {
+            signature: None,
+            size: 0,
+            has_code_artifact: false,
+        };
+        lc.write_state(1, &asset_only).unwrap();
+        // Bytes mismatch TEST_ASSET_HASH: boot validation checks size without SHA-256 reads.
+        write_patch_assets(&lc, 1, "assets/logo.png", b"12345", 5);
+        lc.promote_to_next_boot(1, None).unwrap();
+        lc.validate_next_boot_patch(None, PatchVerificationMode::Strict)
+            .unwrap();
+
+        // Corrupt asset size fails validation and marks patch Bad.
+        let asset = lc
+            .installed_assets_files_dir(1)
+            .unwrap()
+            .join("assets/logo.png");
+        std::fs::write(&asset, b"12").unwrap();
+        assert!(lc
+            .validate_next_boot_patch(None, PatchVerificationMode::default())
+            .is_err());
+        assert!(matches!(
+            lc.read_state(1),
+            Some(PatchState::Bad {
+                reason: BadReason::ValidationFailed,
+                ..
+            })
+        ));
+
+        // Live rollback of running patch keeps assets until cold-boot cleanup.
+        install_state(&lc, 2, 5);
+        write_patch_assets(&lc, 2, "assets/logo.png", b"hello", 5);
+        lc.promote_to_next_boot(2, None).unwrap();
+        lc.record_boot_start(2).unwrap();
+        lc.uninstall_preserving_running_assets(2, Some(2)).unwrap();
+        assert!(lc.read_state(2).is_none());
+        assert_eq!(lc.pointers().next_boot_patch, None);
+        assert!(!lc.installed_artifact_path(2).exists());
+        assert!(lc.installed_assets_files_dir(2).is_some());
+
+        lc.cleanup_unreferenced_patch_dirs();
+        assert!(!lc.patch_dir(2).exists());
+        assert!(matches!(lc.read_state(1), Some(PatchState::Bad { .. })));
     }
 }

@@ -307,11 +307,21 @@ pub extern "C" fn shorebird_validate_next_boot_patch() {
 #[no_mangle]
 pub extern "C" fn shorebird_next_boot_patch_path() -> *mut c_char {
     log_on_error(
-        || {
-            let maybe_path = updater::next_boot_patch()?.map(|p| p.path);
-            path_to_c_string(maybe_path)
-        },
+        || path_to_c_string(updater::next_boot_patch_path()?),
         "fetching next_boot_patch_path",
+        std::ptr::null_mut(),
+    )
+}
+
+/// The path to the patched assets directory for the patch that will boot on
+/// the next run of the app, or NULL if there is no next patch or it carries
+/// no patched assets. The caller must free the returned string with
+/// `shorebird_free_string`.
+#[no_mangle]
+pub extern "C" fn shorebird_next_boot_patch_assets_dir() -> *mut c_char {
+    log_on_error(
+        || path_to_c_string(updater::next_boot_patch_assets_dir()?),
+        "fetching next_boot_patch_assets_dir",
         std::ptr::null_mut(),
     )
 }
