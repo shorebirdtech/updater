@@ -584,19 +584,9 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     }
 
     if let Some(patch) = response.patch {
-        let (Some(download_url), Some(hash)) =
-            (patch.download_url.as_deref(), patch.hash.as_deref())
-        else {
+        let Some(action) = with_state(|s| Ok(decide_patch_start(s.lifecycle(), &patch)))? else {
             return Ok(false);
         };
-        let action = with_state(|state| {
-            Ok(state.lifecycle().decide_start(
-                patch.number,
-                download_url,
-                hash,
-                patch.hash_signature.as_deref(),
-            ))
-        })?;
         Ok(matches!(
             action,
             DownloadAction::Fresh | DownloadAction::Resume { .. } | DownloadAction::Complete
@@ -604,6 +594,38 @@ pub fn check_for_downloadable_update(channel: Option<&str>) -> anyhow::Result<bo
     } else {
         Ok(false)
     }
+}
+
+fn decide_patch_start(
+    lifecycle: &lifecycle::PatchLifecycle,
+    patch: &Patch,
+) -> Option<DownloadAction> {
+    let (url, hash, sig) = match (&patch.download_url, &patch.hash, &patch.asset_manifest) {
+        (Some(u), Some(h), _) => (u.as_str(), h.as_str(), patch.hash_signature.as_deref()),
+        (None, None, Some(m)) => (
+            m.manifest_url.as_str(),
+            m.hash.as_str(),
+            m.hash_signature.as_deref(),
+        ),
+        _ => return None,
+    };
+    let action = lifecycle.decide_start(patch.number, url, hash, sig);
+    if matches!(action, DownloadAction::Fresh) && patch.hash.is_some() {
+        if let Some(m) = patch.asset_manifest.as_ref() {
+            if matches!(
+                lifecycle.decide_start(
+                    patch.number,
+                    &m.manifest_url,
+                    &m.hash,
+                    m.hash_signature.as_deref(),
+                ),
+                DownloadAction::Skip(SkipReason::KnownBad)
+            ) {
+                return Some(DownloadAction::Skip(SkipReason::KnownBad));
+            }
+        }
+    }
+    Some(action)
 }
 
 fn check_hash(path: &Path, expected_string: &str) -> anyhow::Result<()> {
@@ -742,19 +764,8 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let patch = response.patch.ok_or(UpdateError::BadServerResponse)?;
-    let (Some(download_url), Some(hash)) = (patch.download_url.as_deref(), patch.hash.as_deref())
-    else {
-        return Err(UpdateError::BadServerResponse.into());
-    };
-
-    let action = with_state(|state| {
-        Ok(state.lifecycle().decide_start(
-            patch.number,
-            download_url,
-            hash,
-            patch.hash_signature.as_deref(),
-        ))
-    })?;
+    let action = with_state(|s| Ok(decide_patch_start(s.lifecycle(), &patch)))?
+        .ok_or(UpdateError::BadServerResponse)?;
     match action {
         DownloadAction::Skip(SkipReason::KnownBad) => {
             shorebird_info!("Patch {} is known bad, skipping.", patch.number);
@@ -768,7 +779,7 @@ fn update_internal(_: &UpdaterLockState, channel: Option<&str>) -> anyhow::Resul
     }
 
     let patch_number = patch.number;
-    let result = download_and_install_patch(&config, &patch, download_url, hash, action);
+    let result = download_and_install_patch(&config, &patch, action);
 
     if let Err(ref err) = result {
         // Queue a diagnostic event for the failed update attempt.
@@ -1060,39 +1071,33 @@ fn truncate_error_message(msg: &str) -> String {
     format!("{}...", &msg[..end])
 }
 
+fn verify_sig(config: &UpdateConfig, n: usize, hash: &str, sig: Option<&str>) -> Result<()> {
+    let Err(e) = crate::cache::check_patch_signature(hash, sig, config.patch_public_key.as_deref())
+    else {
+        return Ok(());
+    };
+    let _ = with_mut_state(|s| s.lifecycle_mut().record_signature_refused(n, hash, sig));
+    Err(e.context(UpdateError::InvalidSignature))
+}
+
+fn download_verified(hooks: &NetworkHooks, url: &str, dest: &Path, hash: &str) -> Result<()> {
+    let dl = download_to_path(hooks, url, dest, 0)?;
+    if dl.content_length.is_some_and(|exp| dl.total_bytes != exp) {
+        return Err(UpdateError::BadServerResponse).context("Download size mismatch");
+    }
+    check_hash(dest, hash)
+}
+
 fn download_and_install_patch(
     config: &UpdateConfig,
     patch: &crate::network::Patch,
-    download_url: &str,
-    hash: &str,
     action: DownloadAction,
 ) -> anyhow::Result<UpdateStatus> {
-    // Verify the signature before anything is fetched, in every mode: it
-    // covers `patch.hash`, and the post-inflate hash check ties the
-    // installed bytes to that hash, so an unverifiable offer never reaches
-    // the network, the inflater or the lifecycle's install path. Strict
-    // mode re-verifies the installed artifact on every boot as well. The
-    // refused pair is tombstoned so later checks skip it quietly rather
-    // than re-reporting it on every launch.
-    if let Err(e) = crate::cache::check_patch_signature(
-        hash,
-        patch.hash_signature.as_deref(),
-        config.patch_public_key.as_deref(),
-    ) {
-        if let Err(state_err) = with_mut_state(|state| {
-            state.lifecycle_mut().record_signature_refused(
-                patch.number,
-                hash,
-                patch.hash_signature.as_deref(),
-            )
-        }) {
-            shorebird_error!(
-                "Failed to record signature refusal for patch {}: {:?}",
-                patch.number,
-                state_err
-            );
-        }
-        return Err(e.context(UpdateError::InvalidSignature));
+    if let Some(h) = patch.hash.as_deref() {
+        verify_sig(config, patch.number, h, patch.hash_signature.as_deref())?;
+    }
+    if let Some(m) = patch.asset_manifest.as_ref() {
+        verify_sig(config, patch.number, &m.hash, m.hash_signature.as_deref())?;
     }
 
     shorebird_info!(
@@ -1101,6 +1106,16 @@ fn download_and_install_patch(
         config.app_id,
         config.release_version
     );
+
+    let Some((download_url, hash)) = patch.download_url.as_deref().zip(patch.hash.as_deref())
+    else {
+        let manifest_ref = patch
+            .asset_manifest
+            .as_ref()
+            .ok_or(UpdateError::BadServerResponse)?;
+        install_patch_assets(config, patch.number, manifest_ref, false)?;
+        return finalize_installed_patch(config, patch.number, None);
+    };
 
     let download_path =
         lifecycle::download_artifact_path(Path::new(&config.download_dir), patch.number);
@@ -1167,7 +1182,13 @@ fn download_and_install_patch(
         shorebird_info!("Prior download already complete; skipping fetch.");
     }
 
-    install_downloaded_patch(config, patch.number, hash, &download_path)
+    install_downloaded_patch(
+        config,
+        patch.number,
+        hash,
+        &download_path,
+        patch.asset_manifest.as_ref(),
+    )
 }
 
 /// Inflates the compressed bytes at `download_path` into the lifecycle's
@@ -1180,6 +1201,7 @@ fn install_downloaded_patch(
     patch_number: usize,
     hash: &str,
     download_path: &Path,
+    asset_manifest: Option<&PatchAssetManifestRef>,
 ) -> anyhow::Result<UpdateStatus> {
     let installed_path =
         lifecycle::installed_artifact_path(Path::new(&config.storage_dir), patch_number);
@@ -1209,11 +1231,23 @@ fn install_downloaded_patch(
     }
 
     let installed_size = std::fs::metadata(&installed_path)?.len();
+    if let Some(manifest_ref) = asset_manifest {
+        install_patch_assets(config, patch_number, manifest_ref, true)?;
+    }
+    finalize_installed_patch(config, patch_number, Some(installed_size))
+}
 
+fn finalize_installed_patch(
+    config: &UpdateConfig,
+    patch_number: usize,
+    installed_code_size: Option<u64>,
+) -> anyhow::Result<UpdateStatus> {
     with_mut_state(|state| {
-        state
-            .lifecycle_mut()
-            .record_install_complete(patch_number, installed_size)?;
+        let lc = state.lifecycle_mut();
+        match installed_code_size {
+            Some(size) => lc.record_install_complete(patch_number, size)?,
+            None => lc.record_asset_only_install_complete(patch_number)?,
+        }
         // The patch this process loaded stays installed even while no boot
         // breadcrumb names it (an engine built and not yet run).
         let running_patch = crate::config::running_patch_number();
@@ -1237,6 +1271,96 @@ fn install_downloaded_patch(
     })?;
     spawn_event_flush();
     Ok(UpdateStatus::UpdateInstalled)
+}
+
+fn install_patch_assets(
+    config: &UpdateConfig,
+    n: usize,
+    manifest_ref: &PatchAssetManifestRef,
+    has_code: bool,
+) -> Result<()> {
+    let final_dir = lifecycle::installed_assets_dir(&config.storage_dir, n);
+    let staging = final_dir.with_file_name("assets.staging");
+    let _ = fs::remove_dir_all(&staging);
+    let res = (|| -> Result<()> {
+        let path = manifest_path(&staging);
+        download_verified(
+            &config.network_hooks,
+            &manifest_ref.manifest_url,
+            &path,
+            &manifest_ref.hash,
+        )?;
+        let bytes = fs::read(&path).with_file_context(FileOperation::ReadFile, &path)?;
+        let manifest = PatchAssetManifest::parse(&bytes)?;
+        if !has_code && manifest.assets.is_empty() {
+            return Err(UpdateError::CorruptPatch).context("Asset-only manifest has no assets");
+        }
+        let mut local = collect_local_asset_blobs(&config.storage_dir, n);
+        let files_dir = asset_files_path(&staging);
+        fs::create_dir_all(&files_dir).with_file_context(FileOperation::CreateDir, &files_dir)?;
+        for (key, entry) in &manifest.assets {
+            let dest = asset_path_for_key(&files_dir, key)?;
+            if let Some(p) = dest.parent() {
+                fs::create_dir_all(p).with_file_context(FileOperation::CreateDir, p)?;
+            }
+            let reused = local.get(&entry.hash).into_iter().flatten().find(|c| {
+                fs::metadata(c).is_ok_and(|m| m.is_file() && m.len() == entry.size)
+                    && crate::cache::hash_file(c).is_ok_and(|h| h == entry.hash)
+            });
+            if let Some(src) = reused {
+                fs::copy(src, &dest).with_file_context(FileOperation::WriteFile, &dest)?;
+            } else {
+                let url = blob_url(&manifest_ref.blob_base_url, &entry.hash);
+                download_verified(&config.network_hooks, &url, &dest, &entry.hash)?;
+                let meta = fs::metadata(&dest).with_file_context(FileOperation::GetMetadata, &dest);
+                if meta?.len() != entry.size {
+                    return Err(UpdateError::CorruptPatch).context(format!("Asset {key:?} size"));
+                }
+            }
+            local.entry(entry.hash.clone()).or_default().push(dest);
+        }
+        if final_dir.exists() {
+            fs::remove_dir_all(&final_dir)
+                .with_file_context(FileOperation::DeleteDir, &final_dir)?;
+        }
+        fs::rename(&staging, &final_dir).with_file_context(FileOperation::RenameFile, &final_dir)
+    })();
+    if let Err(ref err) = res {
+        let _ = fs::remove_dir_all(&staging);
+        if err.downcast_ref::<UpdateError>() == Some(&UpdateError::CorruptPatch) {
+            mark_patch_bad(n, BadReason::InstallHashMismatch);
+        }
+    }
+    res
+}
+
+fn collect_local_asset_blobs(
+    storage_dir: &Path,
+    exclude: usize,
+) -> std::collections::HashMap<String, Vec<PathBuf>> {
+    let mut blobs: std::collections::HashMap<String, Vec<PathBuf>> = Default::default();
+    let Ok(entries) = fs::read_dir(storage_dir.join("patches")) else {
+        return blobs;
+    };
+    for e in entries.flatten() {
+        let Ok(num) = e.file_name().to_string_lossy().parse::<usize>() else {
+            continue;
+        };
+        let dir = lifecycle::installed_assets_dir(storage_dir, num);
+        let m = (num != exclude)
+            .then(|| fs::read(manifest_path(&dir)).ok())
+            .flatten()
+            .and_then(|b| PatchAssetManifest::parse(&b).ok());
+        for (k, a) in m.into_iter().flat_map(|m| m.assets) {
+            if let Some(p) = asset_path_for_key(&asset_files_path(&dir), &k)
+                .ok()
+                .filter(|p| p.is_file())
+            {
+                blobs.entry(a.hash).or_default().push(p);
+            }
+        }
+    }
+    blobs
 }
 
 /// Marks `patch_number` Bad{reason} and recomputes `next_boot_patch`.
@@ -3247,13 +3371,13 @@ patch_verification: bogus_mode
     // kept), as `patch_public_key` expects it: base64 DER `RSAPublicKey`.
     //   openssl genrsa -out k.pem 2048
     //   openssl rsa -in k.pem -RSAPublicKey_out -outform DER | base64
-    const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEArCQP+TK07V2b/Oux0AlNIQQ+A4j3dY2A8ITpjrQ+g2x0uv1vTLnX/ykLPwD8LFyS2PupJYUVtG6Djm+UCdoeNCX35+Layveax1dv0p4N/R2Xnhm9DYx/WSbI5HE6hZ4okduTWlkHZXS63WK56vQFHzXkzuQqiMQmcFFv2oDF2lQ/kwHCPqhDYPH5Oy0hILBmu88xQhZUs5DqV/vJz0T+r9PYvYaAvrS1g3v+kwTG7vKUJ1HAm6mZekrUVrdNogbBtPPBVvnhnSWFDPzCZ4mQbWyQfKQVszUOCLS84QPZFgAkAzmeouYfuJnT2sIk6syEk9eVaiYhIdds5nNNZsopYwIDAQAB";
+    pub(super) const TEST_PUBLIC_KEY: &str = "MIIBCgKCAQEArCQP+TK07V2b/Oux0AlNIQQ+A4j3dY2A8ITpjrQ+g2x0uv1vTLnX/ykLPwD8LFyS2PupJYUVtG6Djm+UCdoeNCX35+Layveax1dv0p4N/R2Xnhm9DYx/WSbI5HE6hZ4okduTWlkHZXS63WK56vQFHzXkzuQqiMQmcFFv2oDF2lQ/kwHCPqhDYPH5Oy0hILBmu88xQhZUs5DqV/vJz0T+r9PYvYaAvrS1g3v+kwTG7vKUJ1HAm6mZekrUVrdNogbBtPPBVvnhnSWFDPzCZ4mQbWyQfKQVszUOCLS84QPZFgAkAzmeouYfuJnT2sIk6syEk9eVaiYhIdds5nNNZsopYwIDAQAB";
     // Hash of "hello tests", the result of applying `HELLO_TESTS_PATCH`
     // to the base "hello world".
-    const HELLO_TESTS_HASH: &str =
+    pub(super) const HELLO_TESTS_HASH: &str =
         "bb8f1d041a5cdc259055afe9617136799543e0a7a86f86db82f8c1fadbd8cc45";
     // `printf %s $HELLO_TESTS_HASH | openssl dgst -sha256 -sign k.pem | base64`
-    const HELLO_TESTS_SIGNATURE: &str = "lzJx8h1RT9lgHU+whC15OwDVRRjPNxomt0YwNTAil69J8+SNHzrU204827GzdYy81PZMVvKLLoW6FHlHmz/fzZ+0QkXpPyg+Lln7vBn6rM2BM6F5rwacg9TPCwmQwZC0eF5g3o9of9HdIb/1M69QM8z05JcdohaV42Um7BdHNQZt9W5Td7LuYbBEfyX6q0bO8YlbXNzzyANFudD/OCJLRCiDBkSHHO6+SmQZtUlapRMf2q1/4FAVGclAtc0yfD5pdD0EURECW30UATMGRXluPn+5vf8kqn8o2whu6pvqC0PMQqBLF7MGcz3hdB+wWqERB+NLx+HqpYTpgfhlzAb/pg==";
+    pub(super) const HELLO_TESTS_SIGNATURE: &str = "lzJx8h1RT9lgHU+whC15OwDVRRjPNxomt0YwNTAil69J8+SNHzrU204827GzdYy81PZMVvKLLoW6FHlHmz/fzZ+0QkXpPyg+Lln7vBn6rM2BM6F5rwacg9TPCwmQwZC0eF5g3o9of9HdIb/1M69QM8z05JcdohaV42Um7BdHNQZt9W5Td7LuYbBEfyX6q0bO8YlbXNzzyANFudD/OCJLRCiDBkSHHO6+SmQZtUlapRMf2q1/4FAVGclAtc0yfD5pdD0EURECW30UATMGRXluPn+5vf8kqn8o2whu6pvqC0PMQqBLF7MGcz3hdB+wWqERB+NLx+HqpYTpgfhlzAb/pg==";
     // The same key's signature over a different hash (64 zeros), so it fails
     // to verify for `HELLO_TESTS_HASH`.
     const WRONG_MESSAGE_SIGNATURE: &str = "iybpSSyEEpwJ7ta5Tma1R/caW1bnLcijYaVpIBUdH9I7dv75M0ekPXFMpdv3NfYcptOFRhz3Ht9+qd+nCy0+9isOGHyK6piiu9VGv5ScRuk2oP5ZiSRWZTtwzbIKOQ5LysSqFsD1/+GMkzRWCAwpSQu9bD57/uPtZgs6fy0qFp7pZ+1lkXCI/d9MX7657MhdQYlrrPImBUwCTztzyJ9nDVt23xZfSBBteseXCXXhGQ8nS9CYycQSQkLwrG6hTLixO0kOAVDGN9P5mKb1EXKaEao+lSET8nBysmEqTlt40xjOHN19ymtWw5Xr2Gw2yTNDH6AIQNs7mziMDiLX+Jg7CA==";
@@ -6261,5 +6385,112 @@ mod host_field_tests {
 
         init_for_testing(&tmp, None);
         assert!(!tmp.path().join("patches/1").exists());
+    }
+
+    #[serial]
+    #[test]
+    fn asset_install_verifies_reuses_and_rejects_bad_offers() {
+        use crate::network::{testing_set_network_hooks, DownloadResult};
+        use crate::{UpdateError, UpdateStatus};
+        use std::sync::Mutex;
+
+        const BLOB: &[u8] = b"hello, world!";
+        const BH: &str = "68e656b251e67e8358bef8483ab0d51c6619f3e7a1a9f0e75838d41ff368f728";
+        const M1: &str = r#"{"version":1,"assets":{"a/b.txt":{"hash":"68e656b251e67e8358bef8483ab0d51c6619f3e7a1a9f0e75838d41ff368f728","size":13}}}"#;
+        const M1H: &str = "e3a3c8971a5278a71f0050fc3ad6e2b10fae36145996ec89ec6450cbd4bec491";
+        const M3: &str = r#"{"version":1,"assets":{"a/x.txt":{"hash":"0000000000000000000000000000000000000000000000000000000000000000","size":4}}}"#;
+        const M3H: &str = "f0cafa2a856c07bb2d40076f3490bac2a2bc09a1ff1213ad48e98d95204c943e";
+        static RESP: Mutex<String> = Mutex::new(String::new());
+        static GETS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let hooks = || {
+            testing_set_network_hooks(
+                |_, _| Ok(serde_json::from_str(&RESP.lock().unwrap())?),
+                |url, dest, _| {
+                    GETS.lock().unwrap().push(url.into());
+                    let b: &[u8] = match url {
+                        "http://c/1/m" | "http://c/2/m" => M1.as_bytes(),
+                        "http://c/3/m" => M3.as_bytes(),
+                        u if u == format!("http://c/1/b/{BH}") => BLOB,
+                        u if u.starts_with("http://c/3/b/") => b"nope",
+                        _ => anyhow::bail!("unexpected {url}"),
+                    };
+                    std::fs::write(dest, b)?;
+                    let n = b.len() as u64;
+                    Ok(DownloadResult {
+                        total_bytes: n,
+                        content_length: Some(n),
+                    })
+                },
+                |_, _| Ok(()),
+            );
+        };
+        let set_offer = |n: usize, code: &str, h: &str, sig: &str| {
+            let s = format!(
+                r#"{{"patch_available":true,"patch":{{"number":{n},{code}"asset_manifest":{{"manifest_url":"http://c/{n}/m","blob_base_url":"http://c/{n}/b","hash":"{h}"{sig}}}}}}}"#
+            );
+            *RESP.lock().unwrap() = s;
+            GETS.lock().unwrap().clear();
+        };
+
+        let err = || {
+            super::update(None)
+                .unwrap_err()
+                .downcast::<UpdateError>()
+                .unwrap()
+        };
+        let asset = || {
+            std::fs::read(
+                super::next_boot_patch_assets_dir()
+                    .unwrap()
+                    .unwrap()
+                    .join("a/b.txt"),
+            )
+            .unwrap()
+        };
+
+        let tmp = TempDir::new().unwrap();
+        crate::updater::tests::init_for_testing(&tmp, None);
+        hooks();
+        set_offer(1, "", M1H, "");
+        assert!(super::check_for_downloadable_update(None).unwrap());
+        assert_eq!(super::update(None).unwrap(), UpdateStatus::UpdateInstalled);
+        assert_eq!(GETS.lock().unwrap().len(), 2);
+        assert_eq!(super::next_boot_patch_path().unwrap(), None);
+        assert_eq!(asset(), BLOB);
+        super::validate_next_boot_patch().unwrap();
+        super::report_launch_start().unwrap();
+        super::report_launch_success().unwrap();
+
+        set_offer(2, "", M1H, "");
+        assert_eq!(super::update(None).unwrap(), UpdateStatus::UpdateInstalled);
+        assert_eq!(*GETS.lock().unwrap(), vec!["http://c/2/m"]);
+        assert_eq!(asset(), BLOB);
+
+        set_offer(3, "", M3H, "");
+        assert_eq!(err(), UpdateError::CorruptPatch);
+        assert!(!tmp.path().join("patches/3/assets").exists());
+        assert_eq!(super::update(None).unwrap(), UpdateStatus::UpdateIsBadPatch);
+
+        let sig_tmp = TempDir::new().unwrap();
+        let pk = crate::updater::tests::TEST_PUBLIC_KEY;
+        init_for_testing_with_yaml(&sig_tmp, None, &format!("\npatch_public_key: {pk}"));
+        hooks();
+        set_offer(1, "", M1H, r#","hash_signature":"bad-sig""#);
+        assert_eq!(err(), UpdateError::InvalidSignature);
+        assert!(GETS.lock().unwrap().is_empty());
+
+        let code = format!(
+            r#""download_url":"http://c/2/p","hash":"{}","hash_signature":"{}","#,
+            crate::updater::tests::HELLO_TESTS_HASH,
+            crate::updater::tests::HELLO_TESTS_SIGNATURE,
+        );
+        set_offer(2, &code, M1H, r#","hash_signature":"bad-sig""#);
+        assert_eq!(err(), UpdateError::InvalidSignature);
+        assert!(GETS.lock().unwrap().is_empty());
+        assert!(!super::check_for_downloadable_update(None).unwrap());
+        assert_eq!(super::update(None).unwrap(), UpdateStatus::UpdateIsBadPatch);
+        set_offer(2, &code, M1H, r#","hash_signature":"other-sig""#);
+        assert!(super::check_for_downloadable_update(None).unwrap());
+        assert_eq!(err(), UpdateError::InvalidSignature);
     }
 }

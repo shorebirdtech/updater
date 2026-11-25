@@ -371,7 +371,7 @@ impl PatchLifecycle {
 
     /// Root directory for installed patch assets (`{state_root}/patches/{N}/assets`).
     pub fn installed_assets_dir(&self, n: usize) -> PathBuf {
-        self.patch_dir(n).join(ASSETS_DIR)
+        installed_assets_dir(&self.state_root, n)
     }
 
     /// Directory containing patched asset files (`{state_root}/patches/{N}/assets/files`)
@@ -416,6 +416,14 @@ pub fn installed_artifact_path(state_root: &Path, n: usize) -> PathBuf {
         .join(PATCHES_DIR)
         .join(n.to_string())
         .join("dlc.vmcode")
+}
+
+/// Root directory for installed patch assets (`{state_root}/patches/{N}/assets`).
+pub fn installed_assets_dir(state_root: &Path, n: usize) -> PathBuf {
+    state_root
+        .join(PATCHES_DIR)
+        .join(n.to_string())
+        .join(ASSETS_DIR)
 }
 
 /// What `update_internal` should do when starting work on a patch.
@@ -1095,6 +1103,20 @@ impl PatchLifecycle {
                 shorebird_error!("Failed to remove download file for patch {}: {:?}", n, e);
             }
         }
+        Ok(())
+    }
+
+    /// Transitions a code-optional (asset-only) patch `n` directly to `Installed`.
+    pub fn record_asset_only_install_complete(&self, n: usize) -> Result<()> {
+        self.write_state(
+            n,
+            &PatchState::Installed {
+                signature: None,
+                size: 0,
+                has_code_artifact: false,
+            },
+        )?;
+        let _ = std::fs::remove_file(self.download_artifact_path(n));
         Ok(())
     }
 }
@@ -2774,12 +2796,14 @@ mod tests {
     #[test]
     fn validate_and_deferred_rollback_assets() {
         let (_tmp, mut lc) = fixture();
-        let asset_only = PatchState::Installed {
-            signature: None,
-            size: 0,
-            has_code_artifact: false,
-        };
-        lc.write_state(1, &asset_only).unwrap();
+        lc.record_asset_only_install_complete(1).unwrap();
+        assert!(matches!(
+            lc.read_state(1),
+            Some(PatchState::Installed {
+                has_code_artifact: false,
+                ..
+            })
+        ));
         // Bytes mismatch TEST_ASSET_HASH: boot validation checks size without SHA-256 reads.
         write_patch_assets(&lc, 1, "assets/logo.png", b"12345", 5);
         lc.promote_to_next_boot(1, None).unwrap();
