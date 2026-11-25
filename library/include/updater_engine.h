@@ -279,6 +279,14 @@ SHOREBIRD_EXPORT void shorebird_validate_next_boot_patch(void);
 SHOREBIRD_EXPORT char *shorebird_next_boot_patch_path(void);
 
 /**
+ * The path to the patched assets directory for the patch that will boot on
+ * the next run of the app, or NULL if there is no next patch or it carries
+ * no patched assets. The caller must free the returned string with
+ * `shorebird_free_string`.
+ */
+SHOREBIRD_EXPORT char *shorebird_next_boot_patch_assets_dir(void);
+
+/**
  * Start a thread to download an update if one is available.
  */
 SHOREBIRD_EXPORT void shorebird_start_update_thread(void);

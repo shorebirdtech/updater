@@ -453,6 +453,25 @@ impl UpdaterState {
             .map(|n| self.patch_info(n))
     }
 
+    pub fn next_boot_patch_code_path(&self) -> Option<PathBuf> {
+        let n = self.lifecycle.pointers().next_boot_patch?;
+        if matches!(
+            self.lifecycle.read_state(n),
+            Some(PatchState::Installed {
+                has_code_artifact: false,
+                ..
+            })
+        ) {
+            return None;
+        }
+        Some(self.lifecycle.installed_artifact_path(n))
+    }
+
+    pub fn next_boot_patch_assets_dir(&self) -> Option<PathBuf> {
+        let n = self.lifecycle.pointers().next_boot_patch?;
+        self.lifecycle.installed_assets_files_dir(n)
+    }
+
     /// Validates that `next_boot_patch` is bootable. On failure, marks
     /// the patch `Bad{ValidationFailed}` and recomputes `next_boot_patch`.
     pub fn validate_next_boot_patch(&mut self) -> Result<()> {
@@ -461,10 +480,13 @@ impl UpdaterState {
     }
 
     /// Removes the artifacts for `patch_number`, clears the boot breadcrumb
-    /// if it names it, and recomputes pointers. Used for server-driven
-    /// rollbacks and downloads the server cut short.
+    /// if it names it, and recomputes pointers. Defers removing `assets/` when
+    /// `patch_number` is currently running so lazy asset opens stay consistent.
     pub fn uninstall_patch(&mut self, patch_number: usize) -> Result<()> {
-        self.lifecycle.uninstall(patch_number)
+        self.lifecycle.uninstall_preserving_running_assets(
+            patch_number,
+            crate::config::running_patch_number(),
+        )
     }
 
     /// True if `patch_number` is currently in `Bad` state — we tried it
