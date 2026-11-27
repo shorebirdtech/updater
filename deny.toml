@@ -8,7 +8,9 @@
 all-features = true
 
 [advisories]
-# RustSec advisories, including unmaintained and unsound crates, fail CI.
+# A RustSec vulnerability advisory fails CI for any crate. Unmaintained and
+# unsound advisories fail only for direct dependencies of workspace crates
+# (cargo-deny's `workspace` default); `unmaintained = "all"` would widen that.
 version = 2
 yanked = "deny"
 # An ignore entry that no longer matches fails, so it gets removed.
